@@ -1,0 +1,1162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PartVault Admin</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body, #root { height: 100%; }
+  body { background: #0d0f14; color: #e8eaf0; font-family: 'Courier New', monospace; }
+  select option { background: #13161e; }
+  input[type=date]::-webkit-calendar-picker-indicator { filter: invert(1); opacity: 0.5; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #13161e; }
+  ::-webkit-scrollbar-thumb { background: #252936; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #f97316; }
+  .spin { animation: spin 1s linear infinite; display:inline-block; }
+  @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  SUPABASE CONFIG — replace with your project details
+// ═══════════════════════════════════════════════════════════════════════════
+const SUPABASE_URL = 'https://mtpektsxaklhedknincs.supabase.co';
+const SUPABASE_KEY  = 'sb_publishable_STtCN1zWydiIFtgHR1Yn5g_n9YBH102';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  COLOURS & HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+const C = {
+  bg:'#0d0f14', panel:'#13161e', card:'#1a1e2a', border:'#252936',
+  accent:'#f97316', blue:'#3b82f6', green:'#22c55e',
+  red:'#ef4444', yellow:'#eab308', text:'#e8eaf0', muted:'#6b7280', white:'#ffffff',
+};
+const fmt = n => `$${(+n||0).toFixed(2)}`;
+const pct = n => `${(+n||0).toFixed(1)}%`;
+const today = () => new Date().toISOString().split('T')[0];
+const uid = () => crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+const totalCost = p => Object.values(p.costs||{}).reduce((a,v)=>a+(+v||0),0);
+const partProfit = p => (+p.list_price||0) - totalCost(p);
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  EBAY AU CATEGORIES
+// ═══════════════════════════════════════════════════════════════════════════
+const EBAY_AU_CATEGORIES = {
+  'Air & Fuel Delivery':['Air Filters','Air Flow Meters / MAF Sensors','Air Intake Systems','Carburettors & Parts','Fuel Caps & Locking Fuel Caps','Fuel Filters','Fuel Injectors','Fuel Pressure Regulators','Fuel Pumps','Fuel Rails','Fuel Tanks','Idle Control Valves (ICV / IAC)','Inlet Manifolds','Intercoolers','Lambda / Oxygen Sensors','Mass Air Flow (MAF) Sensors','Superchargers & Parts','Throttle Bodies','Turbocharger Hoses & Pipes','Turbochargers & Parts','Other Air & Fuel Delivery'],
+  'Air Conditioning & Heating':['A/C Compressors','A/C Condensers','A/C Driers & Accumulators','A/C Expansion Valves','A/C Hoses & Pipes','Blower Motors & Fans','Climate Control Units','Evaporators','Heater Cores / Matrices','Heater Control Valves','Heater Hoses','Pollen / Cabin Air Filters','Refrigerant & Recharge Kits','Other Air Conditioning & Heating'],
+  'Brakes & Brake Parts':['ABS Sensors & Rings','ABS Pump & Modulator Units','Brake Boosters / Servo Units','Brake Cables','Brake Callipers','Brake Discs / Rotors','Brake Drums','Brake Drum Hardware Kits','Brake Fluid','Brake Hoses & Lines','Brake Master Cylinders','Brake Pad Sets','Brake Pad Wear Sensors','Brake Pipe Fittings & Unions','Brake Pipes / Hard Lines','Brake Shoe Sets','Brake Wheel Cylinders','Handbrake / Parking Brake Parts','Other Brake Parts'],
+  'Electric, Hybrid & PHEV Specific Parts':['Charging Cables & Adaptors','DC-DC Converters','Electric Drive Motors','Electric Power Steering (EPS) Components','EV Battery Packs','EV Battery Modules & Cells','EV Battery Management Systems (BMS)','High Voltage Cables & Harnesses','Hybrid Inverters & Controllers','On-Board Chargers (OBC)','Regenerative Braking Components','Thermal Management Components','Other EV / Hybrid / PHEV Parts'],
+  'Engine Cooling Components':['Coolant / Antifreeze','Coolant Expansion Tanks / Overflow Bottles','Coolant Hoses & Pipes','Coolant Sensors & Temperature Switches','Cooling Fan Assemblies','Cooling Fan Clutches','Cooling Fan Motors','Oil Coolers','Radiator Caps','Radiators','Thermostats & Housings','Water Outlet Housings','Water Pumps','Other Engine Cooling Components'],
+  'Engines & Engine Parts':['Balance Shafts & Bearings','Cam Belts / Timing Belts & Kits','Cam Chains & Timing Chain Kits','Camshafts & Cam Followers','Complete Engines','Connecting Rods & Big End Bearings','Crankshafts & Main Bearings','Cylinder Heads','Cylinder Head Gaskets & Sets','Engine Blocks','Engine Computers / ECUs','Engine Mounts','Flywheels & Flexplates','Full Gasket Sets','Harmonic Balancers / Crankshaft Pulleys','Head Bolts & Studs','Oil Caps','Oil Dipsticks & Tubes','Oil Filters','Oil Pans / Sumps','Oil Pressure Sensors & Switches','Oil Pumps','Pistons, Rings & Bearings','Rocker Arms & Pushrods','Timing Covers','Valve Covers / Rocker Covers','Valve Cover Gaskets','Valves & Valve Springs','Variable Valve Timing (VVT) Components','Other Engine Parts'],
+  'Exhaust & Emission Systems':['Catalytic Converters','Diesel Particulate Filters (DPF)','EGR Coolers','EGR Valves','Exhaust Headers / Manifolds','Exhaust Hangers & Clamps','Exhaust Mufflers / Silencers','Exhaust Pipes & Tubes','Exhaust Tips','Gaskets & Flanges','Heat Shields','Oxygen / Lambda Sensors','Secondary Air Injection Components','Other Exhaust & Emission Parts'],
+  'Exterior Parts & Accessories':['Bonnet / Hood & Parts','Boot Lids / Tailgates & Parts','Bumper Bars — Front','Bumper Bars — Rear','Bumper Bar Parts & Trims','Car Bras & Paint Protection Film','Door Handles — Exterior','Door Mirrors / Wing Mirrors','Door Panels & Parts','Door Seals & Weatherstripping','Fenders / Guards & Parts','Grilles & Surrounds','Number Plate Frames & Holders','Rear View Mirrors','Roof Racks & Carriers','Running Boards & Side Steps','Spoilers & Wings','Sunroofs & Moonroofs','Tonneau Covers','Tow Bars & Towing Accessories','Truck Bed Liners & Accessories','Ute / Canopy Accessories','Windscreen Wipers & Washers','Windscreens / Windshields','Other Exterior Parts'],
+  'Ignition Systems & Components':['Cam Position Sensors (CMP)','Coil Packs','Crankshaft Position Sensors (CKP)','Distributor Caps & Rotors','Distributors','Glow Plugs','Ignition Coils','Ignition Leads / Spark Plug Wires','Ignition Modules','Ignition Switches & Lock Cylinders','Knock Sensors','Spark Plugs','Other Ignition Parts'],
+  'Interior Parts & Accessories':['Accelerator / Brake / Clutch Pedals','Air Vents & Grilles','Armrests','Boot / Cargo Liners & Organisers','Car Mats & Floor Mats','Centre Consoles & Lids','Clock Springs / Spiral Cables','Dashboards & Dash Pads','Door Cards & Interior Door Panels','Door Handle — Interior','Gear Knobs & Shifter Parts','Grab Handles & Assist Grips','Headliners & Roof Linings','Instrument Clusters & Gauges','Seat Belts & Parts','Seats — Complete','Seat Covers & Seat Parts','Seat Rails & Runners','Steering Wheels','Sun Visors','Sunshades & Window Covers','Window Regulators & Motor Assemblies','Other Interior Parts'],
+  'Lighting & Bulbs':['Bulbs — Exterior','Bulbs — Interior','Daytime Running Lights (DRL)','Fog Lights — Front','Fog Lights — Rear','Headlight Assemblies','Headlight Components & Lenses','Headlight Levelling Motors','HID / Xenon Kits & Ballasts','Indicators / Turn Signal Lights','Interior Lights','LED Light Bars & Work Lights','LED Lighting Conversion Kits','Number Plate Lights','Reversing / Reverse Lights','Side Marker Lights','Tail Lights / Rear Lamp Assemblies','Other Lighting'],
+  'Racks & Roof Boxes':['Bike Carriers & Racks','Cargo / Roof Boxes','Kayak & Canoe Carriers','Ladder Racks','Roof Bars / Cross Bars','Roof Rack Feet & Fitting Kits','Ski & Snowboard Carriers','Surf / Paddle Board Carriers','Other Racks & Roof Boxes'],
+  'Starters, Alternators, ECUs & Wiring':['Alternators','Batteries & Battery Accessories','Battery Cables & Terminals','Body Control Modules (BCM)','ECUs / Engine Control Units','Fuse Boxes & Relay Panels','Fuses & Relays','Glow Plug Controllers','Junction Boxes','Starter Motors','Transmission Control Modules (TCM)','Voltage Regulators','Wiring Looms & Harnesses','Other Electrical Parts'],
+  'Steering & Suspension':['Anti-Roll Bars / Sway Bars & Links','Ball Joints','Bump Stops','Coil Springs','Control Arms & Wishbones','CV Joints & Driveshafts','Drag Links','Drop Links / Stabiliser Links','Hub Bearings & Wheel Bearings','Idler Arms','King Pins','Leaf Springs & Parts','Pitman Arms','Power Steering Fluid','Power Steering Hoses & Pipes','Power Steering Pumps','Power Steering Racks & Boxes','Shock Absorbers / Dampers','Steering Columns & Shafts','Steering Joints & Couplings','Strut Mounts & Top Mounts','Subframes & Crossmembers','Suspension Kits','Tie Rod Ends','Trailing Arms & Panhard Rods','Wheel Alignment Parts','Other Steering & Suspension Parts'],
+  'Towing Parts & Accessories':['Brake Controllers','Hitch Balls & Mounts','Tow Bar Wiring Kits','Tow Bars & Receivers','Tow Hitches & Couplings','Trailer Sockets & Plugs','Weight Distribution Systems','Other Towing Parts'],
+  'Transmission & Drivetrain':['Axles & Axle Parts','Bell Housings','Centre Bearings & Support Brackets','Clutch Cables','Clutch Fork & Pivot Ball','Clutch Kits & Pressure Plates','Clutch Master Cylinders','Clutch Release Bearings / Throw-Out Bearings','Clutch Slave Cylinders','Complete Gearboxes — Manual','Complete Gearboxes — Automatic','CV Boots','Differential & Axle Parts','Driveshafts & Prop Shafts','Flywheel Ring Gears','Four Wheel Drive (4WD / 4x4) Parts','Gear Linkages & Cables','Gearbox Mounts','Oil Seals','Transfer Cases','Transmission Coolers','Transmission Filters & Gaskets','Transmission Fluid','Universal Joints (UJ / Uni Joints)','Other Transmission & Drivetrain Parts'],
+  'Wheels, Tyres & Parts':['Centre Caps & Hub Caps','Run Flat Tyres','Spare Wheels & Carriers','Tyre Repair Kits','Tyres','Tyre Pressure Monitoring Systems (TPMS)','Wheel Balancing Weights','Wheel Bolts & Wheel Studs','Wheel Locks & Anti-Theft Nuts','Wheel Nuts','Wheel Spacers & Adapters','Wheels — Alloy','Wheels — Steel','Other Wheels, Tyres & Parts'],
+  'Other Car & Truck Parts & Accessories':['Body Kits & Wide Body Kits','Fasteners, Clips & Trim Pins','Gauges & Instruments','Keys, Lock Sets & Remotes','Manuals & Literature','Performance Parts & Upgrades','Polish, Wax & Detailing Products','Rust Proofing & Underbody Coatings','Sealants, Adhesives & Chemicals','Sensors — General','Windscreen Repair Kits','Other'],
+};
+const CATEGORY_NAMES = Object.keys(EBAY_AU_CATEGORIES);
+const PART_CONDITIONS = ['Used – Excellent','Used – Good','Used – Fair','For Parts Only','Refurbished'];
+const AU_SHIPPING = ['Standard Post','Express Post','Courier','Courier (Bulky / Oversize)','Collect Only','Free Postage'];
+const STATUS_COLORS = {'In Stock':C.blue,'Listed':C.accent,'Sold':C.green,'Archived':C.muted,'Deleted':C.red};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  STYLES
+// ═══════════════════════════════════════════════════════════════════════════
+const S = {
+  app:{ minHeight:'100vh', background:C.bg, color:C.text, fontFamily:"'Courier New',monospace" },
+  nav:{ background:C.panel, borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', position:'sticky', top:0, zIndex:100, flexWrap:'wrap' },
+  logo:{ color:C.accent, fontWeight:700, fontSize:18, padding:'12px 20px 12px 16px', borderRight:`1px solid ${C.border}`, whiteSpace:'nowrap' },
+  navBtn:a=>({ background:a?C.accent:'transparent', color:a?C.white:C.muted, border:'none', cursor:'pointer', padding:'12px 14px', fontSize:11, fontFamily:'inherit', letterSpacing:'0.5px', textTransform:'uppercase', fontWeight:a?700:400 }),
+  main:{ padding:'20px', maxWidth:1600, margin:'0 auto' },
+  g2:{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 },
+  g3:{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:14 },
+  g4:{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:14 },
+  card:{ background:C.card, border:`1px solid ${C.border}`, borderRadius:8, padding:18 },
+  label:{ fontSize:10, color:C.muted, textTransform:'uppercase', letterSpacing:'1px', marginBottom:4, display:'block' },
+  input:{ width:'100%', background:C.panel, border:`1px solid ${C.border}`, borderRadius:4, padding:'7px 10px', color:C.text, fontSize:12, fontFamily:'inherit', boxSizing:'border-box', outline:'none' },
+  select:{ width:'100%', background:C.panel, border:`1px solid ${C.border}`, borderRadius:4, padding:'7px 10px', color:C.text, fontSize:12, fontFamily:'inherit', boxSizing:'border-box' },
+  textarea:{ width:'100%', background:C.panel, border:`1px solid ${C.border}`, borderRadius:4, padding:'7px 10px', color:C.text, fontSize:12, fontFamily:'inherit', boxSizing:'border-box', resize:'vertical', minHeight:72 },
+  btn:(v='primary')=>({ background:v==='primary'?C.accent:v==='green'?C.green:v==='blue'?C.blue:v==='danger'?C.red:C.border, color:C.white, border:'none', borderRadius:4, padding:'8px 16px', fontSize:11, fontFamily:'inherit', cursor:'pointer', fontWeight:700, letterSpacing:'0.5px', textTransform:'uppercase' }),
+  pill:col=>({ background:col+'22', color:col, border:`1px solid ${col}44`, borderRadius:10, padding:'2px 8px', fontSize:10, fontWeight:600, display:'inline-block' }),
+  h1:{ fontSize:20, fontWeight:700, margin:'0 0 4px', color:C.white },
+  h2:{ fontSize:14, fontWeight:700, margin:'0 0 14px', color:C.white },
+  statVal:{ fontSize:26, fontWeight:700, color:C.accent, margin:'4px 0' },
+  statLbl:{ fontSize:10, color:C.muted, textTransform:'uppercase', letterSpacing:'1px' },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  SUPABASE DATA LAYER
+// ═══════════════════════════════════════════════════════════════════════════
+function useSupabaseParts() {
+  const [parts, setParts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [syncStatus, setSyncStatus] = useState('connecting');
+
+  const mapRow = r => ({
+    id: r.id, sku: r.sku||'', title: r.title||'', category: r.category||'',
+    subcategory: r.subcategory||'', make: r.make||'', model: r.model||'',
+    year: r.year||'', condition: r.condition||'Used – Good',
+    description: r.description||'', status: r.status||'In Stock',
+    costs: r.costs||{acquisition:0,labour:0,storage:0,packaging:0,postage:0,holding:0},
+    list_price: +r.list_price||0, soldPrice: r.sold_price ? +r.sold_price : null,
+    listPrice: +r.list_price||0,  // alias for compatibility
+    weight: r.weight ? +r.weight : null,
+    photos: r.photos||[], partNumber: r.part_number||'',
+    ebayItemId: r.ebay_item_id||'', shippingOption: r.shipping_option||'Standard Post',
+    notes: r.notes||'', acquiredDate: r.acquired_date||null,
+    listedDate: r.listed_date||null, soldDate: r.sold_date||null,
+    deletedAt: r.deleted_at||null, createdAt: r.created_at,
+  });
+
+  const mapToRow = p => ({
+    sku: p.sku, title: p.title, category: p.category, subcategory: p.subcategory,
+    make: p.make, model: p.model, year: p.year, condition: p.condition,
+    description: p.description, status: p.status, costs: p.costs,
+    list_price: +p.listPrice||+p.list_price||0,
+    sold_price: p.soldPrice ? +p.soldPrice : null,
+    weight: p.weight ? +p.weight : null, photos: p.photos||[],
+    part_number: p.partNumber||'', ebay_item_id: p.ebayItemId||'',
+    shipping_option: p.shippingOption||'Standard Post',
+    notes: p.notes||'', acquired_date: p.acquiredDate||null,
+    listed_date: p.listedDate||null, sold_date: p.soldDate||null,
+    deleted_at: p.deletedAt||null,
+  });
+
+  const fetch = useCallback(async () => {
+    const { data, error } = await sb.from('parts').select('*').order('created_at', { ascending: false });
+    if (!error && data) { setParts(data.map(mapRow)); setSyncStatus('live'); }
+    else setSyncStatus('error');
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    fetch();
+    const channel = sb.channel('admin-parts')
+      .on('postgres_changes', { event:'*', schema:'public', table:'parts' }, fetch)
+      .subscribe();
+    return () => sb.removeChannel(channel);
+  }, [fetch]);
+
+  const addPart = async p => {
+    const { data: { user } } = await sb.auth.getUser();
+    const { data, error } = await sb.from('parts').insert({ ...mapToRow(p), user_id: user?.id }).select().single();
+    if (!error) { setParts(ps => [mapRow(data), ...ps]); return mapRow(data); }
+    throw error;
+  };
+
+  const editPart = async p => {
+    const { error } = await sb.from('parts').update(mapToRow(p)).eq('id', p.id);
+    if (!error) setParts(ps => ps.map(x => x.id===p.id ? p : x));
+    else throw error;
+  };
+
+  const softDelete = async id => {
+    const p = parts.find(x=>x.id===id);
+    if (p) await editPart({ ...p, status:'Deleted', deletedAt: new Date().toISOString() });
+  };
+
+  return { parts, loading, syncStatus, addPart, editPart, softDelete, refetch: fetch };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  AUTH SCREEN
+// ═══════════════════════════════════════════════════════════════════════════
+function AuthScreen() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [mode, setMode] = useState('login');
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState('');
+
+  const handle = async () => {
+    if (!email || !password) { setErr('Email and password required.'); return; }
+    setLoading(true); setErr('');
+    try {
+      if (mode==='login') {
+        const { error } = await sb.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+      } else {
+        const { error } = await sb.auth.signUp({ email, password });
+        if (error) throw error;
+        setErr('Account created — check your email to verify, then log in.');
+        setMode('login');
+      }
+    } catch(e) { setErr(e.message); }
+    setLoading(false);
+  };
+
+  return (
+    <div style={{ minHeight:'100vh', background:C.bg, display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
+      <div style={{ width:'100%', maxWidth:400 }}>
+        <div style={{ textAlign:'center', marginBottom:32 }}>
+          <div style={{ fontSize:56, marginBottom:8 }}>⚙</div>
+          <div style={{ fontSize:28, fontWeight:800, color:C.accent, letterSpacing:-1 }}>PartVault Admin</div>
+          <div style={{ fontSize:12, color:C.muted, marginTop:4 }}>Australian Car Parts Manager</div>
+        </div>
+        <div style={{ ...S.card, borderColor:C.border }}>
+          <div style={{ fontSize:18, fontWeight:700, color:C.white, marginBottom:20 }}>
+            {mode==='login' ? 'Sign In' : 'Create Account'}
+          </div>
+          <div style={{ marginBottom:12 }}>
+            <label style={S.label}>Email</label>
+            <input style={S.input} type="email" value={email} onChange={e=>setEmail(e.target.value)}
+              placeholder="your@email.com" onKeyDown={e=>e.key==='Enter'&&handle()} />
+          </div>
+          <div style={{ marginBottom:16 }}>
+            <label style={S.label}>Password</label>
+            <input style={S.input} type="password" value={password} onChange={e=>setPassword(e.target.value)}
+              placeholder="••••••••" onKeyDown={e=>e.key==='Enter'&&handle()} />
+          </div>
+          {err && <div style={{ fontSize:12, color:err.includes('created')?C.green:C.red, marginBottom:12 }}>{err}</div>}
+          <button style={{ ...S.btn(), width:'100%', padding:12, fontSize:14 }} onClick={handle} disabled={loading}>
+            {loading ? '⏳ Please wait…' : mode==='login' ? 'Sign In' : 'Create Account'}
+          </button>
+          <div style={{ textAlign:'center', marginTop:14, fontSize:12, color:C.muted }}>
+            {mode==='login' ? "No account? " : "Have an account? "}
+            <span style={{ color:C.accent, cursor:'pointer', fontWeight:700 }}
+              onClick={()=>{ setMode(m=>m==='login'?'signup':'login'); setErr(''); }}>
+              {mode==='login' ? 'Sign Up' : 'Sign In'}
+            </span>
+          </div>
+        </div>
+        <div style={{ ...S.card, marginTop:14, fontSize:11, color:C.muted, lineHeight:1.7 }}>
+          💡 Same login as the iPhone app — all data syncs in real-time via Supabase.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  SHARED UI
+// ═══════════════════════════════════════════════════════════════════════════
+function Field({ label, children }) {
+  return <div style={{ marginBottom:12 }}><label style={S.label}>{label}</label>{children}</div>;
+}
+function StatCard({ label, value, sub, color }) {
+  return (
+    <div style={S.card}>
+      <div style={S.statLbl}>{label}</div>
+      <div style={{ ...S.statVal, color:color||C.accent }}>{value}</div>
+      {sub && <div style={{ fontSize:10, color:C.muted }}>{sub}</div>}
+    </div>
+  );
+}
+function SectionHeader({ title, action }) {
+  return (
+    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+      <h2 style={S.h1}>{title}</h2>
+      {action}
+    </div>
+  );
+}
+function SyncBadge({ status }) {
+  const map = { live:['🟢','Live','#22c55e'], connecting:['🟡','Connecting',C.yellow], error:['🔴','Error',C.red] };
+  const [icon, label, color] = map[status]||map.connecting;
+  return <span style={{ fontSize:10, color, marginLeft:8 }}>{icon} {label}</span>;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  DASHBOARD
+// ═══════════════════════════════════════════════════════════════════════════
+function Dashboard({ parts }) {
+  const active = parts.filter(p=>p.status!=='Deleted');
+  const inStock = active.filter(p=>p.status==='In Stock');
+  const listed  = active.filter(p=>p.status==='Listed');
+  const sold    = active.filter(p=>p.status==='Sold');
+  const soldRev  = sold.reduce((a,p)=>a+(+p.soldPrice||+p.list_price||0),0);
+  const soldCogs = sold.reduce((a,p)=>a+totalCost(p),0);
+  const gross    = soldRev - soldCogs;
+  const margin   = soldRev>0?(gross/soldRev)*100:0;
+  const stockVal = [...inStock,...listed].reduce((a,p)=>a+totalCost(p),0);
+
+  const aged = listed.filter(p=>{
+    if (!p.listedDate) return false;
+    return Math.floor((Date.now()-new Date(p.listedDate))/86400000)>60;
+  });
+
+  const catBreak = CATEGORY_NAMES.map(cat=>({ cat, count:active.filter(p=>p.category===cat).length }))
+    .filter(x=>x.count>0).sort((a,b)=>b.count-a.count).slice(0,8);
+
+  return (
+    <div>
+      <SectionHeader title="📊 Dashboard" />
+      <div style={S.g4}>
+        <StatCard label="Total Parts"      value={active.length}         sub={`${inStock.length} in stock`} />
+        <StatCard label="Listed on eBay"   value={listed.length}         color={C.accent} />
+        <StatCard label="Total Sold"       value={sold.length}           color={C.green} sub={fmt(soldRev)+' revenue'} />
+        <StatCard label="Gross Profit"     value={fmt(gross)}            color={margin>30?C.green:C.yellow} sub={pct(margin)+' margin'} />
+      </div>
+      <div style={{ ...S.g2, marginTop:14 }}>
+        <div style={S.card}>
+          <h2 style={S.h2}>📦 Stock by Category</h2>
+          {catBreak.map(({cat,count})=>(
+            <div key={cat} style={{ display:'flex', justifyContent:'space-between', padding:'5px 0', borderBottom:`1px solid ${C.border}`, fontSize:12 }}>
+              <span style={{ color:C.text }}>{cat}</span>
+              <span style={{ color:C.accent, fontWeight:700 }}>{count}</span>
+            </div>
+          ))}
+          {catBreak.length===0 && <p style={{ color:C.muted, fontSize:12 }}>No parts yet.</p>}
+        </div>
+        <div style={S.card}>
+          <h2 style={S.h2}>⚠️ Aged Stock & Alerts</h2>
+          {aged.length===0 && <p style={{ color:C.muted, fontSize:12 }}>No aged stock alerts.</p>}
+          {aged.slice(0,6).map(p=>{
+            const days = Math.floor((Date.now()-new Date(p.listedDate))/86400000);
+            return (
+              <div key={p.id} style={{ padding:'6px 0', borderBottom:`1px solid ${C.border}` }}>
+                <div style={{ fontSize:12, color:days>90?C.red:C.yellow }}>{p.title}</div>
+                <div style={{ fontSize:10, color:C.muted }}>Listed {days} days · {fmt(p.listPrice||p.list_price)}</div>
+              </div>
+            );
+          })}
+          <div style={{ marginTop:14, borderTop:`1px solid ${C.border}`, paddingTop:12 }}>
+            <div style={{ fontSize:10, color:C.muted, marginBottom:4 }}>INVENTORY VALUE (at cost)</div>
+            <div style={{ fontSize:22, fontWeight:700, color:C.blue }}>{fmt(stockVal)}</div>
+          </div>
+        </div>
+      </div>
+      <div style={{ ...S.card, marginTop:14 }}>
+        <h2 style={S.h2}>💰 P&L Summary</h2>
+        <div style={S.g4}>
+          {[['Total Revenue',fmt(soldRev),C.white],['Total COGS (sold)',fmt(soldCogs),C.red],['Gross Profit',fmt(gross),C.green],['Gross Margin',pct(margin),margin>30?C.green:C.yellow]].map(([l,v,col])=>(
+            <div key={l}><div style={S.statLbl}>{l}</div><div style={{ fontSize:18, fontWeight:700, color:col }}>{v}</div></div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  PART FORM (Add / Edit)
+// ═══════════════════════════════════════════════════════════════════════════
+function PartForm({ part, onSave, onCancel }) {
+  const defCat = CATEGORY_NAMES[4];
+  const [form, setForm] = useState(part ? { ...part, costs:{...part.costs} } : {
+    id:uid(), sku:`SKU-${Date.now().toString().slice(-4)}`,
+    title:'', category:defCat, subcategory:EBAY_AU_CATEGORIES[defCat][0],
+    make:'', model:'', year:'', condition:PART_CONDITIONS[1],
+    description:'', acquiredDate:today(), listedDate:'', soldDate:'',
+    costs:{acquisition:0,labour:0,storage:0,packaging:0,postage:0,holding:0},
+    listPrice:'', soldPrice:'', photos:[], weight:'', status:'In Stock',
+    ebayItemId:'', partNumber:'', shippingOption:AU_SHIPPING[0], notes:'',
+  });
+  const [saving, setSaving] = useState(false);
+  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const setCost=(k,v)=>setForm(f=>({...f,costs:{...f.costs,[k]:v}}));
+  const cost = Object.values(form.costs).reduce((a,v)=>a+(+v||0),0);
+  const profit = (+form.listPrice||0)-cost;
+  const margin = form.listPrice>0?(profit/+form.listPrice)*100:0;
+
+  const handleSave = async () => {
+    if (!form.title.trim()) { alert('Title required'); return; }
+    setSaving(true);
+    try { await onSave(form); } catch(e) { alert(e.message); }
+    setSaving(false);
+  };
+
+  return (
+    <div style={{ ...S.card, maxWidth:820, margin:'0 auto' }}>
+      <h2 style={S.h2}>{part?'✏️ Edit Part':'➕ Add New Part'}</h2>
+      <div style={S.g2}>
+        <Field label="SKU"><input style={S.input} value={form.sku} onChange={e=>set('sku',e.target.value)} /></Field>
+        <Field label="OEM / Part Number"><input style={S.input} value={form.partNumber} onChange={e=>set('partNumber',e.target.value)} /></Field>
+      </div>
+      <Field label={`Listing Title (${form.title.length}/80)`}>
+        <input style={{ ...S.input, borderColor:form.title.length>80?C.red:C.border }} value={form.title} onChange={e=>set('title',e.target.value)} />
+      </Field>
+      <div style={S.g2}>
+        <Field label="eBay AU Category">
+          <select style={S.select} value={form.category} onChange={e=>{ set('category',e.target.value); set('subcategory',EBAY_AU_CATEGORIES[e.target.value]?.[0]||''); }}>
+            {CATEGORY_NAMES.map(c=><option key={c}>{c}</option>)}
+          </select>
+        </Field>
+        <Field label="Subcategory">
+          <select style={S.select} value={form.subcategory} onChange={e=>set('subcategory',e.target.value)}>
+            {(EBAY_AU_CATEGORIES[form.category]||[]).map(s=><option key={s}>{s}</option>)}
+          </select>
+        </Field>
+      </div>
+      <div style={S.g3}>
+        <Field label="Make"><input style={S.input} value={form.make} onChange={e=>set('make',e.target.value)} placeholder="Toyota" /></Field>
+        <Field label="Model"><input style={S.input} value={form.model} onChange={e=>set('model',e.target.value)} placeholder="Hilux" /></Field>
+        <Field label="Year"><input style={S.input} value={form.year} onChange={e=>set('year',e.target.value)} placeholder="2005-2015" /></Field>
+      </div>
+      <div style={S.g3}>
+        <Field label="Condition">
+          <select style={S.select} value={form.condition} onChange={e=>set('condition',e.target.value)}>
+            {PART_CONDITIONS.map(c=><option key={c}>{c}</option>)}
+          </select>
+        </Field>
+        <Field label="Status">
+          <select style={S.select} value={form.status} onChange={e=>set('status',e.target.value)}>
+            {['In Stock','Listed','Sold','Archived'].map(s=><option key={s}>{s}</option>)}
+          </select>
+        </Field>
+        <Field label="Shipping">
+          <select style={S.select} value={form.shippingOption} onChange={e=>set('shippingOption',e.target.value)}>
+            {AU_SHIPPING.map(s=><option key={s}>{s}</option>)}
+          </select>
+        </Field>
+      </div>
+      <Field label="Description">
+        <textarea style={S.textarea} value={form.description} onChange={e=>set('description',e.target.value)} placeholder="Condition, what it was removed from, testing done…" />
+      </Field>
+
+      {/* Costs */}
+      <div style={{ ...S.card, background:C.panel, marginBottom:14 }}>
+        <h2 style={{ ...S.h2, marginBottom:10 }}>💸 Cost Breakdown (AUD)</h2>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10 }}>
+          {Object.keys(form.costs).map(k=>(
+            <Field key={k} label={`${k.charAt(0).toUpperCase()+k.slice(1)} ($)`}>
+              <input style={S.input} type="number" min="0" step="0.01" value={form.costs[k]} onChange={e=>setCost(k,e.target.value)} />
+            </Field>
+          ))}
+        </div>
+        <div style={{ display:'flex', gap:20, marginTop:8, flexWrap:'wrap', fontSize:12 }}>
+          <span>Total cost: <strong style={{ color:C.red }}>{fmt(cost)}</strong></span>
+          <span>List: <strong style={{ color:C.white }}>{fmt(form.listPrice)}</strong></span>
+          <span>Profit: <strong style={{ color:profit>=0?C.green:C.red }}>{fmt(profit)}</strong></span>
+          <span>Margin: <strong style={{ color:margin>=30?C.green:C.yellow }}>{pct(margin)}</strong></span>
+        </div>
+      </div>
+
+      <div style={S.g3}>
+        <Field label="List Price ($)"><input style={S.input} type="number" value={form.listPrice} onChange={e=>set('listPrice',e.target.value)} /></Field>
+        <Field label="Sold Price ($)"><input style={S.input} type="number" value={form.soldPrice||''} onChange={e=>set('soldPrice',e.target.value)} /></Field>
+        <Field label="Weight (kg)"><input style={S.input} type="number" value={form.weight||''} onChange={e=>set('weight',e.target.value)} /></Field>
+      </div>
+      <div style={S.g3}>
+        <Field label="Acquired Date"><input style={S.input} type="date" value={form.acquiredDate||''} onChange={e=>set('acquiredDate',e.target.value)} /></Field>
+        <Field label="Listed Date"><input style={S.input} type="date" value={form.listedDate||''} onChange={e=>set('listedDate',e.target.value)} /></Field>
+        <Field label="Sold Date"><input style={S.input} type="date" value={form.soldDate||''} onChange={e=>set('soldDate',e.target.value)} /></Field>
+      </div>
+      <div style={S.g2}>
+        <Field label="eBay Item ID"><input style={S.input} value={form.ebayItemId||''} onChange={e=>set('ebayItemId',e.target.value)} /></Field>
+        <Field label="Internal Notes"><input style={S.input} value={form.notes||''} onChange={e=>set('notes',e.target.value)} /></Field>
+      </div>
+      <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:8 }}>
+        <button style={S.btn('secondary')} onClick={onCancel}>Cancel</button>
+        <button style={S.btn()} onClick={handleSave} disabled={saving}>
+          {saving ? '⏳ Saving…' : part ? 'Save Changes' : 'Add Part'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  DELETE CONFIRM MODAL
+// ═══════════════════════════════════════════════════════════════════════════
+function DeleteModal({ target, onConfirm, onCancel }) {
+  const [step, setStep] = useState(1);
+  const steps = [
+    { h:'Delete this part?', s:`"${target?.title}"`, btn:'Yes, Delete', col:C.yellow },
+    { h:'Are you sure?',     s:'This will tag it as Deleted — still recoverable.', btn:"Yes, I'm sure", col:C.red },
+    { h:'Really sure?',      s:'Last chance before it is marked deleted.', btn:'Delete It', col:C.red },
+  ];
+  const st = steps[step-1];
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.75)', zIndex:999, display:'flex', alignItems:'center', justifyContent:'center' }}>
+      <div style={{ ...S.card, maxWidth:380, width:'90%', textAlign:'center', borderColor:C.red+'66' }}>
+        <div style={{ fontSize:28, marginBottom:10 }}>{'⚠️'.repeat(step)}</div>
+        <div style={{ fontSize:17, fontWeight:700, color:C.white, marginBottom:6 }}>{st.h}</div>
+        <div style={{ fontSize:12, color:C.muted, marginBottom:16 }}>{st.s}</div>
+        <div style={{ display:'flex', gap:6, justifyContent:'center', marginBottom:18 }}>
+          {[1,2,3].map(i=><div key={i} style={{ width:28, height:3, borderRadius:2, background:i<=step?C.red:C.border }} />)}
+        </div>
+        <div style={{ display:'flex', gap:10, justifyContent:'center' }}>
+          <button style={S.btn('secondary')} onClick={onCancel}>Cancel</button>
+          <button style={{ ...S.btn('danger'), background:st.col }}
+            onClick={()=>step<3?setStep(s=>s+1):onConfirm()}>
+            {st.btn}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  BULK EDIT PANEL
+// ═══════════════════════════════════════════════════════════════════════════
+function BulkEditPanel({ selectedIds, parts, onSaveAll, onClose }) {
+  const [fields, setFields] = useState({ status:'', condition:'', category:'', subcategory:'', shippingOption:'', costField:'', costType:'flat', costValue:'' });
+  const setF=(k,v)=>setFields(f=>({...f,[k]:v}));
+  const targets = parts.filter(p=>selectedIds.has(p.id));
+
+  const applyBulk = p => {
+    let u = { ...p, costs:{...p.costs} };
+    if (fields.status)        u.status = fields.status;
+    if (fields.condition)     u.condition = fields.condition;
+    if (fields.category)      u.category = fields.category;
+    if (fields.subcategory)   u.subcategory = fields.subcategory;
+    if (fields.shippingOption) u.shippingOption = fields.shippingOption;
+    if (fields.costField && fields.costValue) {
+      const k = fields.costField, v = +fields.costValue||0;
+      u.costs[k] = fields.costType==='flat' ? v : +(p.costs[k]*(1+v/100)).toFixed(2);
+    }
+    return u;
+  };
+  const hasChange = p => JSON.stringify(applyBulk(p)) !== JSON.stringify(p);
+  const hasAny = fields.status||fields.condition||fields.category||fields.shippingOption||(fields.costField&&fields.costValue);
+
+  const save = async () => {
+    for (const p of targets.filter(hasChange)) { await onSaveAll(applyBulk(p)); }
+    onClose();
+  };
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:998, display:'flex', alignItems:'center', justifyContent:'center' }}>
+      <div style={{ ...S.card, maxWidth:540, width:'95%', maxHeight:'88vh', overflowY:'auto', borderColor:C.blue+'66' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+          <div>
+            <div style={{ fontSize:15, fontWeight:700, color:C.white }}>✏️ Bulk Edit</div>
+            <div style={{ fontSize:11, color:C.muted }}>{targets.length} parts selected — only filled fields apply</div>
+          </div>
+          <button style={{ background:'none', border:'none', color:C.muted, fontSize:18, cursor:'pointer' }} onClick={onClose}>✕</button>
+        </div>
+        <div style={S.g2}>
+          <Field label="Set Status">
+            <select style={S.select} value={fields.status} onChange={e=>setF('status',e.target.value)}>
+              <option value="">— no change —</option>
+              {['In Stock','Listed','Sold','Archived'].map(s=><option key={s}>{s}</option>)}
+            </select>
+          </Field>
+          <Field label="Set Condition">
+            <select style={S.select} value={fields.condition} onChange={e=>setF('condition',e.target.value)}>
+              <option value="">— no change —</option>
+              {PART_CONDITIONS.map(s=><option key={s}>{s}</option>)}
+            </select>
+          </Field>
+          <Field label="Set Category">
+            <select style={S.select} value={fields.category} onChange={e=>{ setF('category',e.target.value); setF('subcategory',''); }}>
+              <option value="">— no change —</option>
+              {CATEGORY_NAMES.map(s=><option key={s}>{s}</option>)}
+            </select>
+          </Field>
+          <Field label="Set Shipping">
+            <select style={S.select} value={fields.shippingOption} onChange={e=>setF('shippingOption',e.target.value)}>
+              <option value="">— no change —</option>
+              {AU_SHIPPING.map(s=><option key={s}>{s}</option>)}
+            </select>
+          </Field>
+        </div>
+        <div style={{ ...S.card, background:C.panel, marginBottom:14 }}>
+          <div style={{ fontSize:11, color:C.muted, textTransform:'uppercase', letterSpacing:'0.8px', marginBottom:10 }}>Cost Adjustment</div>
+          <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+            <div style={{ flex:1, minWidth:130 }}>
+              <Field label="Cost Field">
+                <select style={S.select} value={fields.costField} onChange={e=>setF('costField',e.target.value)}>
+                  <option value="">— none —</option>
+                  {['acquisition','labour','storage','packaging','postage','holding'].map(k=><option key={k} value={k}>{k}</option>)}
+                </select>
+              </Field>
+            </div>
+            <div style={{ flex:1, minWidth:120 }}>
+              <Field label="Type">
+                <select style={S.select} value={fields.costType} onChange={e=>setF('costType',e.target.value)}>
+                  <option value="flat">Set flat ($)</option>
+                  <option value="pct">Adjust % (±)</option>
+                </select>
+              </Field>
+            </div>
+            <div style={{ flex:1, minWidth:100 }}>
+              <Field label={fields.costType==='pct'?'% change':'New value ($)'}>
+                <input style={S.input} type="number" value={fields.costValue} onChange={e=>setF('costValue',e.target.value)} placeholder={fields.costType==='pct'?'e.g. 10':'e.g. 8.00'} />
+              </Field>
+            </div>
+          </div>
+        </div>
+        {hasAny && <div style={{ fontSize:11, color:C.muted, marginBottom:14 }}>
+          {targets.filter(hasChange).length} of {targets.length} rows will change
+        </div>}
+        <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+          <button style={S.btn('secondary')} onClick={onClose}>Cancel</button>
+          <button style={S.btn()} onClick={save} disabled={!hasAny}>
+            ✓ Save Bulk Changes ({targets.filter(hasChange).length} rows)
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  INVENTORY SPREADSHEET
+// ═══════════════════════════════════════════════════════════════════════════
+function Cell({ value, onChange, type='text', options, align='left', color, bold, readOnly, rowEditable }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(()=>setDraft(value),[value]);
+
+  const base = { display:'block', width:'100%', padding:'0 5px', height:30, lineHeight:'30px', boxSizing:'border-box', fontSize:11, fontFamily:"'Courier New',monospace", textAlign:align, color:color||C.text, fontWeight:bold?700:400, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' };
+
+  const commit = v => { const val=type==='number'?(+v||0):v; if(val!==value) onChange(val); };
+
+  if (rowEditable && !readOnly) {
+    if (options) return (
+      <select value={draft} onChange={e=>{ setDraft(e.target.value); commit(e.target.value); }}
+        style={{ ...base, background:'#1a2a1a', border:`1px solid ${C.green}44`, borderRadius:2, outline:'none', cursor:'pointer' }}>
+        {options.map(o=><option key={o}>{o}</option>)}
+      </select>
+    );
+    return <input value={draft} type={type==='number'?'number':type==='date'?'date':'text'} step={type==='number'?'0.01':undefined}
+      onChange={e=>setDraft(e.target.value)} onBlur={e=>commit(e.target.value)}
+      onKeyDown={e=>e.key==='Escape'&&setDraft(value)}
+      style={{ ...base, background:'#1a2a1a', border:`1px solid ${C.green}44`, borderRadius:2, outline:'none' }} />;
+  }
+
+  const display = type==='number'&&(value||value===0) ? (value===0?<span style={{color:C.border}}>$0</span>:`$${(+value).toFixed(2)}`) : (value||<span style={{color:C.border}}>—</span>);
+  return <div title={String(value||'')} style={{ ...base, cursor:readOnly?'default':'text' }}>{display}</div>;
+}
+
+function Inventory({ parts, onAdd, onEdit, onDelete }) {
+  const [search, setSearch] = useState('');
+  const [filterStatus, setFilterStatus] = useState('All');
+  const [filterCat, setFilterCat] = useState('All');
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [draft, setDraft] = useState(null);
+  const [selected, setSelected] = useState(new Set());
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [showBulk, setShowBulk] = useState(false);
+
+  const filtered = useMemo(()=>parts.filter(p=>{
+    if (!showDeleted && p.status==='Deleted') return false;
+    if (showDeleted && p.status!=='Deleted') return false;
+    const q=search.toLowerCase();
+    const mq=!q||p.title.toLowerCase().includes(q)||p.make.toLowerCase().includes(q)||p.sku.toLowerCase().includes(q)||(p.partNumber||'').toLowerCase().includes(q);
+    const ms=filterStatus==='All'||p.status===filterStatus;
+    const mc=filterCat==='All'||p.category===filterCat;
+    return mq&&ms&&mc;
+  }),[parts,search,filterStatus,filterCat,showDeleted]);
+
+  const startEdit = p => { if(editingId&&editingId!==p.id) commitEdit(); setEditingId(p.id); setDraft({...p,costs:{...p.costs}}); };
+  const upDraft = (k,v)=>setDraft(d=>({...d,[k]:v}));
+  const upCost  = (k,v)=>setDraft(d=>({...d,costs:{...d.costs,[k]:+v||0}}));
+  const commitEdit = async () => { if(draft) { try { await onEdit(draft); } catch(e){} } setEditingId(null); setDraft(null); };
+  const cancelEdit = ()=>{ setEditingId(null); setDraft(null); };
+
+  const toggleSel = id=>setSelected(s=>{ const n=new Set(s); n.has(id)?n.delete(id):n.add(id); return n; });
+  const toggleAll = ()=>setSelected(selected.size===filtered.length?new Set():new Set(filtered.map(p=>p.id)));
+  const deletedCount = parts.filter(p=>p.status==='Deleted').length;
+
+  const totals = filtered.reduce((acc,p)=>{ const c=totalCost(p),pr=(+p.listPrice||+p.list_price||0)-c; return { cost:acc.cost+c, list:acc.list+(+p.listPrice||+p.list_price||0), profit:acc.profit+pr, sold:acc.sold+(+p.soldPrice||0) }; },{cost:0,list:0,profit:0,sold:0});
+
+  const TH=({children,w,align='left'})=>(
+    <th style={{ padding:'0 5px', height:32, whiteSpace:'nowrap', textAlign:align, fontSize:10, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.7px', color:C.muted, background:C.panel, borderBottom:`2px solid ${C.accent}44`, borderRight:`1px solid ${C.border}`, minWidth:w||70 }}>{children}</th>
+  );
+  const TD=({children,w,br=true})=>(
+    <td style={{ padding:0, height:30, minWidth:w||70, verticalAlign:'middle', borderBottom:`1px solid ${C.border}`, borderRight:br?`1px solid ${C.border}`:'none', boxSizing:'border-box' }}>{children}</td>
+  );
+
+  if (showForm) return <PartForm part={null} onSave={async p=>{await onAdd(p);setShowForm(false);}} onCancel={()=>setShowForm(false)} />;
+
+  return (
+    <div>
+      {deleteTarget && <DeleteModal target={deleteTarget} onConfirm={async()=>{ if(deleteTarget.ids){[...deleteTarget.ids].forEach(id=>onDelete(id));setSelected(new Set());}else{await onDelete(deleteTarget.id);}setDeleteTarget(null); }} onCancel={()=>setDeleteTarget(null)} />}
+      {showBulk && <BulkEditPanel selectedIds={selected} parts={parts} onSaveAll={onEdit} onClose={()=>setShowBulk(false)} />}
+
+      {/* Toolbar */}
+      <div style={{ display:'flex', gap:8, marginBottom:10, alignItems:'center', flexWrap:'wrap' }}>
+        <h2 style={{ ...S.h1, margin:0 }}>📦 Inventory</h2>
+        <div style={{ width:1, height:22, background:C.border }} />
+        <button style={S.btn()} onClick={()=>setShowForm(true)}>+ Add Part</button>
+        {editingId && <>
+          <button style={S.btn('green')} onClick={commitEdit}>✓ Save Row</button>
+          <button style={S.btn('secondary')} onClick={cancelEdit}>✕ Cancel</button>
+        </>}
+        {selected.size>0 && !editingId && <>
+          <button style={S.btn('blue')} onClick={()=>setShowBulk(true)}>✏️ Bulk Edit ({selected.size})</button>
+          <button style={S.btn('danger')} onClick={()=>setDeleteTarget({ids:selected,title:`${selected.size} parts`})}>🗑 Delete {selected.size}</button>
+        </>}
+        <div style={{ marginLeft:'auto', display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+          <input style={{ ...S.input, width:190, height:30 }} placeholder="🔍 Search…" value={search} onChange={e=>setSearch(e.target.value)} />
+          {!showDeleted&&<select style={{ ...S.select, width:110, height:30 }} value={filterStatus} onChange={e=>setFilterStatus(e.target.value)}>
+            {['All','In Stock','Listed','Sold','Archived'].map(s=><option key={s}>{s}</option>)}
+          </select>}
+          {!showDeleted&&<select style={{ ...S.select, width:180, height:30 }} value={filterCat} onChange={e=>setFilterCat(e.target.value)}>
+            <option>All</option>{CATEGORY_NAMES.map(c=><option key={c}>{c}</option>)}
+          </select>}
+          <button style={{ ...S.btn(showDeleted?'danger':'secondary'), height:30, padding:'0 10px', fontSize:10 }}
+            onClick={()=>{ setShowDeleted(d=>!d); setSelected(new Set()); cancelEdit(); }}>
+            {showDeleted?'← Back':`🗑 Deleted (${deletedCount})`}
+          </button>
+          <span style={{ fontSize:10, color:C.muted }}>{filtered.length} parts</span>
+        </div>
+      </div>
+
+      {editingId && <div style={{ background:'#1e2a1a', border:`1px solid ${C.green}44`, borderRadius:6, padding:'6px 12px', marginBottom:8, fontSize:11, color:C.green }}>● EDITING — click another row's Edit button to switch (auto-saves). Click ✓ or Cancel to finish.</div>}
+
+      <div style={{ overflowX:'auto', borderRadius:6, border:`1px solid ${C.border}` }}>
+        <table style={{ borderCollapse:'collapse', tableLayout:'fixed', fontFamily:"'Courier New',monospace" }}>
+          <colgroup>
+            <col style={{width:32}}/><col style={{width:28}}/><col style={{width:70}}/><col style={{width:100}}/><col style={{width:250}}/><col style={{width:85}}/><col style={{width:100}}/><col style={{width:72}}/><col style={{width:165}}/><col style={{width:165}}/><col style={{width:82}}/><col style={{width:82}}/><col style={{width:72}}/><col style={{width:62}}/><col style={{width:62}}/><col style={{width:62}}/><col style={{width:62}}/><col style={{width:62}}/><col style={{width:72}}/><col style={{width:78}}/><col style={{width:78}}/><col style={{width:68}}/><col style={{width:62}}/><col style={{width:82}}/><col style={{width:82}}/><col style={{width:82}}/><col style={{width:100}}/><col style={{width:110}}/><col style={{width:56}}/><col style={{width:52}}/>
+          </colgroup>
+          <thead style={{ position:'sticky', top:0, zIndex:10 }}>
+            <tr style={{ background:'#0f1219' }}>
+              <th colSpan={3} style={{ background:'#0f1219', borderRight:`1px solid ${C.border}` }}/>
+              <th colSpan={2} style={{ padding:'2px 5px', fontSize:8, color:C.accent, textTransform:'uppercase', letterSpacing:'1px', background:'#0f1219', borderRight:`1px solid ${C.border}22`, textAlign:'center' }}>ID</th>
+              <th colSpan={3} style={{ padding:'2px 5px', fontSize:8, color:'#a78bfa', textTransform:'uppercase', letterSpacing:'1px', background:'#0f1219', borderRight:`1px solid ${C.border}22`, textAlign:'center' }}>VEHICLE</th>
+              <th colSpan={4} style={{ padding:'2px 5px', fontSize:8, color:C.blue, textTransform:'uppercase', letterSpacing:'1px', background:'#0f1219', borderRight:`1px solid ${C.border}22`, textAlign:'center' }}>CLASSIFICATION</th>
+              <th colSpan={7} style={{ padding:'2px 5px', fontSize:8, color:C.red, textTransform:'uppercase', letterSpacing:'1px', background:'#0f1219', borderRight:`1px solid ${C.border}22`, textAlign:'center' }}>COSTS (AUD)</th>
+              <th colSpan={4} style={{ padding:'2px 5px', fontSize:8, color:C.green, textTransform:'uppercase', letterSpacing:'1px', background:'#0f1219', borderRight:`1px solid ${C.border}22`, textAlign:'center' }}>PRICING</th>
+              <th colSpan={3} style={{ padding:'2px 5px', fontSize:8, color:C.yellow, textTransform:'uppercase', letterSpacing:'1px', background:'#0f1219', borderRight:`1px solid ${C.border}22`, textAlign:'center' }}>DATES</th>
+              <th colSpan={4} style={{ padding:'2px 5px', fontSize:8, color:C.muted, textTransform:'uppercase', letterSpacing:'1px', background:'#0f1219', textAlign:'center' }}>OTHER</th>
+            </tr>
+            <tr>
+              <th style={{ width:32, padding:'0 5px', background:C.panel, borderBottom:`2px solid ${C.accent}44`, borderRight:`1px solid ${C.border}` }}>
+                <input type="checkbox" checked={selected.size===filtered.length&&filtered.length>0} onChange={toggleAll} style={{cursor:'pointer'}} />
+              </th>
+              <TH w={28}>#</TH><TH w={70}>Edit</TH><TH w={100}>SKU</TH><TH w={250}>Title</TH><TH w={85}>Make</TH><TH w={100}>Model</TH><TH w={72}>Year</TH>
+              <TH w={165}>Category</TH><TH w={165}>Subcategory</TH><TH w={82}>Condition</TH><TH w={82}>Status</TH>
+              <TH w={72} align="right">Acq.</TH><TH w={62} align="right">Labour</TH><TH w={62} align="right">Store</TH><TH w={62} align="right">Pkg</TH><TH w={62} align="right">Post</TH><TH w={62} align="right">Hold</TH><TH w={72} align="right">Total</TH>
+              <TH w={78} align="right">List $</TH><TH w={78} align="right">Sold $</TH><TH w={68} align="right">Profit</TH><TH w={62} align="right">Margin</TH>
+              <TH w={82}>Acquired</TH><TH w={82}>Listed</TH><TH w={82}>Sold</TH><TH w={100}>OEM #</TH><TH w={110}>Shipping</TH><TH w={56} align="center">📷</TH><TH w={52} align="center">Del</TH>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((p,ri)=>{
+              const isEditing=editingId===p.id;
+              const row=isEditing?draft:p;
+              if(!row)return null;
+              const cost=totalCost(row), pr=(+row.listPrice||+row.list_price||0)-cost, mg=(+row.listPrice||+row.list_price||0)>0?(pr/(+row.listPrice||+row.list_price||0))*100:0;
+              const isSel=selected.has(p.id), isDel=p.status==='Deleted';
+              const stCol=STATUS_COLORS[row.status]||C.muted;
+              const bg=isEditing?'#1a2a1a':isDel?'#2a1a1a':isSel?C.accent+'14':ri%2===0?'transparent':'#ffffff04';
+
+              return (
+                <tr key={p.id} style={{ background:bg, opacity:isDel?0.6:1 }}
+                  onClick={e=>{ if(editingId&&editingId!==p.id&&!e.target.closest('[data-ec]')) commitEdit(); }}>
+                  <td style={{ width:32, padding:'0 6px', textAlign:'center', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}` }}>
+                    {!isDel&&<input type="checkbox" checked={isSel} onChange={()=>toggleSel(p.id)} style={{cursor:'pointer'}} />}
+                  </td>
+                  <td style={{ width:28, padding:'0 4px', textAlign:'center', fontSize:9, color:C.muted, borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}` }}>{ri+1}</td>
+                  <td data-ec="1" style={{ width:70, padding:'0 5px', textAlign:'center', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}` }}>
+                    {isDel
+                      ? <button onClick={()=>onEdit({...p,status:'In Stock',deletedAt:null})} style={{ background:'transparent', border:`1px solid ${C.green}55`, color:C.green, borderRadius:3, cursor:'pointer', fontSize:9, padding:'1px 5px', fontFamily:'inherit' }}>↩</button>
+                      : isEditing
+                        ? <span style={{ display:'flex', gap:3 }}>
+                            <button onClick={commitEdit} style={{ background:C.green+'22', border:`1px solid ${C.green}55`, color:C.green, borderRadius:3, cursor:'pointer', fontSize:10, padding:'1px 4px' }}>✓</button>
+                            <button onClick={cancelEdit} style={{ background:'transparent', border:`1px solid ${C.border}`, color:C.muted, borderRadius:3, cursor:'pointer', fontSize:10, padding:'1px 4px' }}>✕</button>
+                          </span>
+                        : <button onClick={()=>startEdit(p)} style={{ background:'transparent', border:`1px solid ${C.border}`, color:C.muted, borderRadius:3, cursor:'pointer', fontSize:9, padding:'1px 6px', fontFamily:'inherit' }}
+                            onMouseEnter={e=>{e.currentTarget.style.borderColor=C.accent;e.currentTarget.style.color=C.accent;}}
+                            onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.color=C.muted;}}>Edit</button>
+                    }
+                  </td>
+                  <TD w={100}><Cell value={row.sku} onChange={v=>upDraft('sku',v)} rowEditable={isEditing} color={C.muted} /></TD>
+                  <TD w={250}><Cell value={row.title} onChange={v=>upDraft('title',v)} rowEditable={isEditing} bold color={isDel?C.muted:C.white} /></TD>
+                  <TD w={85}><Cell value={row.make} onChange={v=>upDraft('make',v)} rowEditable={isEditing} /></TD>
+                  <TD w={100}><Cell value={row.model} onChange={v=>upDraft('model',v)} rowEditable={isEditing} /></TD>
+                  <TD w={72}><Cell value={row.year} onChange={v=>upDraft('year',v)} rowEditable={isEditing} color={C.muted} /></TD>
+                  <TD w={165}><Cell value={row.category} onChange={v=>upDraft('category',v)} options={CATEGORY_NAMES} rowEditable={isEditing} color={isDel?C.muted:C.blue} /></TD>
+                  <TD w={165}><Cell value={row.subcategory||''} onChange={v=>upDraft('subcategory',v)} options={EBAY_AU_CATEGORIES[row.category]||[]} rowEditable={isEditing} color={C.muted} /></TD>
+                  <TD w={82}><Cell value={row.condition} onChange={v=>upDraft('condition',v)} options={PART_CONDITIONS} rowEditable={isEditing} color={C.muted} /></TD>
+                  <TD w={82}><Cell value={row.status} onChange={v=>upDraft('status',v)} options={['In Stock','Listed','Sold','Archived']} rowEditable={isEditing&&!isDel} color={stCol} bold /></TD>
+                  {['acquisition','labour','storage','packaging','postage','holding'].map(k=>(
+                    <TD key={k} w={k==='acquisition'?72:62}><Cell value={row.costs[k]} onChange={v=>upCost(k,v)} type="number" rowEditable={isEditing} align="right" color={isDel?C.muted:C.red} /></TD>
+                  ))}
+                  <TD w={72}><Cell value={cost} onChange={()=>{}} type="number" readOnly align="right" color={isDel?C.muted:C.red} bold /></TD>
+                  <TD w={78}><Cell value={row.listPrice||row.list_price||''} onChange={v=>upDraft('listPrice',+v||0)} type="number" rowEditable={isEditing} align="right" color={isDel?C.muted:C.white} bold /></TD>
+                  <TD w={78}><Cell value={row.soldPrice||''} onChange={v=>upDraft('soldPrice',+v||0)} type="number" rowEditable={isEditing} align="right" color={isDel?C.muted:C.green} /></TD>
+                  <TD w={68}><Cell value={pr} onChange={()=>{}} type="number" readOnly align="right" color={isDel?C.muted:pr>=0?C.green:C.red} bold /></TD>
+                  <TD w={62}><div style={{ padding:'0 5px', height:30, lineHeight:'30px', fontSize:11, textAlign:'right', fontWeight:700, color:isDel?C.muted:mg>=30?C.green:mg>0?C.yellow:C.red }}>{(row.listPrice||row.list_price)>0?pct(mg):'—'}</div></TD>
+                  <TD w={82}><Cell value={row.acquiredDate||''} onChange={v=>upDraft('acquiredDate',v)} type="date" rowEditable={isEditing} color={C.muted} /></TD>
+                  <TD w={82}><Cell value={row.listedDate||''} onChange={v=>upDraft('listedDate',v)} type="date" rowEditable={isEditing} color={C.muted} /></TD>
+                  <TD w={82}><Cell value={row.soldDate||''} onChange={v=>upDraft('soldDate',v)} type="date" rowEditable={isEditing} color={C.muted} /></TD>
+                  <TD w={100}><Cell value={row.partNumber||''} onChange={v=>upDraft('partNumber',v)} rowEditable={isEditing} color={C.muted} /></TD>
+                  <TD w={110}><Cell value={row.shippingOption} onChange={v=>upDraft('shippingOption',v)} options={AU_SHIPPING} rowEditable={isEditing} color={C.muted} /></TD>
+                  <TD w={56}><div style={{ textAlign:'center', fontSize:10, lineHeight:'30px', color:p.photos?.length>0?C.accent:C.border }}>{p.photos?.length>0?`📷${p.photos.length}`:'—'}</div></TD>
+                  <TD w={52} br={false}><div style={{ textAlign:'center' }}>
+                    {isDel ? <span style={{ fontSize:9, color:C.red }}>DEL</span>
+                           : <button onClick={()=>setDeleteTarget({id:p.id,title:p.title})} style={{ background:'transparent', border:`1px solid ${C.border}`, color:C.red, borderRadius:3, cursor:'pointer', fontSize:12, width:24, height:22, fontFamily:'inherit' }}>🗑</button>}
+                  </div></TD>
+                </tr>
+              );
+            })}
+            {filtered.length===0&&<tr><td colSpan={30} style={{ padding:'50px 0', textAlign:'center', color:C.muted, fontSize:12 }}>{showDeleted?'No deleted parts.':'No parts found. Click + Add Part to start.'}</td></tr>}
+          </tbody>
+          {filtered.length>0&&<tfoot>
+            <tr style={{ background:C.panel, borderTop:`2px solid ${C.accent}44` }}>
+              <td colSpan={12} style={{ padding:'0 8px', height:30, fontSize:10, color:C.muted, fontWeight:700, textTransform:'uppercase', borderRight:`1px solid ${C.border}` }}>TOTALS — {filtered.length} parts</td>
+              {[0,1,2,3,4,5].map(i=><td key={i} style={{ borderRight:`1px solid ${C.border}`, height:30 }}/>)}
+              <td style={{ padding:'0 5px', height:30, textAlign:'right', fontSize:11, fontWeight:700, color:C.red, borderRight:`1px solid ${C.border}` }}>{fmt(totals.cost)}</td>
+              <td style={{ padding:'0 5px', height:30, textAlign:'right', fontSize:11, fontWeight:700, color:C.white, borderRight:`1px solid ${C.border}` }}>{fmt(totals.list)}</td>
+              <td style={{ padding:'0 5px', height:30, textAlign:'right', fontSize:11, fontWeight:700, color:C.green, borderRight:`1px solid ${C.border}` }}>{fmt(totals.sold)}</td>
+              <td style={{ padding:'0 5px', height:30, textAlign:'right', fontSize:11, fontWeight:700, color:totals.profit>=0?C.green:C.red, borderRight:`1px solid ${C.border}` }}>{fmt(totals.profit)}</td>
+              <td style={{ padding:'0 5px', height:30, textAlign:'right', fontSize:11, fontWeight:700, color:C.yellow, borderRight:`1px solid ${C.border}` }}>{totals.list>0?pct((totals.profit/totals.list)*100):'—'}</td>
+              <td colSpan={6}/>
+            </tr>
+          </tfoot>}
+        </table>
+      </div>
+      <div style={{ marginTop:6, fontSize:10, color:C.muted }}>
+        💡 Click <strong style={{color:C.accent}}>Edit</strong> to unlock a row · ✓ to save · Switch rows auto-saves · <strong style={{color:C.blue}}>Bulk Edit</strong> for batch changes · 🗑 is a soft-delete (3 confirmations) — recover from Deleted view
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  EBAY EXPORT
+// ═══════════════════════════════════════════════════════════════════════════
+function EbayExport({ parts }) {
+  const [sel, setSel] = useState([]);
+  const exportable = parts.filter(p=>p.status==='In Stock'||p.status==='Listed');
+  const toggle = id=>setSel(s=>s.includes(id)?s.filter(x=>x!==id):[...s,id]);
+  const toggleAll=()=>setSel(sel.length===exportable.length?[]:exportable.map(p=>p.id));
+  const generateCSV=()=>{
+    const rows=exportable.filter(p=>sel.includes(p.id));
+    const cond={'Used – Excellent':'3000','Used – Good':'3000','Used – Fair':'5000','For Parts Only':'7000','Refurbished':'2500'};
+    const headers='Action,SiteID,Currency,StartPrice,BuyItNowPrice,Title,Description,Category,ConditionID,PicURL,Format,Duration,Quantity,ShippingType,ShippingService-1:Option,ShippingService-1:Cost,DispatchTimeMax,ReturnsAcceptedOption,CustomLabel,MPN,Make,Model,Year,SubTitle';
+    const body=rows.map(p=>[
+      'Add','15','AUD',p.list_price||p.listPrice,'',
+      `"${(p.title||'').replace(/"/g,'""')}"`,`"${(p.description||'').replace(/"/g,'""')}"`,
+      '179753',cond[p.condition]||'3000',p.photos?.[0]||'',
+      'FixedPrice','GTC','1',
+      p.shippingOption==='Free Postage'?'Free':'Flat',p.shippingOption,
+      p.shippingOption==='Collect Only'||p.shippingOption==='Free Postage'?0:p.costs?.postage||0,
+      '1','ReturnsAccepted',p.sku,p.partNumber||'Does Not Apply',p.make,p.model,p.year,
+      `"${p.category} > ${p.subcategory||''}"`,
+    ].join(',')).join('\n');
+    const blob=new Blob([headers+'\n'+body],{type:'text/csv'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='ebay_au_listings.csv'; a.click();
+  };
+  return (
+    <div>
+      <SectionHeader title="📤 eBay Australia Export" action={<button style={S.btn('green')} onClick={generateCSV} disabled={sel.length===0}>↓ Export {sel.length} CSV</button>} />
+      <div style={{ ...S.card, marginBottom:14, background:C.panel, fontSize:12, color:C.muted, lineHeight:1.8 }}>
+        <strong style={{color:C.white}}>How to use:</strong> Select parts → Export CSV → In eBay Seller Hub go to Listings → Bulk listing tools → Upload file (File Exchange).
+        <span style={{color:C.yellow}}> ⚠ Ensure your eBay payment/shipping/return policies are configured first.</span>
+      </div>
+      <div style={{ display:'flex', gap:8, marginBottom:10, alignItems:'center' }}>
+        <input type="checkbox" checked={sel.length===exportable.length&&exportable.length>0} onChange={toggleAll} />
+        <span style={{fontSize:11,color:C.muted}}>Select all ({exportable.length} exportable)</span>
+      </div>
+      {exportable.map(p=>{
+        const cost=totalCost(p);
+        return (
+          <div key={p.id} style={{ ...S.card, marginBottom:6, display:'flex', alignItems:'center', gap:10, border:`1px solid ${sel.includes(p.id)?C.accent:C.border}` }}>
+            <input type="checkbox" checked={sel.includes(p.id)} onChange={()=>toggle(p.id)} />
+            <div style={{flex:1}}>
+              <div style={{fontWeight:600,fontSize:13}}>{p.title}</div>
+              <div style={{fontSize:10,color:C.muted}}>{p.sku} · {p.category} › {p.subcategory} · {p.condition}</div>
+            </div>
+            <div style={{textAlign:'right'}}>
+              <div style={{fontWeight:700,color:C.accent}}>{fmt(p.list_price||p.listPrice)}</div>
+              <div style={{fontSize:10,color:C.muted}}>Cost: {fmt(cost)}</div>
+            </div>
+            <span style={S.pill(STATUS_COLORS[p.status]||C.muted)}>{p.status}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  REPORTS
+// ═══════════════════════════════════════════════════════════════════════════
+function Reports({ parts }) {
+  const active=parts.filter(p=>p.status!=='Deleted');
+  const sold=active.filter(p=>p.status==='Sold'), listed=active.filter(p=>p.status==='Listed'), inStock=active.filter(p=>p.status==='In Stock');
+  const totalRev=sold.reduce((a,p)=>a+(+p.soldPrice||0),0), totalCogs=sold.reduce((a,p)=>a+totalCost(p),0);
+  const stockVal=[...inStock,...listed].reduce((a,p)=>a+totalCost(p),0);
+  const potRev=[...inStock,...listed].reduce((a,p)=>a+(+p.list_price||+p.listPrice||0),0);
+  const aged=listed.map(p=>({...p,days:p.listedDate?Math.floor((Date.now()-new Date(p.listedDate))/86400000):0})).sort((a,b)=>b.days-a.days);
+  const soldProfit=sold.map(p=>{const cost=totalCost(p),profit=(+p.soldPrice||0)-cost;return {...p,cost,profit,margin:p.soldPrice>0?(profit/+p.soldPrice)*100:0};}).sort((a,b)=>b.profit-a.profit);
+  const catPerf=CATEGORY_NAMES.map(cat=>{const cs=sold.filter(p=>p.category===cat),rev=cs.reduce((a,p)=>a+(+p.soldPrice||0),0),cost=cs.reduce((a,p)=>a+totalCost(p),0);return{cat,count:cs.length,rev,profit:rev-cost,margin:rev>0?((rev-cost)/rev)*100:0};}).filter(x=>x.count>0).sort((a,b)=>b.profit-a.profit);
+  return (
+    <div>
+      <SectionHeader title="📋 Reports & Analytics" />
+      <div style={S.g4}>
+        <StatCard label="Total Revenue"        value={fmt(totalRev)}   color={C.green} />
+        <StatCard label="Gross Profit"         value={fmt(totalRev-totalCogs)} color={(totalRev-totalCogs)>0?C.green:C.red} sub={pct(totalRev>0?((totalRev-totalCogs)/totalRev)*100:0)+' margin'} />
+        <StatCard label="Stock Value (cost)"   value={fmt(stockVal)}   color={C.blue} />
+        <StatCard label="Potential Revenue"    value={fmt(potRev)}     color={C.accent} />
+      </div>
+      <div style={{ ...S.g2, marginTop:14 }}>
+        <div style={S.card}>
+          <h2 style={S.h2}>⏱ Aged Stock (Listed)</h2>
+          {aged.length===0&&<p style={{color:C.muted,fontSize:12}}>No listed parts.</p>}
+          {aged.slice(0,8).map(p=>(
+            <div key={p.id} style={{ padding:'6px 0', borderBottom:`1px solid ${C.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <div><div style={{fontSize:12}}>{p.title}</div><div style={{fontSize:10,color:C.muted}}>{p.sku} · {p.days} days</div></div>
+              <div style={{textAlign:'right'}}><div style={{color:p.days>90?C.red:p.days>60?C.yellow:C.green,fontWeight:700,fontSize:12}}>{p.days}d</div><div style={{fontSize:10,color:C.muted}}>{fmt(p.list_price||p.listPrice)}</div></div>
+            </div>
+          ))}
+        </div>
+        <div style={S.card}>
+          <h2 style={S.h2}>🏆 Category Performance</h2>
+          {catPerf.length===0&&<p style={{color:C.muted,fontSize:12}}>No sold parts yet.</p>}
+          {catPerf.map(x=>(
+            <div key={x.cat} style={{ padding:'6px 0', borderBottom:`1px solid ${C.border}` }}>
+              <div style={{ display:'flex', justifyContent:'space-between' }}><span style={{fontSize:12}}>{x.cat}</span><span style={{color:C.green,fontWeight:700}}>{fmt(x.profit)}</span></div>
+              <div style={{ display:'flex', justifyContent:'space-between' }}><span style={{fontSize:10,color:C.muted}}>{x.count} sold · {fmt(x.rev)}</span><span style={{fontSize:10,color:x.margin>30?C.green:C.yellow}}>{pct(x.margin)}</span></div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{ ...S.card, marginTop:14 }}>
+        <h2 style={S.h2}>💰 Top Parts by Profit</h2>
+        <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+          <thead><tr style={{ borderBottom:`1px solid ${C.border}`, color:C.muted, fontSize:10 }}>
+            {['Part','Category','Sold','Cost','Profit','Margin','Days to Sell'].map(h=><th key={h} style={{padding:'6px 8px',textAlign:'left'}}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {soldProfit.slice(0,10).map(p=>{
+              const days=p.soldDate&&p.acquiredDate?Math.floor((new Date(p.soldDate)-new Date(p.acquiredDate))/86400000):'—';
+              return <tr key={p.id} style={{borderBottom:`1px solid ${C.border}`}}>
+                <td style={{padding:'7px 8px'}}><div style={{fontWeight:600,color:C.white}}>{p.title}</div><div style={{fontSize:10,color:C.muted}}>{p.sku}</div></td>
+                <td style={{padding:'7px 8px',fontSize:10,color:C.muted}}>{p.category}</td>
+                <td style={{padding:'7px 8px'}}>{fmt(p.soldPrice)}</td>
+                <td style={{padding:'7px 8px',color:C.red}}>{fmt(p.cost)}</td>
+                <td style={{padding:'7px 8px',color:C.green,fontWeight:700}}>{fmt(p.profit)}</td>
+                <td style={{padding:'7px 8px',color:p.margin>30?C.green:C.yellow}}>{pct(p.margin)}</td>
+                <td style={{padding:'7px 8px',color:C.muted}}>{days}</td>
+              </tr>;
+            })}
+          </tbody>
+        </table>
+        {soldProfit.length===0&&<p style={{color:C.muted,textAlign:'center',padding:'20px 0',fontSize:12}}>No sold parts yet.</p>}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  GROWTH MODEL
+// ═══════════════════════════════════════════════════════════════════════════
+function GrowthModel() {
+  const [g, setG] = useState({ currentRevenue:36000,currentCogs:15000,currentLabour:0,currentStorage:900,currentOther:3600,newLabour:36000,newStorage:9000,newOther:5400,efficiencyGain:25,targetMargin:35,growthYears:3 });
+  const set=(k,v)=>setG(g=>({...g,[k]:+v||0}));
+  const curFixed=g.currentLabour+g.currentStorage+g.currentOther;
+  const curProfit=g.currentRevenue-(g.currentCogs+curFixed);
+  const curMargin=g.currentRevenue>0?(curProfit/g.currentRevenue)*100:0;
+  const newFixed=g.newLabour+g.newStorage+g.newOther;
+  const cogsPct=g.currentRevenue>0?g.currentCogs/g.currentRevenue:0.5;
+  const newCogsPct=cogsPct*(1-g.efficiencyGain/100);
+  const denom=1-newCogsPct-g.targetMargin/100;
+  const reqRev=denom>0?newFixed/denom:0;
+  const yoy=reqRev>g.currentRevenue?Math.pow(reqRev/g.currentRevenue,1/g.growthYears)-1:0;
+  const forecasts=Array.from({length:g.growthYears},(_,i)=>i+1).map(yr=>({ yr,rev:g.currentRevenue*Math.pow(1+yoy,yr),profit:g.currentRevenue*Math.pow(1+yoy,yr)*(g.targetMargin/100) }));
+
+  return (
+    <div>
+      <SectionHeader title="📈 Business Growth Forecasting" />
+      <div style={S.g2}>
+        <div style={S.card}>
+          <h2 style={S.h2}>📊 Current State (Annual AUD)</h2>
+          {[['Revenue ($)',g.currentRevenue,'currentRevenue'],['COGS ($)',g.currentCogs,'currentCogs'],['Labour ($)',g.currentLabour,'currentLabour'],['Storage / Premises ($)',g.currentStorage,'currentStorage'],['Other Overheads ($)',g.currentOther,'currentOther']].map(([l,v,k])=>(
+            <Field key={k} label={l}><input style={S.input} type="number" value={v} onChange={e=>set(k,e.target.value)} /></Field>
+          ))}
+          <div style={{ borderTop:`1px solid ${C.border}`, paddingTop:10, marginTop:4 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:4 }}><span style={{color:C.muted,fontSize:12}}>Net Profit</span><strong style={{color:curProfit>0?C.green:C.red}}>{fmt(curProfit)}</strong></div>
+            <div style={{ display:'flex', justifyContent:'space-between' }}><span style={{color:C.muted,fontSize:12}}>Net Margin</span><strong style={{color:curMargin>20?C.green:C.yellow}}>{pct(curMargin)}</strong></div>
+          </div>
+        </div>
+        <div style={S.card}>
+          <h2 style={S.h2}>🚀 Growth Scenario</h2>
+          {[['New Annual Labour / Staff ($)',g.newLabour,'newLabour'],['New Annual Storage / Warehouse ($)',g.newStorage,'newStorage'],['New Annual Other Overheads ($)',g.newOther,'newOther']].map(([l,v,k])=>(
+            <Field key={k} label={l}><input style={S.input} type="number" value={v} onChange={e=>set(k,e.target.value)} /></Field>
+          ))}
+          <Field label="Efficiency / COGS Improvement (%)">
+            <input style={S.input} type="number" min="0" max="80" value={g.efficiencyGain} onChange={e=>set('efficiencyGain',e.target.value)} />
+          </Field>
+          <Field label="Target Net Profit Margin (%)"><input style={S.input} type="number" value={g.targetMargin} onChange={e=>set('targetMargin',e.target.value)} /></Field>
+          <Field label="Forecast Period (years)"><input style={S.input} type="number" min="1" max="10" value={g.growthYears} onChange={e=>set('growthYears',e.target.value)} /></Field>
+        </div>
+      </div>
+      <div style={{ ...S.card, marginTop:14, borderColor:C.accent }}>
+        <h2 style={{ ...S.h2, color:C.accent }}>🎯 What You Need</h2>
+        <div style={S.g3}>
+          <StatCard label="Required Annual Revenue" value={fmt(reqRev)} color={C.accent} sub="to hit target margin" />
+          <StatCard label="Revenue Uplift Needed" value={fmt(Math.max(0,reqRev-g.currentRevenue))} color={C.yellow} sub="above current" />
+          <StatCard label="Required YoY Growth" value={pct(yoy*100)} color={C.blue} sub={`over ${g.growthYears} yr${g.growthYears!==1?'s':''}`} />
+        </div>
+        <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12, marginTop:14 }}>
+          <thead><tr style={{ borderBottom:`1px solid ${C.border}`, color:C.muted, fontSize:10, textTransform:'uppercase' }}>
+            {['Year','Revenue','COGS (est.)','Fixed Costs','Net Profit','Margin'].map(h=><th key={h} style={{padding:'6px 8px',textAlign:'left'}}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            <tr style={{ borderBottom:`1px solid ${C.border}`, color:C.muted }}>
+              <td style={{padding:'6px 8px'}}>Now</td><td style={{padding:'6px 8px'}}>{fmt(g.currentRevenue)}</td><td style={{padding:'6px 8px'}}>{fmt(g.currentCogs)}</td><td style={{padding:'6px 8px'}}>{fmt(curFixed)}</td><td style={{padding:'6px 8px',color:curProfit>0?C.green:C.red}}>{fmt(curProfit)}</td><td style={{padding:'6px 8px'}}>{pct(curMargin)}</td>
+            </tr>
+            {forecasts.map(({yr,rev,profit})=>(
+              <tr key={yr} style={{ borderBottom:`1px solid ${C.border}` }}>
+                <td style={{padding:'6px 8px',color:C.accent,fontWeight:700}}>Year {yr}</td><td style={{padding:'6px 8px',color:C.white,fontWeight:600}}>{fmt(rev)}</td><td style={{padding:'6px 8px',color:C.red}}>{fmt(rev*newCogsPct)}</td><td style={{padding:'6px 8px',color:C.muted}}>{fmt(newFixed)}</td><td style={{padding:'6px 8px',color:C.green,fontWeight:700}}>{fmt(profit)}</td><td style={{padding:'6px 8px',color:C.green}}>{pct(g.targetMargin)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div style={{ marginTop:14, padding:10, background:C.panel, borderRadius:6, border:`1px solid ${C.border}`, fontSize:12, lineHeight:1.8, color:C.muted }}>
+          <strong style={{color:C.white}}>💡 Summary: </strong>
+          With new fixed costs of <strong style={{color:C.white}}>{fmt(newFixed)}/yr</strong> and a <strong style={{color:C.white}}>{pct(g.efficiencyGain)}</strong> COGS improvement, you need <strong style={{color:C.accent}}>{fmt(reqRev)}</strong>/yr — requiring approx. <strong style={{color:C.blue}}>{pct(yoy*100)}</strong> YoY growth over {g.growthYears} year{g.growthYears!==1?'s':''}.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  CATEGORY BROWSER
+// ═══════════════════════════════════════════════════════════════════════════
+function CategoryBrowser() {
+  const [sel, setSel] = useState(CATEGORY_NAMES[0]);
+  return (
+    <div>
+      <SectionHeader title="🗂 eBay AU Category Reference" />
+      <div style={{ ...S.card, marginBottom:12, background:C.panel, fontSize:12, color:C.muted }}>
+        Path: <strong style={{color:C.white}}>Vehicle Parts & Accessories › Car & Truck Parts & Accessories</strong> · {CATEGORY_NAMES.length} categories · {Object.values(EBAY_AU_CATEGORIES).reduce((a,v)=>a+v.length,0)} subcategories
+      </div>
+      <div style={S.g2}>
+        <div style={{ ...S.card, padding:0, overflowY:'auto', maxHeight:560 }}>
+          {CATEGORY_NAMES.map(cat=>(
+            <div key={cat} onClick={()=>setSel(cat)}
+              style={{ padding:'10px 14px', cursor:'pointer', borderBottom:`1px solid ${C.border}`, background:sel===cat?C.accent+'22':'transparent', borderLeft:sel===cat?`3px solid ${C.accent}`:'3px solid transparent', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <span style={{ fontSize:12, color:sel===cat?C.white:C.text }}>{cat}</span>
+              <span style={{ fontSize:10, color:C.muted }}>{EBAY_AU_CATEGORIES[cat].length}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ ...S.card, overflowY:'auto', maxHeight:560 }}>
+          <h2 style={{ ...S.h2, color:C.accent }}>{sel}</h2>
+          <div style={{ fontSize:10, color:C.muted, marginBottom:12 }}>{EBAY_AU_CATEGORIES[sel].length} subcategories</div>
+          {EBAY_AU_CATEGORIES[sel].map((sub,i)=>(
+            <div key={i} style={{ padding:'6px 0', borderBottom:`1px solid ${C.border}`, fontSize:12, display:'flex', gap:8 }}>
+              <span style={{ color:C.muted, fontSize:10, minWidth:22 }}>{i+1}.</span>{sub}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════
+function Settings({ onSignOut }) {
+  const [email, setEmail] = useState('');
+  useEffect(()=>{ sb.auth.getUser().then(({data:{user}})=>setEmail(user?.email||'')); },[]);
+  return (
+    <div style={{ maxWidth:620 }}>
+      <SectionHeader title="⚙️ Settings" />
+      <div style={S.card}>
+        <h2 style={S.h2}>Account</h2>
+        <div style={{ fontSize:13, color:C.text, marginBottom:16 }}>Logged in as <strong style={{color:C.accent}}>{email}</strong></div>
+        <button style={S.btn('danger')} onClick={onSignOut}>Sign Out</button>
+      </div>
+      <div style={{ ...S.card, marginTop:14 }}>
+        <h2 style={S.h2}>Supabase Connection</h2>
+        <div style={{ fontSize:12, color:C.muted, lineHeight:1.8 }}>
+          <div>URL: <code style={{color:C.blue}}>{SUPABASE_URL}</code></div>
+          <div style={{marginTop:8, color:C.green}}>🟢 Real-time sync active — changes appear on the iPhone app instantly.</div>
+        </div>
+      </div>
+      <div style={{ ...S.card, marginTop:14 }}>
+        <h2 style={S.h2}>iPhone App</h2>
+        <div style={{ fontSize:12, color:C.muted, lineHeight:1.8 }}>
+          The Expo mobile app connects to the same Supabase database. Any part added or edited here appears on the phone in real-time, and vice versa. See the README.md in the partvault-mobile folder for App Store submission steps.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  APP ROOT
+// ═══════════════════════════════════════════════════════════════════════════
+const TABS = [
+  {id:'dashboard',label:'Dashboard',icon:'📊'},
+  {id:'inventory', label:'Inventory', icon:'📦'},
+  {id:'categories',label:'Categories',icon:'🗂'},
+  {id:'ebay',      label:'eBay Export',icon:'📤'},
+  {id:'reports',   label:'Reports',   icon:'📋'},
+  {id:'growth',    label:'Growth',    icon:'📈'},
+  {id:'settings',  label:'Settings',  icon:'⚙️'},
+];
+
+function App() {
+  const [session, setSession] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [tab, setTab] = useState('dashboard');
+  const { parts, loading, syncStatus, addPart, editPart, softDelete, refetch } = useSupabaseParts();
+  const [toast, setToast] = useState(null);
+
+  useEffect(()=>{
+    sb.auth.getSession().then(({data:{session}})=>{ setSession(session); setAuthReady(true); });
+    const { data:{subscription} } = sb.auth.onAuthStateChange((_,s)=>setSession(s));
+    return ()=>subscription.unsubscribe();
+  },[]);
+
+  const showToast=(msg,color=C.green)=>{ setToast({msg,color}); setTimeout(()=>setToast(null),2500); };
+
+  const handleAdd = async p => { try { await addPart(p); showToast('Part added ✓'); } catch(e) { showToast(e.message,C.red); throw e; } };
+  const handleEdit= async p => { try { await editPart(p); showToast('Saved ✓'); } catch(e) { showToast(e.message,C.red); throw e; } };
+  const handleDel = async id => { try { await softDelete(id); showToast('Deleted ✓',C.red); } catch(e) { showToast(e.message,C.red); } };
+
+  if (!authReady) return <div style={{ minHeight:'100vh', background:C.bg, display:'flex', alignItems:'center', justifyContent:'center', color:C.muted }}>Loading…</div>;
+  if (!session) return <AuthScreen />;
+
+  return (
+    <div style={S.app}>
+      <nav style={S.nav}>
+        <div style={S.logo}>⚙ PartVault Admin</div>
+        {TABS.map(t=>(
+          <button key={t.id} style={S.navBtn(tab===t.id)} onClick={()=>setTab(t.id)}>
+            {t.icon} {t.label}
+          </button>
+        ))}
+        <div style={{ marginLeft:'auto', padding:'0 14px', display:'flex', alignItems:'center', gap:8, fontSize:11, color:C.muted }}>
+          {loading ? <span className="spin">⏳</span> : null}
+          {parts.filter(p=>p.status!=='Deleted').length} parts
+          <SyncBadge status={syncStatus} />
+          <button style={{ background:'none', border:`1px solid ${C.border}`, color:C.muted, borderRadius:4, padding:'3px 8px', cursor:'pointer', fontSize:10, fontFamily:'inherit' }}
+            onClick={refetch}>↻ Refresh</button>
+        </div>
+      </nav>
+      <main style={S.main}>
+        {tab==='dashboard'  && <Dashboard   parts={parts} />}
+        {tab==='inventory'  && <Inventory   parts={parts} onAdd={handleAdd} onEdit={handleEdit} onDelete={handleDel} />}
+        {tab==='categories' && <CategoryBrowser />}
+        {tab==='ebay'       && <EbayExport  parts={parts} />}
+        {tab==='reports'    && <Reports     parts={parts} />}
+        {tab==='growth'     && <GrowthModel />}
+        {tab==='settings'   && <Settings    onSignOut={()=>sb.auth.signOut()} />}
+      </main>
+      {toast && (
+        <div style={{ position:'fixed', bottom:20, right:20, background:toast.color, color:'#fff', padding:'10px 18px', borderRadius:6, fontSize:13, fontWeight:700, zIndex:1000, boxShadow:'0 4px 20px rgba(0,0,0,0.5)' }}>
+          {toast.msg}
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
