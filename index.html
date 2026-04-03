@@ -32,7 +32,7 @@ const { useState, useEffect, useRef, useCallback, useMemo } = React;
 // ═══════════════════════════════════════════════════════════════════════════
 //  SUPABASE CONFIG — replace with your project details
 // ═══════════════════════════════════════════════════════════════════════════
-const SUPABASE_URL = 'https://mtpektsxaklhedknincs.supabase.co';
+const SUPABASE_URL  = 'https://mtpektsxaklhedknincs.supabase.co';
 const SUPABASE_KEY  = 'sb_publishable_STtCN1zWydiIFtgHR1Yn5g_n9YBH102';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -81,6 +81,27 @@ const AU_SHIPPING = ['Standard Post','Express Post','Courier','Courier (Bulky / 
 const STATUS_COLORS = {'In Stock':C.blue,'Listed':C.accent,'Sold':C.green,'Archived':C.muted,'Deleted':C.red};
 
 // ═══════════════════════════════════════════════════════════════════════════
+//  DEFAULT COST TEMPLATES (editable in Settings)
+// ═══════════════════════════════════════════════════════════════════════════
+const DEFAULT_COST_TEMPLATES = {
+  small:   { label:'Small',         example:'Sensors, bulbs, switches, caps',       labour:5,  storage:0.5, packaging:3,  postage:12, shipping:'Standard Post' },
+  medium:  { label:'Medium',        example:'Alternators, mirrors, calipers, pumps', labour:15, storage:1.5, packaging:8,  postage:18, shipping:'Standard Post' },
+  large:   { label:'Large',         example:'Doors, seats, dashboards, gearboxes',   labour:35, storage:4,   packaging:20, postage:55, shipping:'Courier' },
+  bulky:   { label:'Bulky/Collect', example:'Engines, body panels, subframes',       labour:60, storage:6,   packaging:0,  postage:0,  shipping:'Collect Only' },
+};
+
+// Load cost templates from localStorage (persisted between sessions)
+const loadCostTemplates = () => {
+  try {
+    const saved = localStorage.getItem('pv_cost_templates');
+    return saved ? JSON.parse(saved) : DEFAULT_COST_TEMPLATES;
+  } catch { return DEFAULT_COST_TEMPLATES; }
+};
+const saveCostTemplates = (t) => {
+  try { localStorage.setItem('pv_cost_templates', JSON.stringify(t)); } catch {}
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
 //  STYLES
 // ═══════════════════════════════════════════════════════════════════════════
 const S = {
@@ -104,6 +125,227 @@ const S = {
   statVal:{ fontSize:32, fontWeight:800, fontFamily:"'Inter Tight',system-ui,sans-serif", color:C.accent, margin:'6px 0 2px', letterSpacing:'-0.5px' },
   statLbl:{ fontSize:12, color:C.muted, fontWeight:500, textTransform:'uppercase', letterSpacing:'0.5px' },
 };
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  AI QUICK ADD MODAL
+// ═══════════════════════════════════════════════════════════════════════════
+function AIQuickAdd({ onFill, onClose, costTemplates }) {
+  const [make, setMake]       = useState('');
+  const [model, setModel]     = useState('');
+  const [hint, setHint]       = useState('');
+  const [imageB64, setImageB64] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [analysing, setAnalysing] = useState(false);
+  const [error, setError]     = useState('');
+  const [progress, setProgress] = useState('');
+  const fileRef = useRef();
+
+  const handleImage = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const result = ev.target.result;
+      setImagePreview(result);
+      setImageB64(result.split(',')[1]);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const analyse = async () => {
+    if (!make.trim() || !model.trim()) { setError('Please enter the vehicle make and model first.'); return; }
+    if (!hint.trim() && !imageB64) { setError('Please either describe the part or upload a photo.'); return; }
+    setAnalysing(true); setError(''); setProgress('Sending to AI...');
+
+    const categoryList = CATEGORY_NAMES.map(cat => `${cat}: ${EBAY_AU_CATEGORIES[cat].slice(0,4).join(', ')}...`).join('\n');
+    const tpl = costTemplates;
+
+    const systemPrompt = `You are an expert Australian car parts specialist and eBay seller. You help identify, categorise and price used car parts for sale on eBay Australia.
+
+Cost size tiers available:
+- small: labour $${tpl.small.labour}, packaging $${tpl.small.packaging}, postage $${tpl.small.postage}
+- medium: labour $${tpl.medium.labour}, packaging $${tpl.medium.packaging}, postage $${tpl.medium.postage}  
+- large: labour $${tpl.large.labour}, packaging $${tpl.large.packaging}, postage $${tpl.large.postage}
+- bulky: labour $${tpl.bulky.labour}, packaging $${tpl.bulky.packaging}, postage $${tpl.bulky.postage} (collect only)
+
+eBay AU Categories:
+${categoryList}
+
+Respond ONLY with a valid JSON object. No markdown, no explanation, no backticks. Just raw JSON.`;
+
+    const userText = `Vehicle: ${make.trim()} ${model.trim()}
+${hint.trim() ? 'Part description: ' + hint.trim() : 'Identify the part from the photo.'}
+
+Return a JSON object with these exact fields:
+{
+  "title": "eBay listing title max 80 chars, include make model year range and part name",
+  "category": "one of the exact category names from the list",
+  "subcategory": "exact subcategory name",
+  "make": "${make.trim()}",
+  "model": "${model.trim()}",
+  "year": "compatible year range e.g. 2005-2015",
+  "condition": "Used – Good",
+  "description": "3-4 sentence eBay description covering what the part is, what it was removed from, condition notes, and compatibility",
+  "partNumber": "likely OEM part number format or empty string",
+  "sizeTier": "small|medium|large|bulky",
+  "suggestedPrice": number (AUD, realistic used price on eBay AU),
+  "weight": number (estimated kg),
+  "shippingOption": "Standard Post|Express Post|Courier|Collect Only",
+  "confidence": "high|medium|low",
+  "notes": "any important notes about this part identification"
+}`;
+
+    const messages = [{ role: 'user', content: imageB64
+      ? [{ type:'image', source:{ type:'base64', media_type:'image/jpeg', data:imageB64 } }, { type:'text', text:userText }]
+      : userText
+    }];
+
+    try {
+      setProgress('Analysing part...');
+      const apiKey = localStorage.getItem('pv_anthropic_key') || '';
+      if (!apiKey) throw new Error('No Anthropic API key set — please add it in Settings first.');
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-allow-browser': 'true' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1000,
+          system: systemPrompt,
+          messages,
+        }),
+      });
+      if (!res.ok) { const err = await res.json().catch(()=>({error:{message:res.statusText}})); throw new Error(err.error?.message || `API error ${res.status}`); }
+      const data = await res.json();
+      const raw = data.content?.map(b=>b.text||'').join('').trim();
+      setProgress('Processing result...');
+      let parsed;
+      try { parsed = JSON.parse(raw); }
+      catch { const m = raw.match(/\{[\s\S]*\}/); if(m) parsed = JSON.parse(m[0]); else throw new Error('Could not parse AI response'); }
+
+      // Map size tier to costs
+      const tier = tpl[parsed.sizeTier] || tpl.medium;
+      const filled = {
+        title: parsed.title || '',
+        category: parsed.category || CATEGORY_NAMES[4],
+        subcategory: parsed.subcategory || '',
+        make: parsed.make || make.trim(),
+        model: parsed.model || model.trim(),
+        year: parsed.year || '',
+        condition: parsed.condition || 'Used – Good',
+        description: parsed.description || '',
+        partNumber: parsed.partNumber || '',
+        listPrice: parsed.suggestedPrice || '',
+        weight: parsed.weight || '',
+        shippingOption: tier.shipping,
+        costs: {
+          acquisition: 0,
+          labour: tier.labour,
+          storage: tier.storage,
+          packaging: tier.packaging,
+          postage: tier.postage,
+          holding: 0,
+        },
+        aiNotes: parsed.notes || '',
+        aiConfidence: parsed.confidence || 'medium',
+        sizeTier: parsed.sizeTier || 'medium',
+      };
+      onFill(filled);
+    } catch(e) {
+      setError('AI analysis failed: ' + e.message + '. Check your Anthropic API key in Settings.');
+    }
+    setAnalysing(false); setProgress('');
+  };
+
+  const confColor = { high:C.green, medium:C.yellow, low:C.red };
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:500, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}>
+      <div style={{ ...S.card, maxWidth:580, width:'100%', maxHeight:'90vh', overflowY:'auto' }}>
+        {/* Header */}
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:24 }}>
+          <div>
+            <div style={{ fontSize:20, fontWeight:700, fontFamily:"'Inter Tight',system-ui,sans-serif", color:C.text }}>
+              ✨ AI Part Analyser
+            </div>
+            <div style={{ fontSize:13, color:C.muted, marginTop:4 }}>
+              Enter the vehicle and either describe the part or upload a photo
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background:'none', border:'none', fontSize:20, cursor:'pointer', color:C.muted, padding:4 }}>✕</button>
+        </div>
+
+        {/* Vehicle */}
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, marginBottom:16 }}>
+          <div>
+            <label style={S.label}>Make *</label>
+            <input style={S.input} value={make} onChange={e=>setMake(e.target.value)} placeholder="Toyota" />
+          </div>
+          <div>
+            <label style={S.label}>Model *</label>
+            <input style={S.input} value={model} onChange={e=>setModel(e.target.value)} placeholder="Hilux" />
+          </div>
+        </div>
+
+        {/* Description */}
+        <div style={{ marginBottom:16 }}>
+          <label style={S.label}>Part description (optional if uploading photo)</label>
+          <textarea style={{ ...S.textarea, minHeight:72 }} value={hint} onChange={e=>setHint(e.target.value)}
+            placeholder="e.g. alternator, front driver door mirror, complete 1KZ engine, rear left caliper..." />
+        </div>
+
+        {/* Photo upload */}
+        <div style={{ marginBottom:20 }}>
+          <label style={S.label}>Photo (optional if describing)</label>
+          <div style={{ display:'flex', gap:12, alignItems:'flex-start' }}>
+            <div style={{ flex:1 }}>
+              <input ref={fileRef} type="file" accept="image/*" style={{ display:'none' }} onChange={handleImage} />
+              <button onClick={()=>fileRef.current.click()}
+                style={{ ...S.btn('secondary'), width:'100%', padding:'12px 0', fontSize:14 }}>
+                {imageB64 ? '📷 Change photo' : '📷 Upload photo'}
+              </button>
+              {imageB64 && <div style={{ fontSize:12, color:C.green, marginTop:6 }}>✓ Photo ready</div>}
+            </div>
+            {imagePreview && (
+              <div style={{ position:'relative' }}>
+                <img src={imagePreview} style={{ width:90, height:90, objectFit:'cover', borderRadius:8, border:`1px solid ${C.border}` }} />
+                <button onClick={()=>{ setImagePreview(null); setImageB64(null); }}
+                  style={{ position:'absolute', top:-8, right:-8, background:C.red, border:'none', color:'white', borderRadius:'50%', width:22, height:22, cursor:'pointer', fontSize:12, lineHeight:'22px', textAlign:'center' }}>✕</button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Error */}
+        {error && <div style={{ background:'#fef2f2', border:`1px solid #fca5a5`, borderRadius:8, padding:'10px 14px', fontSize:13, color:C.red, marginBottom:16 }}>{error}</div>}
+
+        {/* Progress */}
+        {analysing && (
+          <div style={{ background:'#eff6ff', border:`1px solid #93c5fd`, borderRadius:8, padding:'14px 16px', marginBottom:16, display:'flex', alignItems:'center', gap:10 }}>
+            <span className="spin" style={{ fontSize:18 }}>⏳</span>
+            <div>
+              <div style={{ fontSize:13, fontWeight:600, color:C.blue }}>Analysing with Claude AI...</div>
+              <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>{progress}</div>
+            </div>
+          </div>
+        )}
+
+        {/* Info box */}
+        <div style={{ background:'#fff8f0', border:`1px solid #fed7aa`, borderRadius:8, padding:'12px 16px', marginBottom:20, fontSize:13, color:'#92400e', lineHeight:1.7 }}>
+          <strong>What AI will fill in:</strong> listing title, eBay category, description, suggested sale price, year range, part number format, weight estimate, and default costs based on part size. You can edit everything before saving.
+        </div>
+
+        {/* Actions */}
+        <div style={{ display:'flex', gap:10, justifyContent:'flex-end' }}>
+          <button style={S.btn('secondary')} onClick={onClose}>Cancel</button>
+          <button style={{ ...S.btn(), padding:'11px 28px', fontSize:14, opacity:analysing?0.6:1 }}
+            onClick={analyse} disabled={analysing}>
+            {analysing ? '⏳ Analysing…' : '✨ Analyse Part'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  SUPABASE DATA LAYER
@@ -352,7 +594,7 @@ function Dashboard({ parts }) {
 // ═══════════════════════════════════════════════════════════════════════════
 //  PART FORM (Add / Edit)
 // ═══════════════════════════════════════════════════════════════════════════
-function PartForm({ part, onSave, onCancel }) {
+function PartForm({ part, onSave, onCancel, prefill }) {
   const defCat = CATEGORY_NAMES[4];
   const [form, setForm] = useState(part ? { ...part, costs:{...part.costs} } : {
     id:uid(), sku:`SKU-${Date.now().toString().slice(-4)}`,
@@ -364,6 +606,29 @@ function PartForm({ part, onSave, onCancel }) {
     ebayItemId:'', partNumber:'', shippingOption:AU_SHIPPING[0], notes:'',
   });
   const [saving, setSaving] = useState(false);
+  const [aiInfo, setAiInfo] = useState(prefill || null);
+
+  // Apply prefill when it arrives
+  React.useEffect(()=>{
+    if (!prefill) return;
+    setAiInfo(prefill);
+    setForm(f=>({
+      ...f,
+      title: prefill.title || f.title,
+      category: prefill.category || f.category,
+      subcategory: prefill.subcategory || f.subcategory,
+      make: prefill.make || f.make,
+      model: prefill.model || f.model,
+      year: prefill.year || f.year,
+      condition: prefill.condition || f.condition,
+      description: prefill.description || f.description,
+      partNumber: prefill.partNumber || f.partNumber,
+      listPrice: prefill.listPrice || f.listPrice,
+      weight: prefill.weight || f.weight,
+      shippingOption: prefill.shippingOption || f.shippingOption,
+      costs: prefill.costs || f.costs,
+    }));
+  }, [prefill]);
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
   const setCost=(k,v)=>setForm(f=>({...f,costs:{...f.costs,[k]:v}}));
   const cost = Object.values(form.costs).reduce((a,v)=>a+(+v||0),0);
@@ -379,7 +644,23 @@ function PartForm({ part, onSave, onCancel }) {
 
   return (
     <div style={{ ...S.card, maxWidth:820, margin:'0 auto' }}>
-      <h2 style={{ ...S.h2, fontSize:20, marginBottom:24 }}>{part?'✏️ Edit Part':'➕ Add New Part'}</h2>
+      <h2 style={{ ...S.h2, fontSize:20, marginBottom: aiInfo ? 16 : 24 }}>{part?'✏️ Edit Part':'➕ Add New Part'}</h2>
+      {aiInfo && (
+        <div style={{ background:'#f0fdf4', border:`1.5px solid ${C.green}`, borderRadius:10, padding:'14px 18px', marginBottom:24, display:'flex', gap:14, alignItems:'flex-start' }}>
+          <div style={{ fontSize:24, flexShrink:0 }}>✨</div>
+          <div style={{ flex:1 }}>
+            <div style={{ fontWeight:600, color:C.green, marginBottom:4, fontSize:14 }}>
+              AI pre-filled this form
+              <span style={{ marginLeft:8, fontSize:11, background:{'high':C.green,'medium':C.yellow,'low':C.red}[aiInfo.aiConfidence]+'22', color:{'high':C.green,'medium':C.yellow,'low':C.red}[aiInfo.aiConfidence], border:`1px solid ${ {'high':C.green,'medium':C.yellow,'low':C.red}[aiInfo.aiConfidence]}44`, borderRadius:10, padding:'1px 8px' }}>
+                {aiInfo.aiConfidence} confidence
+              </span>
+            </div>
+            {aiInfo.aiNotes && <div style={{ fontSize:13, color:'#166534', lineHeight:1.6 }}>{aiInfo.aiNotes}</div>}
+            <div style={{ fontSize:12, color:C.muted, marginTop:6 }}>Review all fields below and adjust if needed before saving.</div>
+          </div>
+          <button onClick={()=>setAiInfo(null)} style={{ background:'none', border:'none', color:C.muted, cursor:'pointer', fontSize:16, flexShrink:0 }}>✕</button>
+        </div>
+      )}
       <div style={S.g2}>
         <Field label="SKU"><input style={S.input} value={form.sku} onChange={e=>set('sku',e.target.value)} /></Field>
         <Field label="OEM / Part Number"><input style={S.input} value={form.partNumber} onChange={e=>set('partNumber',e.target.value)} /></Field>
@@ -673,7 +954,33 @@ function Inventory({ parts, onAdd, onEdit, onDelete }) {
     <td style={{ padding:0, height:30, minWidth:w||70, verticalAlign:'middle', borderBottom:`1px solid ${C.border}`, borderRight:br?`1px solid ${C.border}`:'none', boxSizing:'border-box' }}>{children}</td>
   );
 
-  if (showForm) return <PartForm part={null} onSave={async p=>{await onAdd(p);setShowForm(false);}} onCancel={()=>setShowForm(false)} />;
+  const [showAI, setShowAI] = useState(false);
+  const [aiPrefill, setAiPrefill] = useState(null);
+  const [costTemplates] = useState(loadCostTemplates);
+
+  const handleAIFill = (filled) => {
+    setAiPrefill(filled);
+    setShowAI(false);
+    setShowForm(true);
+  };
+
+  if (showAI) return (
+    <div>
+      <AIQuickAdd
+        onFill={handleAIFill}
+        onClose={()=>setShowAI(false)}
+        costTemplates={costTemplates}
+      />
+    </div>
+  );
+
+  if (showForm) return (
+    <div>
+      <PartForm part={null} prefill={aiPrefill}
+        onSave={async p=>{await onAdd(p);setShowForm(false);setAiPrefill(null);}}
+        onCancel={()=>{setShowForm(false);setAiPrefill(null);}} />
+    </div>
+  );
 
   return (
     <div>
@@ -685,6 +992,10 @@ function Inventory({ parts, onAdd, onEdit, onDelete }) {
         <h2 style={{ ...S.h1, margin:0 }}>Inventory</h2>
         <div style={{ width:1, height:22, background:C.border }} />
         <button style={S.btn()} onClick={()=>setShowForm(true)}>+ Add Part</button>
+        <button style={{ ...S.btn('secondary'), background:'linear-gradient(135deg,#7c3aed,#4f46e5)', color:'white', border:'none', boxShadow:'0 1px 3px rgba(79,70,229,0.3)' }}
+          onClick={()=>{ setAiPrefill(null); setShowAI(true); }}>
+          ✨ AI Quick Add
+        </button>
         {editingId && <>
           <button style={S.btn('green')} onClick={commitEdit}>✓ Save Row</button>
           <button style={S.btn('secondary')} onClick={cancelEdit}>✕ Cancel</button>
@@ -1062,27 +1373,122 @@ function CategoryBrowser() {
 // ═══════════════════════════════════════════════════════════════════════════
 function Settings({ onSignOut }) {
   const [email, setEmail] = useState('');
+  const [anthropicKey, setAnthropicKey] = useState(()=>localStorage.getItem('pv_anthropic_key')||'');
+  const [templates, setTemplates] = useState(loadCostTemplates);
+  const [savedMsg, setSavedMsg] = useState('');
+
   useEffect(()=>{ sb.auth.getUser().then(({data:{user}})=>setEmail(user?.email||'')); },[]);
+
+  const setTpl = (tier, field, val) => setTemplates(t=>({ ...t, [tier]:{ ...t[tier], [field]: field==='label'||field==='example'||field==='shipping' ? val : +val||0 } }));
+
+  const saveSettings = () => {
+    localStorage.setItem('pv_anthropic_key', anthropicKey.trim());
+    saveCostTemplates(templates);
+    setSavedMsg('Settings saved ✓');
+    setTimeout(()=>setSavedMsg(''), 2500);
+  };
+
+  const TIER_KEYS = ['small','medium','large','bulky'];
+  const COST_FIELDS = [
+    { key:'labour',    label:'Labour ($)' },
+    { key:'storage',   label:'Storage/wk ($)' },
+    { key:'packaging', label:'Packaging ($)' },
+    { key:'postage',   label:'Postage ($)' },
+  ];
+
   return (
-    <div style={{ maxWidth:620 }}>
-      <SectionHeader title="⚙️ Settings" />
+    <div style={{ maxWidth:820 }}>
+      <SectionHeader title="Settings" />
+
+      {/* Account */}
       <div style={S.card}>
         <h2 style={S.h2}>Account</h2>
-        <div style={{ fontSize:15, color:C.text, marginBottom:20 }}>Logged in as <strong style={{color:C.accent}}>{email}</strong></div>
+        <div style={{ fontSize:15, color:C.text, marginBottom:20 }}>
+          Logged in as <strong style={{color:C.accent}}>{email}</strong>
+        </div>
         <button style={S.btn('danger')} onClick={onSignOut}>Sign Out</button>
       </div>
-      <div style={{ ...S.card, marginTop:14 }}>
+
+      {/* Anthropic API Key */}
+      <div style={{ ...S.card, marginTop:20, borderTop:`3px solid #7c3aed` }}>
+        <h2 style={S.h2}>✨ AI Part Analyser — Anthropic API Key</h2>
+        <div style={{ fontSize:13, color:C.muted, marginBottom:16, lineHeight:1.7 }}>
+          The AI Quick Add feature uses Claude to identify parts from photos and descriptions.
+          Get a free API key at <strong style={{color:C.blue}}>console.anthropic.com</strong> → API Keys.
+          Your key is stored locally in your browser only.
+        </div>
+        <label style={S.label}>Anthropic API Key</label>
+        <input style={S.input} type="password" value={anthropicKey}
+          onChange={e=>setAnthropicKey(e.target.value)}
+          placeholder="sk-ant-api03-..." />
+        {anthropicKey && <div style={{ fontSize:12, color:C.green, marginTop:6 }}>✓ Key saved locally</div>}
+      </div>
+
+      {/* Cost Templates */}
+      <div style={{ ...S.card, marginTop:20, borderTop:`3px solid ${C.accent}` }}>
+        <h2 style={S.h2}>💸 Default Cost Templates</h2>
+        <div style={{ fontSize:13, color:C.muted, marginBottom:20, lineHeight:1.7 }}>
+          When AI identifies a part it selects the appropriate size tier and applies these default costs.
+          You can edit everything after AI fills the form.
+        </div>
+        {TIER_KEYS.map(tier=>(
+          <div key={tier} style={{ marginBottom:24, padding:20, background:'#f9f8f5', borderRadius:10, border:`1px solid ${C.border}` }}>
+            <div style={{ display:'flex', gap:14, marginBottom:16, flexWrap:'wrap' }}>
+              <div style={{ flex:1, minWidth:140 }}>
+                <label style={S.label}>Tier name</label>
+                <input style={S.input} value={templates[tier].label} onChange={e=>setTpl(tier,'label',e.target.value)} />
+              </div>
+              <div style={{ flex:2, minWidth:200 }}>
+                <label style={S.label}>Example parts</label>
+                <input style={S.input} value={templates[tier].example} onChange={e=>setTpl(tier,'example',e.target.value)} />
+              </div>
+              <div style={{ flex:1, minWidth:160 }}>
+                <label style={S.label}>Default shipping</label>
+                <select style={S.select} value={templates[tier].shipping} onChange={e=>setTpl(tier,'shipping',e.target.value)}>
+                  {AU_SHIPPING.map(s=><option key={s}>{s}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12 }}>
+              {COST_FIELDS.map(({key,label})=>(
+                <div key={key}>
+                  <label style={S.label}>{label}</label>
+                  <input style={S.input} type="number" min="0" step="0.5"
+                    value={templates[tier][key]}
+                    onChange={e=>setTpl(tier,key,e.target.value)} />
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+        <button style={S.btn('secondary')} onClick={()=>{ setTemplates(DEFAULT_COST_TEMPLATES); saveCostTemplates(DEFAULT_COST_TEMPLATES); setSavedMsg('Reset to defaults ✓'); setTimeout(()=>setSavedMsg(''),2000); }}>
+          Reset to defaults
+        </button>
+      </div>
+
+      {/* Supabase */}
+      <div style={{ ...S.card, marginTop:20 }}>
         <h2 style={S.h2}>Supabase Connection</h2>
         <div style={{ fontSize:14, color:C.muted, lineHeight:1.9 }}>
-          <div>URL: <code style={{color:C.blue}}>{SUPABASE_URL}</code></div>
-          <div style={{marginTop:8, color:C.green}}>🟢 Real-time sync active — changes appear on the iPhone app instantly.</div>
+          <div>URL: <code style={{color:C.blue, fontSize:12}}>{SUPABASE_URL}</code></div>
+          <div style={{marginTop:8, color:C.green}}>● Real-time sync active — changes appear on the iPhone app instantly.</div>
         </div>
       </div>
-      <div style={{ ...S.card, marginTop:14 }}>
+
+      {/* iPhone App */}
+      <div style={{ ...S.card, marginTop:20 }}>
         <h2 style={S.h2}>iPhone App</h2>
         <div style={{ fontSize:14, color:C.muted, lineHeight:1.9 }}>
-          The Expo mobile app connects to the same Supabase database. Any part added or edited here appears on the phone in real-time, and vice versa. See the README.md in the partvault-mobile folder for App Store submission steps.
+          The Expo mobile app connects to the same Supabase database. Any part added or edited here appears on the phone in real-time, and vice versa.
         </div>
+      </div>
+
+      {/* Save button */}
+      <div style={{ display:'flex', gap:12, alignItems:'center', marginTop:24 }}>
+        <button style={{ ...S.btn(), padding:'12px 32px', fontSize:15 }} onClick={saveSettings}>
+          Save Settings
+        </button>
+        {savedMsg && <span style={{ color:C.green, fontWeight:600, fontSize:14 }}>{savedMsg}</span>}
       </div>
     </div>
   );
