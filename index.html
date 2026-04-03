@@ -4,6 +4,8 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>PartVault Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@700;800&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -11,13 +13,12 @@
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body, #root { height: 100%; }
-  body { background: #0d0f14; color: #e8eaf0; font-family: 'Courier New', monospace; }
-  select option { background: #13161e; }
-  input[type=date]::-webkit-calendar-picker-indicator { filter: invert(1); opacity: 0.5; }
-  ::-webkit-scrollbar { width: 6px; height: 6px; }
-  ::-webkit-scrollbar-track { background: #13161e; }
-  ::-webkit-scrollbar-thumb { background: #252936; border-radius: 3px; }
-  ::-webkit-scrollbar-thumb:hover { background: #f97316; }
+  body { background: #f5f4f0; color: #1c1c1e; font-family: 'Inter', system-ui, sans-serif; font-size: 15px; line-height: 1.5; }
+  input, select, textarea, button { font-family: 'Inter', system-ui, sans-serif; }
+  ::-webkit-scrollbar { width: 7px; height: 7px; }
+  ::-webkit-scrollbar-track { background: #ede9e0; }
+  ::-webkit-scrollbar-thumb { background: #c8c3b8; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #e8590c; }
   .spin { animation: spin 1s linear infinite; display:inline-block; }
   @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
 </style>
@@ -31,17 +32,18 @@ const { useState, useEffect, useRef, useCallback, useMemo } = React;
 // ═══════════════════════════════════════════════════════════════════════════
 //  SUPABASE CONFIG — replace with your project details
 // ═══════════════════════════════════════════════════════════════════════════
-const SUPABASE_URL = 'https://mtpektsxaklhedknincs.supabase.co';
-const SUPABASE_KEY  = 'sb_publishable_STtCN1zWydiIFtgHR1Yn5g_n9YBH102';
+const SUPABASE_URL  = 'https://YOUR_PROJECT_ID.supabase.co';
+const SUPABASE_KEY  = 'YOUR_ANON_KEY_HERE';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  COLOURS & HELPERS
 // ═══════════════════════════════════════════════════════════════════════════
 const C = {
-  bg:'#0d0f14', panel:'#13161e', card:'#1a1e2a', border:'#252936',
-  accent:'#f97316', blue:'#3b82f6', green:'#22c55e',
-  red:'#ef4444', yellow:'#eab308', text:'#e8eaf0', muted:'#6b7280', white:'#ffffff',
+  bg:'#f5f4f0', panel:'#edeae3', card:'#ffffff', border:'#ddd9d0',
+  accent:'#e8590c', blue:'#2563eb', green:'#16a34a',
+  red:'#dc2626', yellow:'#b45309', text:'#1c1c1e', muted:'#6b7280', white:'#ffffff',
+  headerBg:'#1c1c1e', navActive:'#e8590c',
 };
 const fmt = n => `$${(+n||0).toFixed(2)}`;
 const pct = n => `${(+n||0).toFixed(1)}%`;
@@ -82,25 +84,25 @@ const STATUS_COLORS = {'In Stock':C.blue,'Listed':C.accent,'Sold':C.green,'Archi
 //  STYLES
 // ═══════════════════════════════════════════════════════════════════════════
 const S = {
-  app:{ minHeight:'100vh', background:C.bg, color:C.text, fontFamily:"'Courier New',monospace" },
-  nav:{ background:C.panel, borderBottom:`1px solid ${C.border}`, display:'flex', alignItems:'center', position:'sticky', top:0, zIndex:100, flexWrap:'wrap' },
-  logo:{ color:C.accent, fontWeight:700, fontSize:18, padding:'12px 20px 12px 16px', borderRight:`1px solid ${C.border}`, whiteSpace:'nowrap' },
-  navBtn:a=>({ background:a?C.accent:'transparent', color:a?C.white:C.muted, border:'none', cursor:'pointer', padding:'12px 14px', fontSize:11, fontFamily:'inherit', letterSpacing:'0.5px', textTransform:'uppercase', fontWeight:a?700:400 }),
-  main:{ padding:'20px', maxWidth:1600, margin:'0 auto' },
-  g2:{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 },
-  g3:{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:14 },
-  g4:{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:14 },
-  card:{ background:C.card, border:`1px solid ${C.border}`, borderRadius:8, padding:18 },
-  label:{ fontSize:10, color:C.muted, textTransform:'uppercase', letterSpacing:'1px', marginBottom:4, display:'block' },
-  input:{ width:'100%', background:C.panel, border:`1px solid ${C.border}`, borderRadius:4, padding:'7px 10px', color:C.text, fontSize:12, fontFamily:'inherit', boxSizing:'border-box', outline:'none' },
-  select:{ width:'100%', background:C.panel, border:`1px solid ${C.border}`, borderRadius:4, padding:'7px 10px', color:C.text, fontSize:12, fontFamily:'inherit', boxSizing:'border-box' },
-  textarea:{ width:'100%', background:C.panel, border:`1px solid ${C.border}`, borderRadius:4, padding:'7px 10px', color:C.text, fontSize:12, fontFamily:'inherit', boxSizing:'border-box', resize:'vertical', minHeight:72 },
-  btn:(v='primary')=>({ background:v==='primary'?C.accent:v==='green'?C.green:v==='blue'?C.blue:v==='danger'?C.red:C.border, color:C.white, border:'none', borderRadius:4, padding:'8px 16px', fontSize:11, fontFamily:'inherit', cursor:'pointer', fontWeight:700, letterSpacing:'0.5px', textTransform:'uppercase' }),
-  pill:col=>({ background:col+'22', color:col, border:`1px solid ${col}44`, borderRadius:10, padding:'2px 8px', fontSize:10, fontWeight:600, display:'inline-block' }),
-  h1:{ fontSize:20, fontWeight:700, margin:'0 0 4px', color:C.white },
-  h2:{ fontSize:14, fontWeight:700, margin:'0 0 14px', color:C.white },
-  statVal:{ fontSize:26, fontWeight:700, color:C.accent, margin:'4px 0' },
-  statLbl:{ fontSize:10, color:C.muted, textTransform:'uppercase', letterSpacing:'1px' },
+  app:{ minHeight:'100vh', background:C.bg, color:C.text, fontFamily:"'Inter',system-ui,sans-serif" },
+  nav:{ background:C.headerBg, borderBottom:`1px solid rgba(0,0,0,0.12)`, display:'flex', alignItems:'center', position:'sticky', top:0, zIndex:100, flexWrap:'wrap' },
+  logo:{ color:'#ffffff', fontWeight:800, fontSize:20, fontFamily:"'Inter Tight',system-ui,sans-serif", padding:'14px 24px 14px 20px', borderRight:`1px solid rgba(255,255,255,0.12)`, whiteSpace:'nowrap', letterSpacing:'-0.5px' },
+  navBtn:a=>({ background:a?C.accent:'transparent', color:a?'#ffffff':'rgba(255,255,255,0.6)', border:'none', cursor:'pointer', padding:'14px 16px', fontSize:13, fontFamily:'inherit', fontWeight:a?600:400, transition:'all .15s' }),
+  main:{ padding:'28px 32px', maxWidth:1600, margin:'0 auto' },
+  g2:{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20 },
+  g3:{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:20 },
+  g4:{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:20 },
+  card:{ background:C.card, border:`1px solid ${C.border}`, borderRadius:12, padding:24, boxShadow:'0 1px 3px rgba(0,0,0,0.06)' },
+  label:{ fontSize:12, color:C.muted, fontWeight:600, marginBottom:6, display:'block', letterSpacing:'0.2px' },
+  input:{ width:'100%', background:'#ffffff', border:`1.5px solid ${C.border}`, borderRadius:8, padding:'10px 14px', color:C.text, fontSize:14, fontFamily:'inherit', boxSizing:'border-box', outline:'none', transition:'border-color .15s' },
+  select:{ width:'100%', background:'#ffffff', border:`1.5px solid ${C.border}`, borderRadius:8, padding:'10px 14px', color:C.text, fontSize:14, fontFamily:'inherit', boxSizing:'border-box' },
+  textarea:{ width:'100%', background:'#ffffff', border:`1.5px solid ${C.border}`, borderRadius:8, padding:'10px 14px', color:C.text, fontSize:14, fontFamily:'inherit', boxSizing:'border-box', resize:'vertical', minHeight:90, lineHeight:1.6 },
+  btn:(v='primary')=>({ background:v==='primary'?C.accent:v==='green'?C.green:v==='blue'?C.blue:v==='danger'?C.red:'#ffffff', color:v==='secondary'?C.text:'#ffffff', border:v==='secondary'?`1.5px solid ${C.border}`:'none', borderRadius:8, padding:'10px 20px', fontSize:13, fontFamily:'inherit', cursor:'pointer', fontWeight:600, letterSpacing:'0.2px', transition:'opacity .15s', boxShadow:v==='secondary'?'none':'0 1px 3px rgba(0,0,0,0.15)' }),
+  pill:col=>({ background:col+'18', color:col, border:`1px solid ${col}33`, borderRadius:20, padding:'3px 10px', fontSize:12, fontWeight:600, display:'inline-block' }),
+  h1:{ fontSize:24, fontWeight:700, fontFamily:"'Inter Tight',system-ui,sans-serif", margin:'0 0 4px', color:C.text, letterSpacing:'-0.3px' },
+  h2:{ fontSize:16, fontWeight:600, margin:'0 0 18px', color:C.text },
+  statVal:{ fontSize:32, fontWeight:800, fontFamily:"'Inter Tight',system-ui,sans-serif", color:C.accent, margin:'6px 0 2px', letterSpacing:'-0.5px' },
+  statLbl:{ fontSize:12, color:C.muted, fontWeight:500, textTransform:'uppercase', letterSpacing:'0.5px' },
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -205,15 +207,15 @@ function AuthScreen() {
   };
 
   return (
-    <div style={{ minHeight:'100vh', background:C.bg, display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
+    <div style={{ minHeight:'100vh', background:'linear-gradient(135deg, #f5f4f0 0%, #edeae3 100%)', display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
       <div style={{ width:'100%', maxWidth:400 }}>
         <div style={{ textAlign:'center', marginBottom:32 }}>
-          <div style={{ fontSize:56, marginBottom:8 }}>⚙</div>
-          <div style={{ fontSize:28, fontWeight:800, color:C.accent, letterSpacing:-1 }}>PartVault Admin</div>
-          <div style={{ fontSize:12, color:C.muted, marginTop:4 }}>Australian Car Parts Manager</div>
+          <div style={{ fontSize:56, marginBottom:8, filter:'drop-shadow(0 2px 4px rgba(0,0,0,0.1))' }}>⚙</div>
+          <div style={{ fontSize:32, fontWeight:800, fontFamily:"'Inter Tight',system-ui,sans-serif", color:C.accent, letterSpacing:-1 }}>PartVault Admin</div>
+          <div style={{ fontSize:14, color:C.muted, marginTop:6 }}>Australian Car Parts Manager</div>
         </div>
         <div style={{ ...S.card, borderColor:C.border }}>
-          <div style={{ fontSize:18, fontWeight:700, color:C.white, marginBottom:20 }}>
+          <div style={{ fontSize:22, fontWeight:700, fontFamily:"'Inter Tight',system-ui,sans-serif", color:C.text, marginBottom:20 }}>
             {mode==='login' ? 'Sign In' : 'Create Account'}
           </div>
           <div style={{ marginBottom:12 }}>
@@ -227,7 +229,7 @@ function AuthScreen() {
               placeholder="••••••••" onKeyDown={e=>e.key==='Enter'&&handle()} />
           </div>
           {err && <div style={{ fontSize:12, color:err.includes('created')?C.green:C.red, marginBottom:12 }}>{err}</div>}
-          <button style={{ ...S.btn(), width:'100%', padding:12, fontSize:14 }} onClick={handle} disabled={loading}>
+          <button style={{ ...S.btn(), width:'100%', padding:14, fontSize:15 }} onClick={handle} disabled={loading}>
             {loading ? '⏳ Please wait…' : mode==='login' ? 'Sign In' : 'Create Account'}
           </button>
           <div style={{ textAlign:'center', marginTop:14, fontSize:12, color:C.muted }}>
@@ -238,7 +240,7 @@ function AuthScreen() {
             </span>
           </div>
         </div>
-        <div style={{ ...S.card, marginTop:14, fontSize:11, color:C.muted, lineHeight:1.7 }}>
+        <div style={{ ...S.card, marginTop:14, fontSize:13, color:C.muted, lineHeight:1.7, background:C.panel }}>
           💡 Same login as the iPhone app — all data syncs in real-time via Supabase.
         </div>
       </div>
@@ -254,25 +256,25 @@ function Field({ label, children }) {
 }
 function StatCard({ label, value, sub, color }) {
   return (
-    <div style={S.card}>
+    <div style={{ ...S.card, borderTop:`3px solid ${color||C.accent}` }}>
       <div style={S.statLbl}>{label}</div>
       <div style={{ ...S.statVal, color:color||C.accent }}>{value}</div>
-      {sub && <div style={{ fontSize:10, color:C.muted }}>{sub}</div>}
+      {sub && <div style={{ fontSize:13, color:C.muted, marginTop:2 }}>{sub}</div>}
     </div>
   );
 }
 function SectionHeader({ title, action }) {
   return (
-    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20, paddingBottom:16, borderBottom:`1px solid ${C.border}` }}>
       <h2 style={S.h1}>{title}</h2>
       {action}
     </div>
   );
 }
 function SyncBadge({ status }) {
-  const map = { live:['🟢','Live','#22c55e'], connecting:['🟡','Connecting',C.yellow], error:['🔴','Error',C.red] };
+  const map = { live:['●','Live',C.green], connecting:['●','Connecting',C.yellow], error:['●','Error',C.red] };
   const [icon, label, color] = map[status]||map.connecting;
-  return <span style={{ fontSize:10, color, marginLeft:8 }}>{icon} {label}</span>;
+  return <span style={{ fontSize:12, color, marginLeft:8, fontWeight:500 }}>{icon} {label}</span>;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -308,9 +310,9 @@ function Dashboard({ parts }) {
       </div>
       <div style={{ ...S.g2, marginTop:14 }}>
         <div style={S.card}>
-          <h2 style={S.h2}>📦 Stock by Category</h2>
+          <h2 style={{ ...S.h2, fontSize:15 }}>Stock by Category</h2>
           {catBreak.map(({cat,count})=>(
-            <div key={cat} style={{ display:'flex', justifyContent:'space-between', padding:'5px 0', borderBottom:`1px solid ${C.border}`, fontSize:12 }}>
+            <div key={cat} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 0', borderBottom:`1px solid ${C.border}`, fontSize:14 }}>
               <span style={{ color:C.text }}>{cat}</span>
               <span style={{ color:C.accent, fontWeight:700 }}>{count}</span>
             </div>
@@ -318,14 +320,14 @@ function Dashboard({ parts }) {
           {catBreak.length===0 && <p style={{ color:C.muted, fontSize:12 }}>No parts yet.</p>}
         </div>
         <div style={S.card}>
-          <h2 style={S.h2}>⚠️ Aged Stock & Alerts</h2>
+          <h2 style={{ ...S.h2, fontSize:15 }}>Aged Stock & Alerts</h2>
           {aged.length===0 && <p style={{ color:C.muted, fontSize:12 }}>No aged stock alerts.</p>}
           {aged.slice(0,6).map(p=>{
             const days = Math.floor((Date.now()-new Date(p.listedDate))/86400000);
             return (
               <div key={p.id} style={{ padding:'6px 0', borderBottom:`1px solid ${C.border}` }}>
-                <div style={{ fontSize:12, color:days>90?C.red:C.yellow }}>{p.title}</div>
-                <div style={{ fontSize:10, color:C.muted }}>Listed {days} days · {fmt(p.listPrice||p.list_price)}</div>
+                <div style={{ fontSize:14, color:days>90?C.red:C.yellow, fontWeight:500 }}>{p.title}</div>
+                <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>Listed {days} days · {fmt(p.listPrice||p.list_price)}</div>
               </div>
             );
           })}
@@ -336,10 +338,10 @@ function Dashboard({ parts }) {
         </div>
       </div>
       <div style={{ ...S.card, marginTop:14 }}>
-        <h2 style={S.h2}>💰 P&L Summary</h2>
+        <h2 style={{ ...S.h2, fontSize:15 }}>P&L Summary</h2>
         <div style={S.g4}>
           {[['Total Revenue',fmt(soldRev),C.white],['Total COGS (sold)',fmt(soldCogs),C.red],['Gross Profit',fmt(gross),C.green],['Gross Margin',pct(margin),margin>30?C.green:C.yellow]].map(([l,v,col])=>(
-            <div key={l}><div style={S.statLbl}>{l}</div><div style={{ fontSize:18, fontWeight:700, color:col }}>{v}</div></div>
+            <div key={l}><div style={{ ...S.statLbl, marginBottom:4 }}>{l}</div><div style={{ fontSize:22, fontWeight:700, fontFamily:"'Inter Tight',system-ui,sans-serif", color:col }}>{v}</div></div>
           ))}
         </div>
       </div>
@@ -377,7 +379,7 @@ function PartForm({ part, onSave, onCancel }) {
 
   return (
     <div style={{ ...S.card, maxWidth:820, margin:'0 auto' }}>
-      <h2 style={S.h2}>{part?'✏️ Edit Part':'➕ Add New Part'}</h2>
+      <h2 style={{ ...S.h2, fontSize:20, marginBottom:24 }}>{part?'✏️ Edit Part':'➕ Add New Part'}</h2>
       <div style={S.g2}>
         <Field label="SKU"><input style={S.input} value={form.sku} onChange={e=>set('sku',e.target.value)} /></Field>
         <Field label="OEM / Part Number"><input style={S.input} value={form.partNumber} onChange={e=>set('partNumber',e.target.value)} /></Field>
@@ -424,8 +426,8 @@ function PartForm({ part, onSave, onCancel }) {
       </Field>
 
       {/* Costs */}
-      <div style={{ ...S.card, background:C.panel, marginBottom:14 }}>
-        <h2 style={{ ...S.h2, marginBottom:10 }}>💸 Cost Breakdown (AUD)</h2>
+      <div style={{ ...S.card, background:'#f9f8f5', border:`1px solid ${C.border}`, marginBottom:20 }}>
+        <h2 style={{ ...S.h2, marginBottom:16 }}>💸 Cost Breakdown (AUD)</h2>
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10 }}>
           {Object.keys(form.costs).map(k=>(
             <Field key={k} label={`${k.charAt(0).toUpperCase()+k.slice(1)} ($)`}>
@@ -477,8 +479,8 @@ function DeleteModal({ target, onConfirm, onCancel }) {
   ];
   const st = steps[step-1];
   return (
-    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.75)', zIndex:999, display:'flex', alignItems:'center', justifyContent:'center' }}>
-      <div style={{ ...S.card, maxWidth:380, width:'90%', textAlign:'center', borderColor:C.red+'66' }}>
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:999, display:'flex', alignItems:'center', justifyContent:'center' }}>
+      <div style={{ ...S.card, maxWidth:380, width:'90%', textAlign:'center', borderColor:C.red, borderWidth:2 }}>
         <div style={{ fontSize:28, marginBottom:10 }}>{'⚠️'.repeat(step)}</div>
         <div style={{ fontSize:17, fontWeight:700, color:C.white, marginBottom:6 }}>{st.h}</div>
         <div style={{ fontSize:12, color:C.muted, marginBottom:16 }}>{st.s}</div>
@@ -528,7 +530,7 @@ function BulkEditPanel({ selectedIds, parts, onSaveAll, onClose }) {
 
   return (
     <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:998, display:'flex', alignItems:'center', justifyContent:'center' }}>
-      <div style={{ ...S.card, maxWidth:540, width:'95%', maxHeight:'88vh', overflowY:'auto', borderColor:C.blue+'66' }}>
+      <div style={{ ...S.card, maxWidth:560, width:'95%', maxHeight:'88vh', overflowY:'auto', borderColor:C.blue, borderWidth:2 }}>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
           <div>
             <div style={{ fontSize:15, fontWeight:700, color:C.white }}>✏️ Bulk Edit</div>
@@ -562,7 +564,7 @@ function BulkEditPanel({ selectedIds, parts, onSaveAll, onClose }) {
             </select>
           </Field>
         </div>
-        <div style={{ ...S.card, background:C.panel, marginBottom:14 }}>
+        <div style={{ ...S.card, background:'#f9f8f5', border:`1px solid ${C.border}`, marginBottom:20 }}>
           <div style={{ fontSize:11, color:C.muted, textTransform:'uppercase', letterSpacing:'0.8px', marginBottom:10 }}>Cost Adjustment</div>
           <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
             <div style={{ flex:1, minWidth:130 }}>
@@ -616,14 +618,14 @@ function Cell({ value, onChange, type='text', options, align='left', color, bold
   if (rowEditable && !readOnly) {
     if (options) return (
       <select value={draft} onChange={e=>{ setDraft(e.target.value); commit(e.target.value); }}
-        style={{ ...base, background:'#1a2a1a', border:`1px solid ${C.green}44`, borderRadius:2, outline:'none', cursor:'pointer' }}>
+        style={{ ...base, background:'#f0fdf4', border:`1px solid ${C.green}44`, borderRadius:2, outline:'none', cursor:'pointer' }}>
         {options.map(o=><option key={o}>{o}</option>)}
       </select>
     );
     return <input value={draft} type={type==='number'?'number':type==='date'?'date':'text'} step={type==='number'?'0.01':undefined}
       onChange={e=>setDraft(e.target.value)} onBlur={e=>commit(e.target.value)}
       onKeyDown={e=>e.key==='Escape'&&setDraft(value)}
-      style={{ ...base, background:'#1a2a1a', border:`1px solid ${C.green}44`, borderRadius:2, outline:'none' }} />;
+      style={{ ...base, background:'#f0fdf4', border:`1px solid ${C.green}44`, borderRadius:2, outline:'none' }} />;
   }
 
   const display = type==='number'&&(value||value===0) ? (value===0?<span style={{color:C.border}}>$0</span>:`$${(+value).toFixed(2)}`) : (value||<span style={{color:C.border}}>—</span>);
@@ -665,7 +667,7 @@ function Inventory({ parts, onAdd, onEdit, onDelete }) {
   const totals = filtered.reduce((acc,p)=>{ const c=totalCost(p),pr=(+p.listPrice||+p.list_price||0)-c; return { cost:acc.cost+c, list:acc.list+(+p.listPrice||+p.list_price||0), profit:acc.profit+pr, sold:acc.sold+(+p.soldPrice||0) }; },{cost:0,list:0,profit:0,sold:0});
 
   const TH=({children,w,align='left'})=>(
-    <th style={{ padding:'0 5px', height:32, whiteSpace:'nowrap', textAlign:align, fontSize:10, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.7px', color:C.muted, background:C.panel, borderBottom:`2px solid ${C.accent}44`, borderRight:`1px solid ${C.border}`, minWidth:w||70 }}>{children}</th>
+    <th style={{ padding:'0 5px', height:32, whiteSpace:'nowrap', textAlign:align, fontSize:10, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.7px', color:C.muted, background:'#f5f4f0', borderBottom:`2px solid ${C.accent}`, borderRight:`1px solid ${C.border}`, minWidth:w||70 }}>{children}</th>
   );
   const TD=({children,w,br=true})=>(
     <td style={{ padding:0, height:30, minWidth:w||70, verticalAlign:'middle', borderBottom:`1px solid ${C.border}`, borderRight:br?`1px solid ${C.border}`:'none', boxSizing:'border-box' }}>{children}</td>
@@ -680,7 +682,7 @@ function Inventory({ parts, onAdd, onEdit, onDelete }) {
 
       {/* Toolbar */}
       <div style={{ display:'flex', gap:8, marginBottom:10, alignItems:'center', flexWrap:'wrap' }}>
-        <h2 style={{ ...S.h1, margin:0 }}>📦 Inventory</h2>
+        <h2 style={{ ...S.h1, margin:0 }}>Inventory</h2>
         <div style={{ width:1, height:22, background:C.border }} />
         <button style={S.btn()} onClick={()=>setShowForm(true)}>+ Add Part</button>
         {editingId && <>
@@ -703,11 +705,11 @@ function Inventory({ parts, onAdd, onEdit, onDelete }) {
             onClick={()=>{ setShowDeleted(d=>!d); setSelected(new Set()); cancelEdit(); }}>
             {showDeleted?'← Back':`🗑 Deleted (${deletedCount})`}
           </button>
-          <span style={{ fontSize:10, color:C.muted }}>{filtered.length} parts</span>
+          <span style={{ fontSize:12, color:C.muted, background:C.panel, borderRadius:10, padding:'1px 8px', fontWeight:500 }}>{filtered.length} parts</span>
         </div>
       </div>
 
-      {editingId && <div style={{ background:'#1e2a1a', border:`1px solid ${C.green}44`, borderRadius:6, padding:'6px 12px', marginBottom:8, fontSize:11, color:C.green }}>● EDITING — click another row's Edit button to switch (auto-saves). Click ✓ or Cancel to finish.</div>}
+      {editingId && <div style={{ background:'#f0fdf4', border:`1.5px solid ${C.green}`, borderRadius:8, padding:'10px 16px', marginBottom:12, fontSize:13, color:C.green, fontWeight:500 }}>● EDITING — click another row's Edit button to switch (auto-saves). Click ✓ or Cancel to finish.</div>}
 
       <div style={{ overflowX:'auto', borderRadius:6, border:`1px solid ${C.border}` }}>
         <table style={{ borderCollapse:'collapse', tableLayout:'fixed', fontFamily:"'Courier New',monospace" }}>
@@ -715,18 +717,18 @@ function Inventory({ parts, onAdd, onEdit, onDelete }) {
             <col style={{width:32}}/><col style={{width:28}}/><col style={{width:70}}/><col style={{width:100}}/><col style={{width:250}}/><col style={{width:85}}/><col style={{width:100}}/><col style={{width:72}}/><col style={{width:165}}/><col style={{width:165}}/><col style={{width:82}}/><col style={{width:82}}/><col style={{width:72}}/><col style={{width:62}}/><col style={{width:62}}/><col style={{width:62}}/><col style={{width:62}}/><col style={{width:62}}/><col style={{width:72}}/><col style={{width:78}}/><col style={{width:78}}/><col style={{width:68}}/><col style={{width:62}}/><col style={{width:82}}/><col style={{width:82}}/><col style={{width:82}}/><col style={{width:100}}/><col style={{width:110}}/><col style={{width:56}}/><col style={{width:52}}/>
           </colgroup>
           <thead style={{ position:'sticky', top:0, zIndex:10 }}>
-            <tr style={{ background:'#0f1219' }}>
-              <th colSpan={3} style={{ background:'#0f1219', borderRight:`1px solid ${C.border}` }}/>
-              <th colSpan={2} style={{ padding:'2px 5px', fontSize:8, color:C.accent, textTransform:'uppercase', letterSpacing:'1px', background:'#0f1219', borderRight:`1px solid ${C.border}22`, textAlign:'center' }}>ID</th>
-              <th colSpan={3} style={{ padding:'2px 5px', fontSize:8, color:'#a78bfa', textTransform:'uppercase', letterSpacing:'1px', background:'#0f1219', borderRight:`1px solid ${C.border}22`, textAlign:'center' }}>VEHICLE</th>
-              <th colSpan={4} style={{ padding:'2px 5px', fontSize:8, color:C.blue, textTransform:'uppercase', letterSpacing:'1px', background:'#0f1219', borderRight:`1px solid ${C.border}22`, textAlign:'center' }}>CLASSIFICATION</th>
-              <th colSpan={7} style={{ padding:'2px 5px', fontSize:8, color:C.red, textTransform:'uppercase', letterSpacing:'1px', background:'#0f1219', borderRight:`1px solid ${C.border}22`, textAlign:'center' }}>COSTS (AUD)</th>
-              <th colSpan={4} style={{ padding:'2px 5px', fontSize:8, color:C.green, textTransform:'uppercase', letterSpacing:'1px', background:'#0f1219', borderRight:`1px solid ${C.border}22`, textAlign:'center' }}>PRICING</th>
-              <th colSpan={3} style={{ padding:'2px 5px', fontSize:8, color:C.yellow, textTransform:'uppercase', letterSpacing:'1px', background:'#0f1219', borderRight:`1px solid ${C.border}22`, textAlign:'center' }}>DATES</th>
+            <tr style={{ background:'#edeae3' }}>
+              <th colSpan={3} style={{ background:'#edeae3', borderRight:`1px solid ${C.border}` }}/>
+              <th colSpan={2} style={{ padding:'2px 5px', fontSize:8, color:C.accent, textTransform:'uppercase', letterSpacing:'1px', background:'#edeae3', borderRight:`1px solid ${C.border}`, textAlign:'center' }}>ID</th>
+              <th colSpan={3} style={{ padding:'2px 5px', fontSize:8, color:'#a78bfa', textTransform:'uppercase', letterSpacing:'1px', background:'#edeae3', borderRight:`1px solid ${C.border}`, textAlign:'center' }}>VEHICLE</th>
+              <th colSpan={4} style={{ padding:'2px 5px', fontSize:8, color:C.blue, textTransform:'uppercase', letterSpacing:'1px', background:'#edeae3', borderRight:`1px solid ${C.border}`, textAlign:'center' }}>CLASSIFICATION</th>
+              <th colSpan={7} style={{ padding:'2px 5px', fontSize:8, color:C.red, textTransform:'uppercase', letterSpacing:'1px', background:'#edeae3', borderRight:`1px solid ${C.border}`, textAlign:'center' }}>COSTS (AUD)</th>
+              <th colSpan={4} style={{ padding:'2px 5px', fontSize:8, color:C.green, textTransform:'uppercase', letterSpacing:'1px', background:'#edeae3', borderRight:`1px solid ${C.border}`, textAlign:'center' }}>PRICING</th>
+              <th colSpan={3} style={{ padding:'2px 5px', fontSize:8, color:C.yellow, textTransform:'uppercase', letterSpacing:'1px', background:'#edeae3', borderRight:`1px solid ${C.border}`, textAlign:'center' }}>DATES</th>
               <th colSpan={4} style={{ padding:'2px 5px', fontSize:8, color:C.muted, textTransform:'uppercase', letterSpacing:'1px', background:'#0f1219', textAlign:'center' }}>OTHER</th>
             </tr>
             <tr>
-              <th style={{ width:32, padding:'0 5px', background:C.panel, borderBottom:`2px solid ${C.accent}44`, borderRight:`1px solid ${C.border}` }}>
+              <th style={{ width:32, padding:'0 5px', background:'#f5f4f0', borderBottom:`2px solid ${C.accent}`, borderRight:`1px solid ${C.border}` }}>
                 <input type="checkbox" checked={selected.size===filtered.length&&filtered.length>0} onChange={toggleAll} style={{cursor:'pointer'}} />
               </th>
               <TH w={28}>#</TH><TH w={70}>Edit</TH><TH w={100}>SKU</TH><TH w={250}>Title</TH><TH w={85}>Make</TH><TH w={100}>Model</TH><TH w={72}>Year</TH>
@@ -744,7 +746,7 @@ function Inventory({ parts, onAdd, onEdit, onDelete }) {
               const cost=totalCost(row), pr=(+row.listPrice||+row.list_price||0)-cost, mg=(+row.listPrice||+row.list_price||0)>0?(pr/(+row.listPrice||+row.list_price||0))*100:0;
               const isSel=selected.has(p.id), isDel=p.status==='Deleted';
               const stCol=STATUS_COLORS[row.status]||C.muted;
-              const bg=isEditing?'#1a2a1a':isDel?'#2a1a1a':isSel?C.accent+'14':ri%2===0?'transparent':'#ffffff04';
+              const bg=isEditing?'#f0fdf4':isDel?'#fff5f5':isSel?C.accent+'14':ri%2===0?'#ffffff':'#faf9f7';
 
               return (
                 <tr key={p.id} style={{ background:bg, opacity:isDel?0.6:1 }}
@@ -799,7 +801,7 @@ function Inventory({ parts, onAdd, onEdit, onDelete }) {
             {filtered.length===0&&<tr><td colSpan={30} style={{ padding:'50px 0', textAlign:'center', color:C.muted, fontSize:12 }}>{showDeleted?'No deleted parts.':'No parts found. Click + Add Part to start.'}</td></tr>}
           </tbody>
           {filtered.length>0&&<tfoot>
-            <tr style={{ background:C.panel, borderTop:`2px solid ${C.accent}44` }}>
+            <tr style={{ background:'#f5f4f0', borderTop:`2px solid ${C.accent}` }}>
               <td colSpan={12} style={{ padding:'0 8px', height:30, fontSize:10, color:C.muted, fontWeight:700, textTransform:'uppercase', borderRight:`1px solid ${C.border}` }}>TOTALS — {filtered.length} parts</td>
               {[0,1,2,3,4,5].map(i=><td key={i} style={{ borderRight:`1px solid ${C.border}`, height:30 }}/>)}
               <td style={{ padding:'0 5px', height:30, textAlign:'right', fontSize:11, fontWeight:700, color:C.red, borderRight:`1px solid ${C.border}` }}>{fmt(totals.cost)}</td>
@@ -847,7 +849,7 @@ function EbayExport({ parts }) {
   return (
     <div>
       <SectionHeader title="📤 eBay Australia Export" action={<button style={S.btn('green')} onClick={generateCSV} disabled={sel.length===0}>↓ Export {sel.length} CSV</button>} />
-      <div style={{ ...S.card, marginBottom:14, background:C.panel, fontSize:12, color:C.muted, lineHeight:1.8 }}>
+      <div style={{ ...S.card, marginBottom:20, background:'#fff8f0', border:`1px solid #fed7aa`, fontSize:14, color:'#92400e', lineHeight:1.8 }}>
         <strong style={{color:C.white}}>How to use:</strong> Select parts → Export CSV → In eBay Seller Hub go to Listings → Bulk listing tools → Upload file (File Exchange).
         <span style={{color:C.yellow}}> ⚠ Ensure your eBay payment/shipping/return policies are configured first.</span>
       </div>
@@ -923,15 +925,15 @@ function Reports({ parts }) {
         <h2 style={S.h2}>💰 Top Parts by Profit</h2>
         <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
           <thead><tr style={{ borderBottom:`1px solid ${C.border}`, color:C.muted, fontSize:10 }}>
-            {['Part','Category','Sold','Cost','Profit','Margin','Days to Sell'].map(h=><th key={h} style={{padding:'6px 8px',textAlign:'left'}}>{h}</th>)}
+            {['Part','Category','Sold','Cost','Profit','Margin','Days to Sell'].map(h=><th key={h} style={{padding:'10px 12px',textAlign:'left'}}>{h}</th>)}
           </tr></thead>
           <tbody>
             {soldProfit.slice(0,10).map(p=>{
               const days=p.soldDate&&p.acquiredDate?Math.floor((new Date(p.soldDate)-new Date(p.acquiredDate))/86400000):'—';
               return <tr key={p.id} style={{borderBottom:`1px solid ${C.border}`}}>
-                <td style={{padding:'7px 8px'}}><div style={{fontWeight:600,color:C.white}}>{p.title}</div><div style={{fontSize:10,color:C.muted}}>{p.sku}</div></td>
-                <td style={{padding:'7px 8px',fontSize:10,color:C.muted}}>{p.category}</td>
-                <td style={{padding:'7px 8px'}}>{fmt(p.soldPrice)}</td>
+                <td style={{padding:'10px 12px'}}><div style={{fontWeight:600,color:C.white}}>{p.title}</div><div style={{fontSize:10,color:C.muted}}>{p.sku}</div></td>
+                <td style={{padding:'10px 12px',fontSize:12,color:C.muted}}>{p.category}</td>
+                <td style={{padding:'10px 12px'}}>{fmt(p.soldPrice)}</td>
                 <td style={{padding:'7px 8px',color:C.red}}>{fmt(p.cost)}</td>
                 <td style={{padding:'7px 8px',color:C.green,fontWeight:700}}>{fmt(p.profit)}</td>
                 <td style={{padding:'7px 8px',color:p.margin>30?C.green:C.yellow}}>{pct(p.margin)}</td>
@@ -997,12 +999,12 @@ function GrowthModel() {
           <StatCard label="Required YoY Growth" value={pct(yoy*100)} color={C.blue} sub={`over ${g.growthYears} yr${g.growthYears!==1?'s':''}`} />
         </div>
         <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12, marginTop:14 }}>
-          <thead><tr style={{ borderBottom:`1px solid ${C.border}`, color:C.muted, fontSize:10, textTransform:'uppercase' }}>
-            {['Year','Revenue','COGS (est.)','Fixed Costs','Net Profit','Margin'].map(h=><th key={h} style={{padding:'6px 8px',textAlign:'left'}}>{h}</th>)}
+          <thead><tr style={{ borderBottom:`2px solid ${C.border}`, color:C.muted, fontSize:12, textTransform:'uppercase', fontWeight:600 }}>
+            {['Year','Revenue','COGS (est.)','Fixed Costs','Net Profit','Margin'].map(h=><th key={h} style={{padding:'10px 12px',textAlign:'left'}}>{h}</th>)}
           </tr></thead>
           <tbody>
             <tr style={{ borderBottom:`1px solid ${C.border}`, color:C.muted }}>
-              <td style={{padding:'6px 8px'}}>Now</td><td style={{padding:'6px 8px'}}>{fmt(g.currentRevenue)}</td><td style={{padding:'6px 8px'}}>{fmt(g.currentCogs)}</td><td style={{padding:'6px 8px'}}>{fmt(curFixed)}</td><td style={{padding:'6px 8px',color:curProfit>0?C.green:C.red}}>{fmt(curProfit)}</td><td style={{padding:'6px 8px'}}>{pct(curMargin)}</td>
+              <td style={{padding:'10px 12px'}}>Now</td><td style={{padding:'10px 12px'}}>{fmt(g.currentRevenue)}</td><td style={{padding:'10px 12px'}}>{fmt(g.currentCogs)}</td><td style={{padding:'10px 12px'}}>{fmt(curFixed)}</td><td style={{padding:'6px 8px',color:curProfit>0?C.green:C.red}}>{fmt(curProfit)}</td><td style={{padding:'10px 12px'}}>{pct(curMargin)}</td>
             </tr>
             {forecasts.map(({yr,rev,profit})=>(
               <tr key={yr} style={{ borderBottom:`1px solid ${C.border}` }}>
@@ -1011,7 +1013,7 @@ function GrowthModel() {
             ))}
           </tbody>
         </table>
-        <div style={{ marginTop:14, padding:10, background:C.panel, borderRadius:6, border:`1px solid ${C.border}`, fontSize:12, lineHeight:1.8, color:C.muted }}>
+        <div style={{ marginTop:18, padding:16, background:'#fff8f0', borderRadius:8, border:`1px solid #fed7aa`, fontSize:14, lineHeight:1.9, color:'#78350f' }}>
           <strong style={{color:C.white}}>💡 Summary: </strong>
           With new fixed costs of <strong style={{color:C.white}}>{fmt(newFixed)}/yr</strong> and a <strong style={{color:C.white}}>{pct(g.efficiencyGain)}</strong> COGS improvement, you need <strong style={{color:C.accent}}>{fmt(reqRev)}</strong>/yr — requiring approx. <strong style={{color:C.blue}}>{pct(yoy*100)}</strong> YoY growth over {g.growthYears} year{g.growthYears!==1?'s':''}.
         </div>
@@ -1028,16 +1030,16 @@ function CategoryBrowser() {
   return (
     <div>
       <SectionHeader title="🗂 eBay AU Category Reference" />
-      <div style={{ ...S.card, marginBottom:12, background:C.panel, fontSize:12, color:C.muted }}>
+      <div style={{ ...S.card, marginBottom:16, background:'#f9f8f5', fontSize:14, color:C.muted }}>
         Path: <strong style={{color:C.white}}>Vehicle Parts & Accessories › Car & Truck Parts & Accessories</strong> · {CATEGORY_NAMES.length} categories · {Object.values(EBAY_AU_CATEGORIES).reduce((a,v)=>a+v.length,0)} subcategories
       </div>
       <div style={S.g2}>
         <div style={{ ...S.card, padding:0, overflowY:'auto', maxHeight:560 }}>
           {CATEGORY_NAMES.map(cat=>(
             <div key={cat} onClick={()=>setSel(cat)}
-              style={{ padding:'10px 14px', cursor:'pointer', borderBottom:`1px solid ${C.border}`, background:sel===cat?C.accent+'22':'transparent', borderLeft:sel===cat?`3px solid ${C.accent}`:'3px solid transparent', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-              <span style={{ fontSize:12, color:sel===cat?C.white:C.text }}>{cat}</span>
-              <span style={{ fontSize:10, color:C.muted }}>{EBAY_AU_CATEGORIES[cat].length}</span>
+              style={{ padding:'12px 16px', cursor:'pointer', borderBottom:`1px solid ${C.border}`, background:sel===cat?'#fff4ef':'transparent', borderLeft:sel===cat?`4px solid ${C.accent}`:'4px solid transparent', display:'flex', justifyContent:'space-between', alignItems:'center', transition:'background .15s' }}>
+              <span style={{ fontSize:14, color:sel===cat?C.accent:C.text, fontWeight:sel===cat?600:400 }}>{cat}</span>
+              <span style={{ fontSize:12, color:C.muted, background:C.panel, borderRadius:10, padding:'1px 8px', fontWeight:500 }}>{EBAY_AU_CATEGORIES[cat].length}</span>
             </div>
           ))}
         </div>
@@ -1045,8 +1047,8 @@ function CategoryBrowser() {
           <h2 style={{ ...S.h2, color:C.accent }}>{sel}</h2>
           <div style={{ fontSize:10, color:C.muted, marginBottom:12 }}>{EBAY_AU_CATEGORIES[sel].length} subcategories</div>
           {EBAY_AU_CATEGORIES[sel].map((sub,i)=>(
-            <div key={i} style={{ padding:'6px 0', borderBottom:`1px solid ${C.border}`, fontSize:12, display:'flex', gap:8 }}>
-              <span style={{ color:C.muted, fontSize:10, minWidth:22 }}>{i+1}.</span>{sub}
+            <div key={i} style={{ padding:'9px 0', borderBottom:`1px solid ${C.border}`, fontSize:14, display:'flex', gap:10 }}>
+              <span style={{ color:C.mutedLight||C.muted, fontSize:12, minWidth:26 }}>{i+1}.</span>{sub}
             </div>
           ))}
         </div>
@@ -1066,19 +1068,19 @@ function Settings({ onSignOut }) {
       <SectionHeader title="⚙️ Settings" />
       <div style={S.card}>
         <h2 style={S.h2}>Account</h2>
-        <div style={{ fontSize:13, color:C.text, marginBottom:16 }}>Logged in as <strong style={{color:C.accent}}>{email}</strong></div>
+        <div style={{ fontSize:15, color:C.text, marginBottom:20 }}>Logged in as <strong style={{color:C.accent}}>{email}</strong></div>
         <button style={S.btn('danger')} onClick={onSignOut}>Sign Out</button>
       </div>
       <div style={{ ...S.card, marginTop:14 }}>
         <h2 style={S.h2}>Supabase Connection</h2>
-        <div style={{ fontSize:12, color:C.muted, lineHeight:1.8 }}>
+        <div style={{ fontSize:14, color:C.muted, lineHeight:1.9 }}>
           <div>URL: <code style={{color:C.blue}}>{SUPABASE_URL}</code></div>
           <div style={{marginTop:8, color:C.green}}>🟢 Real-time sync active — changes appear on the iPhone app instantly.</div>
         </div>
       </div>
       <div style={{ ...S.card, marginTop:14 }}>
         <h2 style={S.h2}>iPhone App</h2>
-        <div style={{ fontSize:12, color:C.muted, lineHeight:1.8 }}>
+        <div style={{ fontSize:14, color:C.muted, lineHeight:1.9 }}>
           The Expo mobile app connects to the same Supabase database. Any part added or edited here appears on the phone in real-time, and vice versa. See the README.md in the partvault-mobile folder for App Store submission steps.
         </div>
       </div>
@@ -1118,7 +1120,7 @@ function App() {
   const handleEdit= async p => { try { await editPart(p); showToast('Saved ✓'); } catch(e) { showToast(e.message,C.red); throw e; } };
   const handleDel = async id => { try { await softDelete(id); showToast('Deleted ✓',C.red); } catch(e) { showToast(e.message,C.red); } };
 
-  if (!authReady) return <div style={{ minHeight:'100vh', background:C.bg, display:'flex', alignItems:'center', justifyContent:'center', color:C.muted }}>Loading…</div>;
+  if (!authReady) return <div style={{ minHeight:'100vh', background:C.bg, display:'flex', alignItems:'center', justifyContent:'center', color:C.muted, fontSize:16 }}>Loading…</div>;
   if (!session) return <AuthScreen />;
 
   return (
@@ -1130,11 +1132,11 @@ function App() {
             {t.icon} {t.label}
           </button>
         ))}
-        <div style={{ marginLeft:'auto', padding:'0 14px', display:'flex', alignItems:'center', gap:8, fontSize:11, color:C.muted }}>
+        <div style={{ marginLeft:'auto', padding:'0 18px', display:'flex', alignItems:'center', gap:10, fontSize:13, color:'rgba(255,255,255,0.55)' }}>
           {loading ? <span className="spin">⏳</span> : null}
           {parts.filter(p=>p.status!=='Deleted').length} parts
           <SyncBadge status={syncStatus} />
-          <button style={{ background:'none', border:`1px solid ${C.border}`, color:C.muted, borderRadius:4, padding:'3px 8px', cursor:'pointer', fontSize:10, fontFamily:'inherit' }}
+          <button style={{ background:'rgba(255,255,255,0.1)', border:'1px solid rgba(255,255,255,0.2)', color:'rgba(255,255,255,0.7)', borderRadius:6, padding:'4px 10px', cursor:'pointer', fontSize:12, fontFamily:'inherit' }}
             onClick={refetch}>↻ Refresh</button>
         </div>
       </nav>
@@ -1148,7 +1150,7 @@ function App() {
         {tab==='settings'   && <Settings    onSignOut={()=>sb.auth.signOut()} />}
       </main>
       {toast && (
-        <div style={{ position:'fixed', bottom:20, right:20, background:toast.color, color:'#fff', padding:'10px 18px', borderRadius:6, fontSize:13, fontWeight:700, zIndex:1000, boxShadow:'0 4px 20px rgba(0,0,0,0.5)' }}>
+        <div style={{ position:'fixed', bottom:24, right:24, background:toast.color, color:'#fff', padding:'12px 22px', borderRadius:10, fontSize:14, fontWeight:600, zIndex:1000, boxShadow:'0 8px 30px rgba(0,0,0,0.2)', letterSpacing:'0.2px' }}>
           {toast.msg}
         </div>
       )}
