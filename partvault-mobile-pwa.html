@@ -91,6 +91,29 @@ const CONDITIONS = ['Used – Excellent','Used – Good','Used – Fair','For Pa
 const SHIPPING   = ['Standard Post','Express Post','Courier','Courier (Bulky)','Collect Only','Free Postage'];
 const MAKES      = ['Toyota','Ford','Holden','Mazda','Hyundai','Kia','Mitsubishi','Nissan','Subaru','Honda','Volkswagen','BMW','Mercedes-Benz','Audi','Land Rover','Isuzu','Suzuki','Lexus','Jeep','Volvo','Other'];
 
+const MODEL_SUGGESTIONS = {
+  'Toyota':['Hilux','Camry','Corolla','RAV4','LandCruiser','LandCruiser 200','LandCruiser 100','LandCruiser 80','Prado','HiAce','Tarago','Kluger','Yaris','Aurion','Fortuner','Rush','86','Supra','Celica','Surf'],
+  'Ford':['Ranger','Falcon','Territory','Focus','Fiesta','Escape','Explorer','Mustang','F-150','Transit','Mondeo','Kuga','Everest','Endura','Puma'],
+  'Holden':['Commodore','Colorado','Trax','Captiva','Cruze','Astra','Barina','Spark','Trailblazer','Calais','Statesman','Berlina','Ute','Rodeo','Jackaroo'],
+  'Mazda':['CX-5','CX-3','CX-9','CX-7','Mazda3','Mazda6','BT-50','MX-5','RX-7','RX-8','323','626','929','Tribute','Premacy'],
+  'Hyundai':['i30','Tucson','Santa Fe','i20','i10','Accent','Elantra','Sonata','ix35','Kona','Palisade','Staria','iLoad','Terracan'],
+  'Kia':['Sportage','Cerato','Rio','Sorento','Carnival','Stinger','Seltos','Telluride','Soul','Picanto','Optima','Cadenza'],
+  'Mitsubishi':['Triton','ASX','Outlander','Eclipse Cross','Pajero','Lancer','Galant','Mirage','Express','Colt','Sigma','Nimbus'],
+  'Nissan':['Navara','X-Trail','Patrol','Pathfinder','Qashqai','Murano','Juke','Micra','Pulsar','Skyline','350Z','370Z','Dualis','Maxima','Altima'],
+  'Subaru':['Forester','Outback','Impreza','Liberty','WRX','BRZ','XV','Tribeca','Levorg','Exiga'],
+  'Honda':['CR-V','HR-V','Jazz','Civic','Accord','City','Odyssey','Pilot','Legend','S2000','NSX','Element','Stream'],
+  'Volkswagen':['Golf','Polo','Tiguan','Touareg','Passat','Amarok','Transporter','Caddy','Jetta','Beetle','Phaeton','CC'],
+  'BMW':['3 Series','5 Series','7 Series','X3','X5','X1','X7','1 Series','4 Series','2 Series','M3','M5'],
+  'Mercedes-Benz':['C-Class','E-Class','S-Class','GLC','GLE','A-Class','B-Class','CLA','GLA','GLB','Sprinter','Vito'],
+  'Audi':['A4','A6','Q5','Q7','A3','Q3','A1','A5','A7','A8','Q2','TT','R8'],
+  'Land Rover':['Discovery','Range Rover','Defender','Freelander','Range Rover Sport','Discovery Sport','Evoque'],
+  'Isuzu':['D-Max','MU-X','Trooper','Rodeo','KB','NKR','NLR','NPR','NQR'],
+  'Suzuki':['Swift','Vitara','Jimny','Grand Vitara','S-Cross','Ignis','Baleno','Carry','SJ','Sierra'],
+  'Lexus':['RX','NX','GX','IS','ES','LX','UX','LC','RC','LS','CT'],
+  'Jeep':['Wrangler','Cherokee','Grand Cherokee','Compass','Renegade','Commander','Patriot'],
+  'Volvo':['XC90','XC60','XC40','S60','V60','S90','V90','V40','C30','850'],
+};
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  LOCAL STORAGE HELPERS
 // ═══════════════════════════════════════════════════════════════════════════
@@ -301,6 +324,7 @@ function SessionScreen({ sessionId, profile, onBack }) {
   const [model, setModel] = useState('');
   const [year, setYear]   = useState('');
   const [showMakes, setShowMakes] = useState(false);
+  const [modelSuggestions, setModelSuggestions] = useState([]);
 
   // Photos
   const [photos, setPhotos]   = useState([]); // base64 data URLs
@@ -310,7 +334,8 @@ function SessionScreen({ sessionId, profile, onBack }) {
   const [err, setErr]         = useState('');
   const [showForm, setShowForm] = useState(false);
   const [draftPart, setDraftPart] = useState(null);
-  const fileRef = useRef();
+  const cameraRef = useRef();
+  const libraryRef = useRef();
 
   const saveParts = (p) => { setParts(p); LS.set(`pv_parts_${sessionId}`, p); };
   const updateSession = (updates) => {
@@ -320,12 +345,35 @@ function SessionScreen({ sessionId, profile, onBack }) {
   };
 
   const handlePhoto = (e) => {
-    const files = Array.from(e.target.files);
-    files.forEach(file => {
-      const reader = new FileReader();
-      reader.onload = ev => setPhotos(p => [...p, ev.target.result]);
-      reader.readAsDataURL(file);
+    const files = Array.from(e.target.files||[]);
+    files.slice(0, 12 - photos.length).forEach(file => {
+      // Compress large images before storing
+      const img = new window.Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX = 1200;
+        const ratio = Math.min(MAX/img.width, MAX/img.height, 1);
+        canvas.width = img.width * ratio;
+        canvas.height = img.height * ratio;
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+        setPhotos(p => [...p, dataUrl]);
+        URL.revokeObjectURL(url);
+      };
+      img.src = url;
     });
+    e.target.value = ''; // reset so same file can be re-selected
+  };
+
+  const handleModelChange = (val) => {
+    setModel(val);
+    if (val.length >= 1 && make && MODEL_SUGGESTIONS[make]) {
+      const matches = MODEL_SUGGESTIONS[make].filter(m => m.toLowerCase().startsWith(val.toLowerCase()));
+      setModelSuggestions(matches.slice(0, 5));
+    } else {
+      setModelSuggestions([]);
+    }
   };
 
   const analysePhotos = async (addAnother) => {
@@ -526,35 +574,63 @@ Return this exact JSON:
         {/* Vehicle */}
         <div style={S.card}>
           <div style={S.cardTitle}>Vehicle for this part</div>
-          <div style={{ display:'flex', gap:8 }}>
-            <button onClick={()=>setShowMakes(true)} style={{ flex:1.3, background:C.panel, border:`1.5px solid ${C.border}`, borderRadius:10, padding:'12px 10px', textAlign:'left', color:make?C.text:C.muted, fontSize:15, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-              <span>{make||'Make'}</span><span style={{ color:C.muted }}>›</span>
+          <div style={{ display:'flex', gap:8, marginBottom: modelSuggestions.length>0?0:0 }}>
+            <button onClick={()=>setShowMakes(true)} style={{ flex:1.2, background:C.panel, border:`1.5px solid ${C.border}`, borderRadius:10, padding:'12px 10px', textAlign:'left', color:make?C.text:C.muted, fontSize:15, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <span style={{ fontWeight:make?600:400 }}>{make||'Make'}</span><span style={{ color:C.muted }}>›</span>
             </button>
-            <input style={{ ...S.input, flex:1.4 }} value={model} onChange={e=>setModel(e.target.value)} placeholder="Model" />
-            <input style={{ ...S.input, flex:0.9 }} value={year} onChange={e=>setYear(e.target.value)} placeholder="Year" />
+            <div style={{ flex:1.4, position:'relative' }}>
+              <input style={S.input} value={model} onChange={e=>handleModelChange(e.target.value)}
+                onBlur={()=>setTimeout(()=>setModelSuggestions([]),150)}
+                placeholder="Model" autoComplete="off" />
+              {modelSuggestions.length>0 && (
+                <div style={{ position:'absolute', top:'100%', left:0, right:0, background:C.white, borderRadius:10, border:`1.5px solid ${C.accent}`, zIndex:100, boxShadow:'0 4px 20px rgba(0,0,0,0.12)', overflow:'hidden', marginTop:2 }}>
+                  {modelSuggestions.map(m=>(
+                    <div key={m} onMouseDown={()=>{ setModel(m); setModelSuggestions([]); }}
+                      style={{ padding:'11px 14px', borderBottom:`1px solid ${C.border}`, fontSize:14, color:C.text, cursor:'pointer', fontWeight:500 }}>
+                      {m}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <input style={{ ...S.input, flex:0.85 }} value={year} onChange={e=>setYear(e.target.value)} placeholder="Year" keyboardType="numeric" />
           </div>
         </div>
 
         {/* Photos */}
         <div style={S.card}>
           <div style={S.cardTitle}>Photos for this part</div>
-          <input ref={fileRef} type="file" accept="image/*" multiple capture="environment" onChange={handlePhoto} />
-          <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginBottom:12 }}>
-            {photos.map((p,i)=>(
-              <div key={i} style={{ position:'relative', width:80, height:80 }}>
-                <img src={p} style={{ width:80, height:80, borderRadius:8, objectFit:'cover' }} />
-                {i===0 && <div style={{ position:'absolute', top:3, left:3, background:C.accent, borderRadius:4, padding:'1px 5px', fontSize:8, color:C.white, fontWeight:800 }}>COVER</div>}
-                <button onClick={()=>setPhotos(ps=>ps.filter((_,j)=>j!==i))} style={{ position:'absolute', top:-6, right:-6, background:C.red, border:'none', color:C.white, borderRadius:'50%', width:20, height:20, fontSize:11, fontWeight:700, padding:0 }}>✕</button>
-              </div>
-            ))}
-            {photos.length<12 && (
-              <button onClick={()=>fileRef.current.click()} style={{ width:80, height:80, borderRadius:8, border:`2px dashed ${C.border}`, background:C.panel, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:4, color:C.muted }}>
-                <span style={{ fontSize:24 }}>📷</span>
-                <span style={{ fontSize:10, fontWeight:600 }}>Add</span>
+          {/* Hidden file inputs */}
+          <input ref={cameraRef} type="file" accept="image/*" capture="environment" multiple onChange={handlePhoto} />
+          <input ref={libraryRef} type="file" accept="image/*" multiple onChange={handlePhoto} />
+          {/* Photo grid */}
+          {photos.length>0 && (
+            <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginBottom:12 }}>
+              {photos.map((p,i)=>(
+                <div key={i} style={{ position:'relative', width:80, height:80 }}>
+                  <img src={p} style={{ width:80, height:80, borderRadius:8, objectFit:'cover' }} />
+                  {i===0 && <div style={{ position:'absolute', top:3, left:3, background:C.accent, borderRadius:4, padding:'1px 5px', fontSize:8, color:C.white, fontWeight:800 }}>COVER</div>}
+                  <button onClick={()=>setPhotos(ps=>ps.filter((_,j)=>j!==i))} style={{ position:'absolute', top:-6, right:-6, background:C.red, border:'none', color:C.white, borderRadius:'50%', width:22, height:22, fontSize:12, fontWeight:700, padding:0, lineHeight:'22px' }}>✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Camera + Library buttons */}
+          {photos.length<12 && (
+            <div style={{ display:'flex', gap:8, marginBottom:10 }}>
+              <button onClick={()=>cameraRef.current.click()}
+                style={{ flex:1, background:C.navBg, color:C.white, border:'none', borderRadius:10, padding:'14px 10px', fontSize:14, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center', gap:8 }}>
+                <span style={{ fontSize:20 }}>📷</span> Camera
               </button>
-            )}
+              <button onClick={()=>libraryRef.current.click()}
+                style={{ flex:1, background:C.panel, color:C.text, border:`1.5px solid ${C.border}`, borderRadius:10, padding:'14px 10px', fontSize:14, fontWeight:700, display:'flex', alignItems:'center', justifyContent:'center', gap:8 }}>
+                <span style={{ fontSize:20 }}>🖼️</span> Library
+              </button>
+            </div>
+          )}
+          <div style={{ fontSize:11, color:C.muted }}>
+            {photos.length}/12 photos · First photo = eBay cover image · Multiple photos improves AI accuracy
           </div>
-          <div style={{ fontSize:11, color:C.muted }}>{photos.length}/12 photos · First photo = eBay cover image</div>
         </div>
 
         {/* Error */}
