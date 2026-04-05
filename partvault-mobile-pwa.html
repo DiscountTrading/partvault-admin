@@ -184,8 +184,7 @@ function AuthScreen() {
         // Insert profile
         const { error:pe } = await sb.from('profiles').insert({ user_id:data.user.id, store_id:st.id, role:'admin', name });
         if (pe) throw new Error('Could not create profile: ' + pe.message);
-        // Update store with created_by now that user exists in session
-        await sb.from('stores').update({ created_by:data.user.id }).eq('id', st.id);
+        // created_by column removed — no update needed
       } else {
         const { data:st, error:se } = await sb.from('stores').select().eq('join_code', code.toUpperCase()).single();
         if (se||!st) throw new Error('Invalid join code — check with your admin');
