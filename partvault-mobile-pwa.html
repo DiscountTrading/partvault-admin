@@ -1,0 +1,962 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="PartVault" />
+<meta name="theme-color" content="#1c1c1e" />
+<title>PartVault</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { height: 100%; -webkit-text-size-adjust: 100%; }
+  body { height: 100%; background: #f5f4f0; color: #1c1c1e; font-family: 'Inter', system-ui, sans-serif; font-size: 16px; line-height: 1.5; overflow: hidden; }
+  #root { height: 100%; display: flex; flex-direction: column; }
+  input, select, textarea, button { font-family: 'Inter', system-ui, sans-serif; -webkit-appearance: none; }
+  button { cursor: pointer; }
+  * { -webkit-tap-highlight-color: transparent; }
+  .screen { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: env(safe-area-inset-bottom); }
+  .spin { animation: spin 1s linear infinite; display: inline-block; }
+  @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+  .fade-in { animation: fadeIn 0.2s ease; }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+  ::-webkit-scrollbar { display: none; }
+  input[type=file] { display: none; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  CONFIG
+// ═══════════════════════════════════════════════════════════════════════════
+const SUPABASE_URL = 'https://mtpektsxaklhedknincs.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_STtCN1zWydiIFtgHR1Yn5g_n9YBH102';
+const AI_PROXY     = 'https://partvault-proxy.leap00.workers.dev';
+const APP_VERSION  = '2.0.0';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: { persistSession: true, storage: localStorage },
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  COLOURS
+// ═══════════════════════════════════════════════════════════════════════════
+const C = {
+  bg:'#f5f4f0', panel:'#edeae3', card:'#ffffff', border:'#ddd9d0',
+  accent:'#e8590c', blue:'#2563eb', green:'#16a34a', red:'#dc2626',
+  yellow:'#b45309', purple:'#7c3aed', text:'#1c1c1e', muted:'#6b7280',
+  white:'#ffffff', navBg:'#1c1c1e',
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  EBAY AU CATEGORIES
+// ═══════════════════════════════════════════════════════════════════════════
+const EBAY_CATS = {
+  'Air & Fuel Delivery':['Air Filters','Carburettors & Parts','Fuel Filters','Fuel Injectors','Fuel Pumps','Intercoolers','Throttle Bodies','Turbochargers & Parts','Other'],
+  'Air Conditioning & Heating':['A/C Compressors','A/C Condensers','Blower Motors','Evaporators','Heater Cores','Pollen Filters','Other'],
+  'Brakes & Brake Parts':['Brake Disc Rotors','Brake Drums','Brake Pads','Brake Shoes','Calipers & Brackets','Master Cylinders','Brake Hoses','ABS Sensors','Other'],
+  'Engines & Engine Parts':['Complete Engines','Cylinder Heads','Engine Mounts','Oil Pumps','Timing Belts & Kits','Valve Covers','Water Pumps','Other'],
+  'Engine Cooling':['Radiators','Water Pumps','Thermostats','Cooling Fans','Oil Coolers','Other'],
+  'Exhaust & Emission':['Catalytic Converters','DPF Filters','EGR Valves','Exhaust Manifolds','Mufflers','Exhaust Pipes','Other'],
+  'Exterior Parts':['Bumper Bars','Door Mirrors','Door Panels','Fenders / Guards','Grilles','Bonnet / Hood','Boot Lid','Other'],
+  'Ignition Systems':['Coil Packs','Glow Plugs','Ignition Coils','Spark Plugs','Distributor','Other'],
+  'Interior Parts':['Dashboards','Door Cards','Instrument Clusters','Seats','Seat Belts','Steering Wheels','Window Regulators','Other'],
+  'Lighting & Bulbs':['Headlight Assemblies','Tail Lights','Fog Lights','Indicators','DRL','Other'],
+  'Starters, Alternators & Wiring':['Alternators','ECUs','Fuse Boxes','Starter Motors','Wiring Looms','Other'],
+  'Steering & Suspension':['Ball Joints','Coil Springs','Control Arms','Power Steering Pumps','Shock Absorbers','Tie Rod Ends','Wheel Bearings','Other'],
+  'Transmission & Drivetrain':['Clutch Kits','CV Boots','Driveshafts','Gearboxes — Auto','Gearboxes — Manual','Transfer Cases','Other'],
+  'Wheels, Tyres & Parts':['Tyres','Wheels — Alloy','Wheels — Steel','Wheel Nuts','Other'],
+  'Towing Parts':['Tow Bars','Trailer Sockets','Other'],
+  'Other Car & Truck Parts':['Other'],
+};
+const CAT_NAMES = Object.keys(EBAY_CATS);
+const CAT_IDS = {
+  'Air & Fuel Delivery':'33549','Air Conditioning & Heating':'33542','Brakes & Brake Parts':'33559',
+  'Engines & Engine Parts':'33612','Engine Cooling':'33599','Exhaust & Emission':'33605',
+  'Exterior Parts':'33637','Ignition Systems':'33687','Interior Parts':'33694',
+  'Lighting & Bulbs':'33707','Starters, Alternators & Wiring':'33572','Steering & Suspension':'33579',
+  'Transmission & Drivetrain':'33726','Wheels, Tyres & Parts':'33743','Towing Parts':'180143',
+  'Other Car & Truck Parts':'9886',
+};
+const CONDITIONS = ['Used – Excellent','Used – Good','Used – Fair','For Parts Only','Refurbished'];
+const SHIPPING   = ['Standard Post','Express Post','Courier','Courier (Bulky)','Collect Only','Free Postage'];
+const MAKES      = ['Toyota','Ford','Holden','Mazda','Hyundai','Kia','Mitsubishi','Nissan','Subaru','Honda','Volkswagen','BMW','Mercedes-Benz','Audi','Land Rover','Isuzu','Suzuki','Lexus','Jeep','Volvo','Other'];
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  LOCAL STORAGE HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+const LS = {
+  get: (k, def=null) => { try { const v=localStorage.getItem(k); return v?JSON.parse(v):def; } catch { return def; } },
+  set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+  str: (k, def='') => localStorage.getItem(k) || def,
+};
+const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+const fmt = n => `$${(+n||0).toFixed(0)}`;
+const today = () => new Date().toISOString().split('T')[0];
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  STYLES (inline, mobile-first)
+// ═══════════════════════════════════════════════════════════════════════════
+const S = {
+  // Nav
+  nav: { background:C.navBg, padding:'12px 16px 10px', display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0, paddingTop:'max(12px, env(safe-area-inset-top))' },
+  navTitle: { color:C.white, fontWeight:800, fontSize:18, letterSpacing:-0.5 },
+  navBtn: { background:'rgba(255,255,255,0.15)', border:'none', color:C.white, borderRadius:8, padding:'6px 12px', fontSize:13, fontWeight:600 },
+  // Cards
+  card: { background:C.card, borderRadius:14, padding:16, border:`1px solid ${C.border}`, marginBottom:12 },
+  cardTitle: { fontSize:15, fontWeight:700, color:C.text, marginBottom:12 },
+  // Inputs
+  input: { width:'100%', background:C.panel, border:`1.5px solid ${C.border}`, borderRadius:10, padding:'12px 14px', color:C.text, fontSize:15, boxSizing:'border-box', outline:'none' },
+  select: { width:'100%', background:C.panel, border:`1.5px solid ${C.border}`, borderRadius:10, padding:'12px 14px', color:C.text, fontSize:15, boxSizing:'border-box' },
+  textarea: { width:'100%', background:C.panel, border:`1.5px solid ${C.border}`, borderRadius:10, padding:'12px 14px', color:C.text, fontSize:15, boxSizing:'border-box', resize:'none', minHeight:90 },
+  label: { fontSize:12, color:C.muted, fontWeight:600, display:'block', marginBottom:6, textTransform:'uppercase', letterSpacing:0.4 },
+  // Buttons
+  btn: (col=C.accent,light=false) => ({ background:light?col+'18':col, color:light?col:C.white, border:light?`1.5px solid ${col}44`:'none', borderRadius:12, padding:'14px 20px', fontSize:15, fontWeight:700, width:'100%', display:'block', textAlign:'center' }),
+  btnSm: (col=C.accent) => ({ background:col, color:C.white, border:'none', borderRadius:8, padding:'8px 16px', fontSize:13, fontWeight:600 }),
+  // Pills
+  pill: col => ({ background:col+'18', color:col, border:`1px solid ${col}33`, borderRadius:20, padding:'3px 10px', fontSize:11, fontWeight:700, display:'inline-block' }),
+  // Tab bar
+  tabBar: { background:C.navBg, display:'flex', borderTop:`1px solid rgba(255,255,255,0.1)`, flexShrink:0, paddingBottom:'max(8px, env(safe-area-inset-bottom))' },
+  tabBtn: active => ({ flex:1, background:'none', border:'none', color:active?C.accent:'rgba(255,255,255,0.4)', padding:'10px 0 6px', display:'flex', flexDirection:'column', alignItems:'center', gap:3 }),
+  tabIcon: { fontSize:22 },
+  tabLabel: active => ({ fontSize:10, fontWeight:600, color:active?C.accent:'rgba(255,255,255,0.4)' }),
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  AUTH SCREEN
+// ═══════════════════════════════════════════════════════════════════════════
+function AuthScreen() {
+  const [mode, setMode]     = useState('landing'); // landing | login | signup
+  const [email, setEmail]   = useState('');
+  const [pass, setPass]     = useState('');
+  const [name, setName]     = useState('');
+  const [store, setStore]   = useState('');
+  const [code, setCode]     = useState('');
+  const [join, setJoin]     = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr]       = useState('');
+
+  const login = async () => {
+    if (!email||!pass) { setErr('Enter email and password'); return; }
+    setLoading(true); setErr('');
+    const { error } = await sb.auth.signInWithPassword({ email, password:pass });
+    if (error) setErr(error.message);
+    setLoading(false);
+  };
+
+  const signup = async () => {
+    if (!email||!pass||!name) { setErr('Fill all fields'); return; }
+    if (!join && !store) { setErr('Enter store name'); return; }
+    if (join && !code) { setErr('Enter join code'); return; }
+    setLoading(true); setErr('');
+    try {
+      const { data, error } = await sb.auth.signUp({ email, password:pass });
+      if (error) throw error;
+      await new Promise(r => setTimeout(r, 800));
+      if (!join) {
+        const jc = Math.random().toString(36).slice(2,8).toUpperCase();
+        const { data:st, error:se } = await sb.from('stores').insert({ name:store, join_code:jc, created_by:data.user.id }).select().single();
+        if (se) throw se;
+        await sb.from('profiles').insert({ user_id:data.user.id, store_id:st.id, role:'admin', name });
+      } else {
+        const { data:st, error:se } = await sb.from('stores').select().eq('join_code', code.toUpperCase()).single();
+        if (se||!st) throw new Error('Invalid join code');
+        await sb.from('profiles').insert({ user_id:data.user.id, store_id:st.id, role:'worker', name });
+      }
+      window.location.reload();
+    } catch(e) { setErr(e.message); }
+    setLoading(false);
+  };
+
+  if (mode==='landing') return (
+    <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:32, background:C.bg, minHeight:'100vh' }}>
+      <div style={{ fontSize:72, marginBottom:12 }}>⚙</div>
+      <div style={{ fontSize:34, fontWeight:800, color:C.accent, letterSpacing:-1, marginBottom:6 }}>PartVault</div>
+      <div style={{ fontSize:14, color:C.muted, marginBottom:48 }}>Australian Car Parts Manager</div>
+      <div style={{ width:'100%', maxWidth:380, display:'flex', flexDirection:'column', gap:12 }}>
+        <button style={S.btn()} onClick={()=>setMode('login')}>Sign In</button>
+        <button style={S.btn(C.navBg)} onClick={()=>setMode('signup')}>Create Account</button>
+      </div>
+      <div style={{ fontSize:11, color:C.muted, marginTop:24, textAlign:'center' }}>Same login as the web admin panel · v{APP_VERSION}</div>
+    </div>
+  );
+
+  if (mode==='login') return (
+    <div style={{ flex:1, padding:24, paddingTop:60, display:'flex', flexDirection:'column', gap:12, background:C.bg, minHeight:'100vh' }}>
+      <button onClick={()=>{setMode('landing');setErr('');}} style={{ background:'none', border:'none', color:C.accent, fontSize:15, fontWeight:600, textAlign:'left', padding:0, marginBottom:8 }}>← Back</button>
+      <div style={{ fontSize:28, fontWeight:800, color:C.text, marginBottom:8 }}>Sign In</div>
+      <input style={S.input} type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email" />
+      <input style={S.input} type="password" value={pass} onChange={e=>setPass(e.target.value)} placeholder="Password" />
+      {err && <div style={{ color:C.red, fontSize:13, background:'#fef2f2', padding:12, borderRadius:10 }}>{err}</div>}
+      <button style={S.btn()} onClick={login} disabled={loading}>{loading?'Signing in…':'Sign In'}</button>
+      <button onClick={()=>{setMode('signup');setErr('');}} style={{ background:'none', border:'none', color:C.accent, fontSize:14, fontWeight:600, marginTop:8 }}>No account? Create one</button>
+    </div>
+  );
+
+  return (
+    <div style={{ flex:1, padding:24, paddingTop:60, display:'flex', flexDirection:'column', gap:12, background:C.bg, minHeight:'100vh', overflowY:'auto' }}>
+      <button onClick={()=>{setMode('landing');setErr('');}} style={{ background:'none', border:'none', color:C.accent, fontSize:15, fontWeight:600, textAlign:'left', padding:0, marginBottom:8 }}>← Back</button>
+      <div style={{ fontSize:28, fontWeight:800, color:C.text, marginBottom:8 }}>Create Account</div>
+      <input style={S.input} value={name} onChange={e=>setName(e.target.value)} placeholder="Your name" />
+      <input style={S.input} type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email" />
+      <input style={S.input} type="password" value={pass} onChange={e=>setPass(e.target.value)} placeholder="Password" />
+      <div style={{ display:'flex', gap:8, marginTop:4 }}>
+        <button style={{ flex:1, padding:'12px 8px', borderRadius:10, border:`2px solid ${!join?C.accent:C.border}`, background:!join?'#fff4ef':C.white, color:!join?C.accent:C.muted, fontWeight:700, fontSize:13 }} onClick={()=>setJoin(false)}>🏪 New Store</button>
+        <button style={{ flex:1, padding:'12px 8px', borderRadius:10, border:`2px solid ${join?C.accent:C.border}`, background:join?'#fff4ef':C.white, color:join?C.accent:C.muted, fontWeight:700, fontSize:13 }} onClick={()=>setJoin(true)}>🔗 Join Store</button>
+      </div>
+      {!join
+        ? <input style={S.input} value={store} onChange={e=>setStore(e.target.value)} placeholder="Store / business name" />
+        : <input style={{ ...S.input, letterSpacing:6, textAlign:'center', fontSize:20, fontWeight:800 }} value={code} onChange={e=>setCode(e.target.value.toUpperCase())} placeholder="JOIN CODE" maxLength={6} />
+      }
+      {err && <div style={{ color:C.red, fontSize:13, background:'#fef2f2', padding:12, borderRadius:10 }}>{err}</div>}
+      <button style={S.btn()} onClick={signup} disabled={loading}>{loading?'Creating…':join?'Join Store':'Create Store & Account'}</button>
+      <button onClick={()=>{setMode('login');setErr('');}} style={{ background:'none', border:'none', color:C.accent, fontSize:14, fontWeight:600, marginTop:4 }}>Have an account? Sign in</button>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  SESSIONS TAB
+// ═══════════════════════════════════════════════════════════════════════════
+function SessionsTab({ profile, onOpenSession }) {
+  const [sessions, setSessions] = useState(() => LS.get('pv_sessions', []));
+
+  const newSession = () => {
+    const s = { id:uid(), name:`Session ${new Date().toLocaleDateString('en-AU')}`, createdAt:new Date().toISOString(), parts:[], status:'active' };
+    const updated = [s, ...sessions];
+    setSessions(updated);
+    LS.set('pv_sessions', updated);
+    onOpenSession(s.id);
+  };
+
+  const statusColor = s => s.status==='complete'?C.green:s.status==='uploading'?C.blue:C.accent;
+
+  return (
+    <div className="screen" style={{ padding:16 }}>
+      <button style={{ ...S.btn(), marginBottom:16 }} onClick={newSession}>📸  Start New Session</button>
+      <div style={{ fontSize:13, color:C.muted, marginBottom:16, lineHeight:1.6 }}>
+        Add parts by vehicle — AI fills all eBay details. Works offline, uploads when ready.
+      </div>
+      {sessions.length===0 && (
+        <div style={{ textAlign:'center', padding:'40px 0', color:C.muted }}>
+          <div style={{ fontSize:48, marginBottom:12 }}>📸</div>
+          <div style={{ fontWeight:700, marginBottom:6 }}>No sessions yet</div>
+          <div style={{ fontSize:13 }}>Tap Start New Session to begin</div>
+        </div>
+      )}
+      {sessions.map(s=>(
+        <div key={s.id} onClick={()=>onOpenSession(s.id)} style={{ ...S.card, display:'flex', justifyContent:'space-between', alignItems:'center', cursor:'pointer' }}>
+          <div>
+            <div style={{ fontWeight:700, marginBottom:3 }}>{s.name}</div>
+            <div style={{ fontSize:12, color:C.muted }}>{new Date(s.createdAt).toLocaleDateString('en-AU')}</div>
+          </div>
+          <div style={{ textAlign:'right', display:'flex', flexDirection:'column', alignItems:'flex-end', gap:6 }}>
+            <div style={{ fontSize:22, fontWeight:800, color:C.accent }}>{s.parts?.length||0}</div>
+            <span style={S.pill(statusColor(s))}>{s.status==='complete'?'Uploaded':s.status==='uploading'?'Uploading…':'Active'}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  SESSION DETAIL SCREEN
+// ═══════════════════════════════════════════════════════════════════════════
+function SessionScreen({ sessionId, profile, onBack }) {
+  const [sessions, setSessions] = useState(() => LS.get('pv_sessions', []));
+  const session = sessions.find(s=>s.id===sessionId);
+  const [parts, setParts] = useState(() => LS.get(`pv_parts_${sessionId}`, []));
+
+  // Vehicle state — persists for session, changeable per part
+  const [make, setMake]   = useState('');
+  const [model, setModel] = useState('');
+  const [year, setYear]   = useState('');
+  const [showMakes, setShowMakes] = useState(false);
+
+  // Photos
+  const [photos, setPhotos]   = useState([]); // base64 data URLs
+  const [analysing, setAnalysing] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadMsg, setUploadMsg] = useState('');
+  const [err, setErr]         = useState('');
+  const [showForm, setShowForm] = useState(false);
+  const [draftPart, setDraftPart] = useState(null);
+  const fileRef = useRef();
+
+  const saveParts = (p) => { setParts(p); LS.set(`pv_parts_${sessionId}`, p); };
+  const updateSession = (updates) => {
+    const updated = sessions.map(s => s.id===sessionId ? {...s,...updates} : s);
+    setSessions(updated);
+    LS.set('pv_sessions', updated);
+  };
+
+  const handlePhoto = (e) => {
+    const files = Array.from(e.target.files);
+    files.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = ev => setPhotos(p => [...p, ev.target.result]);
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const analysePhotos = async (addAnother) => {
+    if (photos.length===0) { setErr('Take at least one photo first'); return; }
+    if (!make) { setErr('Set the vehicle make first'); return; }
+    const apiKey = LS.str('pv_anthropic_key');
+    if (!apiKey) { setErr('Add your Anthropic API key in Account tab first'); return; }
+    setAnalysing(true); setErr('');
+
+    const systemPrompt = `You are an expert Australian car parts eBay seller. Identify the part from the photo and return JSON only — no markdown.
+Available categories: ${CAT_NAMES.join(', ')}
+Return this exact JSON:
+{"title":"eBay title max 80 chars","category":"exact category","subcategory":"exact subcategory","condition":"Used – Good","description":"3-4 sentence eBay description","partNumber":"OEM number or empty","sizeTier":"small|medium|large|bulky","listPrice":number,"weight":number,"shippingOption":"Standard Post|Express Post|Courier|Collect Only","confidence":"high|medium|low","notes":"identification notes"}`;
+
+    try {
+      const imageData = photos[0].split(',')[1];
+      const res = await fetch(AI_PROXY, {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json', 'x-api-key':apiKey, 'anthropic-version':'2023-06-01' },
+        body: JSON.stringify({
+          model:'claude-sonnet-4-20250514', max_tokens:800, system:systemPrompt,
+          messages:[{ role:'user', content:[
+            { type:'image', source:{ type:'base64', media_type:'image/jpeg', data:imageData }},
+            { type:'text', text:`Vehicle: ${make} ${model} ${year}. Identify this car part.` }
+          ]}],
+        }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
+      const raw = data.content?.filter(b=>b.type==='text').map(b=>b.text).join('').trim();
+      let parsed;
+      try { parsed=JSON.parse(raw); } catch { const m=raw.match(/\{[\s\S]*\}/); if(m) parsed=JSON.parse(m[0]); }
+      if (!parsed) throw new Error('Could not parse AI response');
+
+      const tierCosts = { small:{l:5,s:0.5,p:3,post:12}, medium:{l:15,s:1.5,p:8,post:18}, large:{l:35,s:4,p:20,post:55}, bulky:{l:60,s:6,p:0,post:0} };
+      const t = tierCosts[parsed.sizeTier] || tierCosts.medium;
+
+      const part = {
+        localId: uid(), sessionId, make, model, year,
+        photos: photos.slice(0,8), // store up to 8 photos as base64
+        title: parsed.title||'', category: parsed.category||CAT_NAMES[0],
+        subcategory: parsed.subcategory||'', ebayCategoryId: CAT_IDS[parsed.category]||'6030',
+        condition: parsed.condition||'Used – Good', description: parsed.description||'',
+        partNumber: parsed.partNumber||'', listPrice: parsed.listPrice||0, weight: parsed.weight||0,
+        shippingOption: parsed.shippingOption||'Standard Post',
+        costs:{ acquisition:0, labour:t.l, storage:t.s, packaging:t.p, postage:t.post, holding:0 },
+        aiConfidence: parsed.confidence||'medium', aiNotes: parsed.notes||'',
+        status:'ready', createdAt:new Date().toISOString(),
+      };
+
+      if (addAnother) {
+        // Save and immediately reset for next part
+        const updated = [part, ...parts];
+        saveParts(updated);
+        updateSession({ parts: updated });
+        setPhotos([]);
+        setErr('');
+      } else {
+        // Show form for review
+        setDraftPart(part);
+        setShowForm(true);
+      }
+    } catch(e) { setErr(e.message||'AI analysis failed'); }
+    setAnalysing(false);
+  };
+
+  const saveDraft = (p) => {
+    const updated = [p, ...parts];
+    saveParts(updated);
+    updateSession({ parts: updated });
+    setShowForm(false);
+    setDraftPart(null);
+    setPhotos([]);
+  };
+
+  const uploadSession = async () => {
+    const ready = parts.filter(p => p.status==='ready');
+    if (ready.length===0) { setErr('No parts ready to upload'); return; }
+    if (!profile?.store_id) { setErr('No store linked'); return; }
+    setUploading(true); setErr('');
+
+    const uploaded = [];
+    for (let i=0; i<ready.length; i++) {
+      const p = ready[i];
+      setUploadMsg(`Uploading part ${i+1}/${ready.length}…`);
+      try {
+        // Upload photos to Supabase Storage
+        const photoUrls = [];
+        for (let j=0; j<p.photos.length; j++) {
+          const blob = await (await fetch(p.photos[j])).blob();
+          const fname = `${profile.store_id}/${p.localId}/${j}.jpg`;
+          const { error:ue } = await sb.storage.from('part-photos').upload(fname, blob, { contentType:'image/jpeg', upsert:true });
+          if (!ue) {
+            const { data } = sb.storage.from('part-photos').getPublicUrl(fname);
+            photoUrls.push(data.publicUrl);
+          }
+        }
+        // Save part to DB
+        const { data:{user} } = await sb.auth.getUser();
+        await sb.from('parts').upsert({
+          id: p.localId, store_id: profile.store_id, created_by: user?.id,
+          sku: `SKU-${p.localId.slice(-6).toUpperCase()}`,
+          title:p.title, category:p.category, subcategory:p.subcategory,
+          ebay_category_id:p.ebayCategoryId, make:p.make, model:p.model, year:p.year,
+          condition:p.condition, description:p.description, status:'In Stock',
+          costs:p.costs, list_price:p.listPrice, weight:p.weight,
+          photos:photoUrls, part_number:p.partNumber, shipping_option:p.shippingOption,
+          notes:'', acquired_date:today(), session_id:sessionId,
+          deleted_at:null, sold_price:null,
+        });
+        uploaded.push({ ...p, status:'uploaded', uploadedPhotos:photoUrls });
+      } catch(e) {
+        uploaded.push({ ...p, status:'error' });
+      }
+    }
+
+    // Update local queue
+    const updatedParts = parts.map(p => uploaded.find(u=>u.localId===p.localId) || p);
+    saveParts(updatedParts);
+
+    // Generate CSV
+    const csv = generateCSV(updatedParts.filter(p=>p.status==='uploaded'));
+    const blob = new Blob([csv], { type:'text/csv' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href=url; a.download=`partvault_${sessionId.slice(-6)}.csv`; a.click();
+    URL.revokeObjectURL(url);
+
+    updateSession({ status:'complete' });
+    setUploading(false);
+    setUploadMsg('');
+  };
+
+  const generateCSV = (ps) => {
+    const h = 'Action,SiteID,Currency,StartPrice,Title,Description,Category,ConditionID,PicURL,PicURL2,PicURL3,Format,Duration,Quantity,ShippingType,ShippingService-1:Option,ShippingService-1:Cost,DispatchTimeMax,ReturnsAcceptedOption,CustomLabel,MPN,Make,Model,Year';
+    const COND = {'Used – Excellent':'3000','Used – Good':'3000','Used – Fair':'5000','For Parts Only':'7000','Refurbished':'2500'};
+    const rows = ps.map(p => {
+      const photos = (p.uploadedPhotos||[]).slice(0,3); while(photos.length<3) photos.push('');
+      const sf = s => `"${(s||'').replace(/"/g,'""')}"`;
+      return ['Add','15','AUD',p.listPrice,sf(p.title),sf(p.description),p.ebayCategoryId||'6030',COND[p.condition]||'3000',...photos,'FixedPrice','GTC','1',p.shippingOption==='Free Postage'?'Free':'Flat',p.shippingOption,p.costs?.postage||0,'1','ReturnsAccepted',p.localId,p.partNumber||'',p.make,p.model,p.year].join(',');
+    });
+    return [h,...rows].join('\n');
+  };
+
+  const readyCount    = parts.filter(p=>p.status==='ready').length;
+  const uploadedCount = parts.filter(p=>p.status==='uploaded').length;
+
+  if (showForm && draftPart) return (
+    <PartReviewForm part={draftPart} onSave={saveDraft} onCancel={()=>{setShowForm(false);setDraftPart(null);}} />
+  );
+
+  if (showMakes) return (
+    <div style={{ background:C.bg, minHeight:'100vh', display:'flex', flexDirection:'column' }}>
+      <div style={{ ...S.nav, justifyContent:'space-between' }}>
+        <button style={S.navBtn} onClick={()=>setShowMakes(false)}>Done</button>
+        <span style={S.navTitle}>Select Make</span>
+        <div style={{ width:56 }}/>
+      </div>
+      <div className="screen" style={{ padding:0 }}>
+        {MAKES.map(m=>(
+          <div key={m} onClick={()=>{ setMake(m); setShowMakes(false); }}
+            style={{ padding:'16px 20px', borderBottom:`1px solid ${C.border}`, display:'flex', justifyContent:'space-between', background:C.white, cursor:'pointer' }}>
+            <span style={{ fontSize:16, color:m===make?C.accent:C.text, fontWeight:m===make?700:400 }}>{m}</span>
+            {m===make && <span style={{ color:C.accent }}>✓</span>}
+          </div>
+        ))}
+        <div style={{ padding:16 }}>
+          <label style={S.label}>Other make</label>
+          <div style={{ display:'flex', gap:8 }}>
+            <input style={{ ...S.input, flex:1 }} value={make} onChange={e=>setMake(e.target.value)} placeholder="Type make…" />
+            <button style={{ ...S.btnSm(), flexShrink:0 }} onClick={()=>setShowMakes(false)}>Set</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ background:C.bg, minHeight:'100vh', display:'flex', flexDirection:'column' }}>
+      {/* Header */}
+      <div style={{ ...S.nav }}>
+        <button style={S.navBtn} onClick={onBack}>← Back</button>
+        <span style={S.navTitle}>{session?.name||'Session'}</span>
+        <span style={{ color:'rgba(255,255,255,0.5)', fontSize:12 }}>{parts.length} parts</span>
+      </div>
+
+      <div className="screen" style={{ padding:16 }}>
+        {/* Stats */}
+        <div style={{ display:'flex', gap:8, marginBottom:16 }}>
+          {[['Ready',readyCount,C.blue],['Uploaded',uploadedCount,C.green],['Total',parts.length,C.accent]].map(([l,v,col])=>(
+            <div key={l} style={{ flex:1, background:C.white, borderRadius:12, padding:'10px 8px', textAlign:'center', border:`1px solid ${C.border}` }}>
+              <div style={{ fontSize:22, fontWeight:800, color:col }}>{v}</div>
+              <div style={{ fontSize:10, color:C.muted, fontWeight:600, textTransform:'uppercase' }}>{l}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Vehicle */}
+        <div style={S.card}>
+          <div style={S.cardTitle}>Vehicle for this part</div>
+          <div style={{ display:'flex', gap:8 }}>
+            <button onClick={()=>setShowMakes(true)} style={{ flex:1.3, background:C.panel, border:`1.5px solid ${C.border}`, borderRadius:10, padding:'12px 10px', textAlign:'left', color:make?C.text:C.muted, fontSize:15, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <span>{make||'Make'}</span><span style={{ color:C.muted }}>›</span>
+            </button>
+            <input style={{ ...S.input, flex:1.4 }} value={model} onChange={e=>setModel(e.target.value)} placeholder="Model" />
+            <input style={{ ...S.input, flex:0.9 }} value={year} onChange={e=>setYear(e.target.value)} placeholder="Year" />
+          </div>
+        </div>
+
+        {/* Photos */}
+        <div style={S.card}>
+          <div style={S.cardTitle}>Photos for this part</div>
+          <input ref={fileRef} type="file" accept="image/*" multiple capture="environment" onChange={handlePhoto} />
+          <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginBottom:12 }}>
+            {photos.map((p,i)=>(
+              <div key={i} style={{ position:'relative', width:80, height:80 }}>
+                <img src={p} style={{ width:80, height:80, borderRadius:8, objectFit:'cover' }} />
+                {i===0 && <div style={{ position:'absolute', top:3, left:3, background:C.accent, borderRadius:4, padding:'1px 5px', fontSize:8, color:C.white, fontWeight:800 }}>COVER</div>}
+                <button onClick={()=>setPhotos(ps=>ps.filter((_,j)=>j!==i))} style={{ position:'absolute', top:-6, right:-6, background:C.red, border:'none', color:C.white, borderRadius:'50%', width:20, height:20, fontSize:11, fontWeight:700, padding:0 }}>✕</button>
+              </div>
+            ))}
+            {photos.length<12 && (
+              <button onClick={()=>fileRef.current.click()} style={{ width:80, height:80, borderRadius:8, border:`2px dashed ${C.border}`, background:C.panel, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:4, color:C.muted }}>
+                <span style={{ fontSize:24 }}>📷</span>
+                <span style={{ fontSize:10, fontWeight:600 }}>Add</span>
+              </button>
+            )}
+          </div>
+          <div style={{ fontSize:11, color:C.muted }}>{photos.length}/12 photos · First photo = eBay cover image</div>
+        </div>
+
+        {/* Error */}
+        {err && <div style={{ background:'#fef2f2', border:`1px solid #fca5a5`, borderRadius:10, padding:'10px 14px', fontSize:13, color:C.red, marginBottom:12 }}>{err}</div>}
+
+        {/* AI Buttons */}
+        {analysing ? (
+          <div style={{ background:C.white, borderRadius:14, padding:24, textAlign:'center', border:`1px solid #e9d5ff`, marginBottom:12 }}>
+            <div className="spin" style={{ fontSize:32, display:'block', marginBottom:12 }}>✨</div>
+            <div style={{ fontSize:16, fontWeight:700, color:C.purple }}>AI is analysing…</div>
+            <div style={{ fontSize:13, color:C.muted, marginTop:4 }}>Takes about 5–10 seconds</div>
+          </div>
+        ) : (
+          <div style={{ display:'flex', flexDirection:'column', gap:10, marginBottom:12 }}>
+            <button style={{ ...S.btn(C.purple), padding:'16px 20px' }} onClick={()=>analysePhotos(false)}>
+              ✨ AI Part Create
+              <div style={{ fontSize:12, fontWeight:400, opacity:0.8, marginTop:2 }}>Analyse & review before saving</div>
+            </button>
+            <button style={{ ...S.btn(C.accent), padding:'16px 20px' }} onClick={()=>analysePhotos(true)}>
+              ✨ Create & Add Another
+              <div style={{ fontSize:12, fontWeight:400, opacity:0.8, marginTop:2 }}>Save automatically, go to next part</div>
+            </button>
+          </div>
+        )}
+
+        {/* Parts list */}
+        {parts.length>0 && (
+          <div style={S.card}>
+            <div style={S.cardTitle}>Parts in session ({parts.length})</div>
+            {parts.slice(0,20).map(p=>(
+              <div key={p.localId} style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 0', borderTop:`1px solid ${C.border}` }}>
+                {p.photos?.[0] && <img src={p.photos[0]} style={{ width:40, height:40, borderRadius:6, objectFit:'cover', flexShrink:0 }} />}
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:13, fontWeight:600, color:C.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{p.title||'Untitled'}</div>
+                  <div style={{ fontSize:11, color:C.muted }}>{p.make} {p.model}</div>
+                </div>
+                <div style={{ textAlign:'right', flexShrink:0 }}>
+                  <span style={S.pill(p.status==='uploaded'?C.green:p.status==='ready'?C.blue:C.muted)}>{p.status==='uploaded'?'✓ Up':p.status==='ready'?'Ready':'Draft'}</span>
+                  {p.listPrice>0 && <div style={{ fontSize:12, fontWeight:700, color:C.accent, marginTop:3 }}>{fmt(p.listPrice)}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Upload */}
+        {parts.length>0 && (
+          uploading ? (
+            <div style={{ background:C.white, borderRadius:14, padding:20, textAlign:'center', border:`1px solid ${C.border}` }}>
+              <div className="spin" style={{ fontSize:24, display:'block', marginBottom:8 }}>⬆️</div>
+              <div style={{ fontSize:14, fontWeight:600, color:C.text }}>{uploadMsg||'Uploading…'}</div>
+            </div>
+          ) : (
+            <button style={{ ...S.btn(readyCount>0?C.green:'#999'), padding:'16px 20px', opacity:readyCount>0?1:0.5 }}
+              onClick={uploadSession} disabled={readyCount===0}>
+              ⬆️ Upload {readyCount} Part{readyCount!==1?'s':''} & Download CSV
+              <div style={{ fontSize:12, fontWeight:400, opacity:0.8, marginTop:2 }}>Photos → Cloud · Parts → Database · CSV → Downloads</div>
+            </button>
+          )
+        )}
+        <div style={{ height:20 }}/>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  PART REVIEW FORM
+// ═══════════════════════════════════════════════════════════════════════════
+function PartReviewForm({ part, onSave, onCancel }) {
+  const [f, setF] = useState({ ...part });
+  const set = (k,v) => setF(p=>({...p,[k]:v}));
+  const setCost = (k,v) => setF(p=>({...p, costs:{...p.costs,[k]:+v||0}}));
+  const totalCost = Object.values(f.costs).reduce((a,v)=>a+(+v||0),0);
+  const profit = (f.listPrice||0) - totalCost;
+  const confCol = { high:C.green, medium:C.yellow, low:C.red };
+
+  return (
+    <div style={{ background:C.bg, minHeight:'100vh', display:'flex', flexDirection:'column' }}>
+      <div style={S.nav}>
+        <button style={S.navBtn} onClick={onCancel}>Cancel</button>
+        <span style={S.navTitle}>Review Part</span>
+        <button style={{ ...S.navBtn, background:C.green }} onClick={()=>onSave(f)}>Save</button>
+      </div>
+      <div className="screen" style={{ padding:16 }}>
+        {/* AI banner */}
+        <div style={{ background:'#f0fdf4', border:`1.5px solid ${C.green}`, borderRadius:12, padding:14, marginBottom:16, display:'flex', gap:12, alignItems:'flex-start' }}>
+          <span style={{ fontSize:24 }}>✨</span>
+          <div>
+            <div style={{ fontWeight:700, color:C.green, fontSize:14, marginBottom:3 }}>
+              AI filled this form
+              <span style={{ ...S.pill(confCol[f.aiConfidence]||C.muted), marginLeft:8, fontSize:10 }}>{f.aiConfidence} confidence</span>
+            </div>
+            {f.aiNotes && <div style={{ fontSize:12, color:'#166534', lineHeight:1.5 }}>{f.aiNotes}</div>}
+          </div>
+        </div>
+
+        {/* Photos */}
+        {f.photos?.length>0 && (
+          <div style={{ display:'flex', gap:8, marginBottom:16, overflowX:'auto' }}>
+            {f.photos.map((p,i)=><img key={i} src={p} style={{ width:80, height:80, borderRadius:8, objectFit:'cover', flexShrink:0 }} />)}
+          </div>
+        )}
+
+        {/* Core fields */}
+        <div style={S.card}>
+          <div style={S.cardTitle}>Listing Details</div>
+          <label style={S.label}>Title ({f.title?.length||0}/80)</label>
+          <input style={{ ...S.input, marginBottom:12, borderColor:(f.title?.length||0)>80?C.red:C.border }} value={f.title||''} onChange={e=>set('title',e.target.value)} />
+          <label style={S.label}>Category</label>
+          <select style={{ ...S.select, marginBottom:12 }} value={f.category} onChange={e=>{ set('category',e.target.value); set('ebayCategoryId', CAT_IDS[e.target.value]||'6030'); }}>
+            {CAT_NAMES.map(c=><option key={c}>{c}</option>)}
+          </select>
+          <label style={S.label}>Subcategory</label>
+          <select style={{ ...S.select, marginBottom:12 }} value={f.subcategory} onChange={e=>set('subcategory',e.target.value)}>
+            {(EBAY_CATS[f.category]||[]).map(s=><option key={s}>{s}</option>)}
+          </select>
+          <label style={S.label}>Condition</label>
+          <select style={{ ...S.select, marginBottom:12 }} value={f.condition} onChange={e=>set('condition',e.target.value)}>
+            {CONDITIONS.map(c=><option key={c}>{c}</option>)}
+          </select>
+          <label style={S.label}>Description</label>
+          <textarea style={{ ...S.textarea, marginBottom:0 }} value={f.description||''} onChange={e=>set('description',e.target.value)} rows={4} />
+        </div>
+
+        {/* Vehicle */}
+        <div style={S.card}>
+          <div style={S.cardTitle}>Vehicle</div>
+          <div style={{ display:'flex', gap:8 }}>
+            <input style={{ ...S.input, flex:1 }} value={f.make||''} onChange={e=>set('make',e.target.value)} placeholder="Make" />
+            <input style={{ ...S.input, flex:1 }} value={f.model||''} onChange={e=>set('model',e.target.value)} placeholder="Model" />
+            <input style={{ ...S.input, flex:0.8 }} value={f.year||''} onChange={e=>set('year',e.target.value)} placeholder="Year" />
+          </div>
+        </div>
+
+        {/* Pricing */}
+        <div style={S.card}>
+          <div style={S.cardTitle}>Pricing</div>
+          <div style={{ display:'flex', gap:8, marginBottom:12 }}>
+            <div style={{ flex:1 }}>
+              <label style={S.label}>List Price ($)</label>
+              <input style={S.input} type="number" value={f.listPrice||''} onChange={e=>set('listPrice',+e.target.value||0)} />
+            </div>
+            <div style={{ flex:1 }}>
+              <label style={S.label}>Weight (kg)</label>
+              <input style={S.input} type="number" value={f.weight||''} onChange={e=>set('weight',+e.target.value||0)} />
+            </div>
+          </div>
+          <label style={S.label}>Shipping</label>
+          <select style={S.select} value={f.shippingOption} onChange={e=>set('shippingOption',e.target.value)}>
+            {SHIPPING.map(s=><option key={s}>{s}</option>)}
+          </select>
+        </div>
+
+        {/* Costs */}
+        <div style={{ ...S.card, background:'#fafaf9' }}>
+          <div style={S.cardTitle}>Costs (AUD)</div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+            {['acquisition','labour','storage','packaging','postage','holding'].map(k=>(
+              <div key={k}>
+                <label style={S.label}>{k} ($)</label>
+                <input style={S.input} type="number" value={f.costs?.[k]||0} onChange={e=>setCost(k,e.target.value)} />
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop:12, display:'flex', justifyContent:'space-between', fontSize:14 }}>
+            <span>Total cost: <strong style={{ color:C.red }}>{fmt(totalCost)}</strong></span>
+            <span>Profit: <strong style={{ color:profit>=0?C.green:C.red }}>{fmt(profit)}</strong></span>
+          </div>
+        </div>
+
+        {/* OEM */}
+        <div style={S.card}>
+          <label style={S.label}>OEM Part Number</label>
+          <input style={S.input} value={f.partNumber||''} onChange={e=>set('partNumber',e.target.value)} placeholder="Optional" />
+        </div>
+
+        <button style={{ ...S.btn(), marginBottom:8 }} onClick={()=>onSave(f)}>✓ Save Part</button>
+        <button style={{ ...S.btn(C.muted, true) }} onClick={onCancel}>Cancel</button>
+        <div style={{ height:20 }}/>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  PARTS TAB
+// ═══════════════════════════════════════════════════════════════════════════
+function PartsTab({ profile, isAdmin }) {
+  const [parts, setParts]   = useState([]);
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('All');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(()=>{
+    if (!profile?.store_id) return;
+    sb.from('parts').select('*').order('created_at',{ascending:false})
+      .then(({data})=>{ setParts((data||[]).filter(p=>p.status!=='Deleted')); setLoading(false); });
+  },[profile]);
+
+  const filtered = parts.filter(p=>{
+    const q=search.toLowerCase();
+    return (!q||p.title?.toLowerCase().includes(q)||p.make?.toLowerCase().includes(q)||p.sku?.toLowerCase().includes(q))
+      && (filter==='All'||p.status===filter);
+  });
+
+  const STATUS_COLS = {'In Stock':C.blue,'Listed':C.accent,'Sold':C.green,'Archived':C.muted};
+
+  return (
+    <div className="screen" style={{ padding:16 }}>
+      <input style={{ ...S.input, marginBottom:10 }} value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍  Search parts…" />
+      <div style={{ display:'flex', gap:6, marginBottom:14, overflowX:'auto', paddingBottom:4 }}>
+        {['All','In Stock','Listed','Sold'].map(f=>(
+          <button key={f} onClick={()=>setFilter(f)} style={{ flexShrink:0, borderRadius:16, paddingLeft:12, paddingRight:12, paddingTop:6, paddingBottom:6, background:filter===f?C.accent:C.white, color:filter===f?C.white:C.muted, border:`1px solid ${filter===f?C.accent:C.border}`, fontWeight:600, fontSize:12 }}>{f}</button>
+        ))}
+      </div>
+      {loading && <div style={{ textAlign:'center', color:C.muted, padding:40 }}>Loading…</div>}
+      {!loading && filtered.length===0 && <div style={{ textAlign:'center', color:C.muted, padding:40 }}>No parts found</div>}
+      {filtered.map(p=>{
+        const col=STATUS_COLS[p.status]||C.muted;
+        const totalCost=Object.values(p.costs||{}).reduce((a,v)=>a+v,0);
+        const profit=p.list_price-totalCost;
+        return (
+          <div key={p.id} style={{ ...S.card, marginBottom:10 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:6 }}>
+              <div style={{ flex:1, marginRight:8 }}>
+                <div style={{ fontWeight:700, fontSize:14, color:C.text, lineHeight:1.3, marginBottom:3 }}>{p.title||'Untitled'}</div>
+                <div style={{ fontSize:11, color:C.muted }}>{p.sku} · {p.make} {p.model} {p.year}</div>
+              </div>
+              <span style={S.pill(col)}>{p.status}</span>
+            </div>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:8, paddingTop:8, borderTop:`1px solid ${C.border}` }}>
+              <span style={{ fontSize:13, color:C.muted }}>{p.subcategory||p.category}</span>
+              <div style={{ textAlign:'right' }}>
+                <span style={{ fontSize:16, fontWeight:800, color:C.text }}>{fmt(p.list_price)}</span>
+                {isAdmin && <span style={{ fontSize:12, color:profit>=0?C.green:C.red, marginLeft:8, fontWeight:600 }}>{profit>=0?'+':''}{fmt(profit)}</span>}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ACCOUNT TAB
+// ═══════════════════════════════════════════════════════════════════════════
+function AccountTab({ profile, isAdmin }) {
+  const [apiKey, setApiKey] = useState(()=>LS.str('pv_anthropic_key'));
+  const [saved, setSaved]   = useState(false);
+  const [workers, setWorkers] = useState([]);
+  const [showKey, setShowKey] = useState(false);
+
+  useEffect(()=>{
+    if (isAdmin && profile?.store_id) {
+      sb.from('profiles').select('*').eq('store_id',profile.store_id).then(({data})=>setWorkers(data||[]));
+    }
+  },[isAdmin,profile]);
+
+  const saveKey = () => { LS.set('pv_anthropic_key', apiKey); setSaved(true); setTimeout(()=>setSaved(false),2000); };
+  const signOut = () => { if(confirm('Sign out?')) sb.auth.signOut().then(()=>window.location.reload()); };
+  const toggleRole = async (w) => {
+    const role = w.role==='admin'?'worker':'admin';
+    await sb.from('profiles').update({role}).eq('id',w.id);
+    setWorkers(ws=>ws.map(x=>x.id===w.id?{...x,role}:x));
+  };
+  const removeWorker = async (w) => {
+    if (confirm(`Remove ${w.name||'this worker'}?`)) {
+      await sb.from('profiles').delete().eq('id',w.id);
+      setWorkers(ws=>ws.filter(x=>x.id!==w.id));
+    }
+  };
+
+  return (
+    <div className="screen" style={{ padding:16 }}>
+      {/* Profile */}
+      <div style={{ ...S.card, display:'flex', alignItems:'center', gap:14 }}>
+        <div style={{ width:50, height:50, borderRadius:25, background:C.panel, border:`2px solid ${C.accent}`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:24 }}>👤</div>
+        <div style={{ flex:1 }}>
+          <div style={{ fontWeight:700, fontSize:16 }}>{profile?.name||'User'}</div>
+          <div style={{ fontSize:12, color:C.accent, fontWeight:600 }}>{profile?.role==='admin'?'🔑 Admin':'👷 Worker'}</div>
+          <div style={{ fontSize:12, color:C.muted }}>{profile?.store?.name||''}</div>
+        </div>
+        <button style={{ ...S.btnSm(C.red), background:'#fee2e2', color:C.red, border:`1px solid #fca5a5` }} onClick={signOut}>Sign Out</button>
+      </div>
+
+      {/* Join code */}
+      {isAdmin && profile?.store?.join_code && (
+        <div style={S.card}>
+          <div style={S.cardTitle}>Store Join Code</div>
+          <div style={{ fontSize:12, color:C.muted, marginBottom:10 }}>Share with workers to join your store</div>
+          <div style={{ background:C.panel, borderRadius:10, padding:16, textAlign:'center', letterSpacing:8, fontSize:28, fontWeight:800, color:C.accent }}>
+            {profile.store.join_code}
+          </div>
+        </div>
+      )}
+
+      {/* API Key */}
+      <div style={{ ...S.card, borderTopColor:C.purple, borderTopWidth:3 }}>
+        <div style={S.cardTitle}>✨ Anthropic API Key</div>
+        <div style={{ fontSize:13, color:C.muted, marginBottom:12 }}>Get from console.anthropic.com → API Keys</div>
+        <div style={{ display:'flex', gap:8, marginBottom:10 }}>
+          <input style={{ ...S.input, flex:1 }} type={showKey?'text':'password'} value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="sk-ant-api03-…" />
+          <button style={{ ...S.btnSm(C.panel), color:C.muted, border:`1px solid ${C.border}`, fontSize:16 }} onClick={()=>setShowKey(s=>!s)}>{showKey?'🙈':'👁️'}</button>
+        </div>
+        <button style={S.btn()} onClick={saveKey}>{saved?'Saved ✓':'Save Key'}</button>
+      </div>
+
+      {/* Workers */}
+      {isAdmin && (
+        <div style={S.card}>
+          <div style={S.cardTitle}>Team ({workers.length})</div>
+          {workers.map(w=>(
+            <div key={w.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 0', borderTop:`1px solid ${C.border}` }}>
+              <div style={{ flex:1 }}>
+                <div style={{ fontWeight:600, fontSize:14 }}>{w.name||'Unnamed'}</div>
+                <div style={{ fontSize:12, color:C.muted }}>{w.role==='admin'?'🔑 Admin':'👷 Worker'}</div>
+              </div>
+              <button style={{ ...S.btnSm(w.role==='admin'?C.orange:C.accent), fontSize:11, padding:'6px 10px', background:w.role==='admin'?'#fff4ef':'#eff6ff', color:w.role==='admin'?C.accent:C.blue, border:`1px solid ${w.role==='admin'?C.accent+'44':C.blue+'44'}` }} onClick={()=>toggleRole(w)}>
+                {w.role==='admin'?'→ Worker':'→ Admin'}
+              </button>
+              <button style={{ ...S.btnSm(C.red), background:'#fef2f2', color:C.red, border:`1px solid #fca5a5`, fontSize:11, padding:'6px 10px' }} onClick={()=>removeWorker(w)}>Remove</button>
+            </div>
+          ))}
+          {workers.length===0 && <div style={{ fontSize:13, color:C.muted, fontStyle:'italic' }}>No team members yet</div>}
+          <div style={{ marginTop:12, background:C.panel, borderRadius:10, padding:12, fontSize:12, color:C.muted, lineHeight:1.7 }}>
+            Workers can: add parts, upload photos, download CSV{'\n'}
+            Workers cannot: see costs/profit, manage team
+          </div>
+        </div>
+      )}
+
+      <div style={{ textAlign:'center', fontSize:11, color:C.muted, padding:'8px 0 20px' }}>PartVault Mobile v{APP_VERSION}</div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  APP ROOT
+// ═══════════════════════════════════════════════════════════════════════════
+function App() {
+  const [session, setSession]     = useState(null);
+  const [profile, setProfile]     = useState(null);
+  const [loading, setLoading]     = useState(true);
+  const [tab, setTab]             = useState('sessions');
+  const [openSessionId, setOpenSessionId] = useState(null);
+
+  useEffect(()=>{
+    sb.auth.getSession().then(({data:{session}})=>{
+      setSession(session);
+      if (session) loadProfile();
+      else setLoading(false);
+    });
+    const { data:{subscription} } = sb.auth.onAuthStateChange((_,s)=>{
+      setSession(s);
+      if (s) loadProfile();
+      else { setProfile(null); setLoading(false); }
+    });
+    return ()=>subscription.unsubscribe();
+  },[]);
+
+  const loadProfile = async () => {
+    const { data, error } = await sb.rpc('get_my_profile');
+    if (!error && data?.length>0) {
+      const r = data[0];
+      setProfile({ user_id:r.user_id, store_id:r.store_id, role:r.role, name:r.name, store:{ id:r.store_id, name:r.store_name, join_code:r.join_code } });
+    }
+    setLoading(false);
+  };
+
+  const isAdmin = profile?.role==='admin';
+
+  if (loading) return (
+    <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', background:C.bg, minHeight:'100vh' }}>
+      <div className="spin" style={{ fontSize:32 }}>⚙</div>
+    </div>
+  );
+
+  if (!session) return <AuthScreen />;
+
+  // Session workflow screen
+  if (openSessionId) return (
+    <SessionScreen sessionId={openSessionId} profile={profile} onBack={()=>setOpenSessionId(null)} />
+  );
+
+  const TABS = [
+    { id:'sessions', icon:'📸', label:'Sessions' },
+    { id:'parts',    icon:'📦', label:'Parts' },
+    { id:'account',  icon:'👤', label:'Account' },
+  ];
+
+  return (
+    <div id="root" style={{ display:'flex', flexDirection:'column', height:'100vh' }}>
+      {/* Nav */}
+      <div style={{ ...S.nav, flexShrink:0 }}>
+        <span style={S.navTitle}>⚙ PartVault</span>
+        <span style={{ fontSize:11, color:'rgba(255,255,255,0.4)' }}>v{APP_VERSION}</span>
+      </div>
+
+      {/* Content */}
+      <div style={{ flex:1, overflow:'hidden', display:'flex', flexDirection:'column' }}>
+        {tab==='sessions' && <SessionsTab profile={profile} onOpenSession={id=>{ setOpenSessionId(id); }} />}
+        {tab==='parts'    && <PartsTab profile={profile} isAdmin={isAdmin} />}
+        {tab==='account'  && <AccountTab profile={profile} isAdmin={isAdmin} />}
+      </div>
+
+      {/* Tab bar */}
+      <div style={S.tabBar}>
+        {TABS.map(t=>(
+          <button key={t.id} style={S.tabBtn(tab===t.id)} onClick={()=>setTab(t.id)}>
+            <span style={S.tabIcon}>{t.icon}</span>
+            <span style={S.tabLabel(tab===t.id)}>{t.label}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
