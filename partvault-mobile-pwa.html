@@ -161,19 +161,39 @@ function AuthScreen() {
     try {
       const { data, error } = await sb.auth.signUp({ email, password:pass });
       if (error) throw error;
-      await new Promise(r => setTimeout(r, 800));
+      if (!data.user) throw new Error('Signup failed — check your email and try again');
+
+      // Sign in immediately to get a valid session before inserting
+      const { error: signInErr } = await sb.auth.signInWithPassword({ email, password:pass });
+      if (signInErr) {
+        // If email confirmation required, guide user
+        setErr('Account created! Check your email to verify, then sign in.');
+        setLoading(false);
+        return;
+      }
+
+      // Wait for session to settle
+      await new Promise(r => setTimeout(r, 1200));
+
       if (!join) {
-        const jc = Math.random().toString(36).slice(2,8).toUpperCase();
-        const { data:st, error:se } = await sb.from('stores').insert({ name:store, join_code:jc, created_by:data.user.id }).select().single();
-        if (se) throw se;
-        await sb.from('profiles').insert({ user_id:data.user.id, store_id:st.id, role:'admin', name });
+        // Generate a 6-char join code
+        const jc = Array.from({length:6}, ()=>'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random()*32)]).join('');
+        // Insert store WITHOUT created_by to avoid FK timing issues
+        const { data:st, error:se } = await sb.from('stores').insert({ name:store, join_code:jc }).select().single();
+        if (se) throw new Error('Could not create store: ' + se.message);
+        // Insert profile
+        const { error:pe } = await sb.from('profiles').insert({ user_id:data.user.id, store_id:st.id, role:'admin', name });
+        if (pe) throw new Error('Could not create profile: ' + pe.message);
+        // Update store with created_by now that user exists in session
+        await sb.from('stores').update({ created_by:data.user.id }).eq('id', st.id);
       } else {
         const { data:st, error:se } = await sb.from('stores').select().eq('join_code', code.toUpperCase()).single();
-        if (se||!st) throw new Error('Invalid join code');
-        await sb.from('profiles').insert({ user_id:data.user.id, store_id:st.id, role:'worker', name });
+        if (se||!st) throw new Error('Invalid join code — check with your admin');
+        const { error:pe } = await sb.from('profiles').insert({ user_id:data.user.id, store_id:st.id, role:'worker', name });
+        if (pe) throw new Error('Could not join store: ' + pe.message);
       }
       window.location.reload();
-    } catch(e) { setErr(e.message); }
+    } catch(e) { setErr(e.message || 'An error occurred'); }
     setLoading(false);
   };
 
