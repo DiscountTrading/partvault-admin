@@ -696,8 +696,12 @@ function CarScreen({car,profile,onHome,T,S,settings}){
       }catch(e){console.warn('AI failed for part',part.id,e);}
       await new Promise(r=>setTimeout(r,500));
     }
-    setBulkProgress(p=>({...p,done:pending.length,current:''}));
+   setBulkProgress(p=>({...p,done:pending.length,current:''}));
     setBulkGenerating(false);
+    // Refresh parts from Supabase
+    const{data}=await sb.from('parts').select('*').eq('car_id',car.id).is('deleted_at',null).order('created_at',{ascending:false});
+    if(data)setParts(data);
+  };
   };
 
   const saveDraft=async p=>{
