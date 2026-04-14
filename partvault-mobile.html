@@ -39,7 +39,7 @@ const{useState,useEffect,useRef,useCallback,useMemo}=React;
 const SUPABASE_URL='https://mtpektsxaklhedknincs.supabase.co';
 const SUPABASE_KEY='sb_publishable_STtCN1zWydiIFtgHR1Yn5g_n9YBH102';
 const AI_PROXY='https://partvault-proxy.leap00.workers.dev';
-const APP_VERSION='3.4.0';
+const APP_VERSION='3.4.1';
 
 const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{
   auth:{
@@ -672,7 +672,19 @@ function CarScreen({car,profile,onHome,T,S,settings}){
 
   const buildAIPrompt=part=>{
     const lengthGuide={short:'2-3 sentences covering key facts',medium:'1-2 paragraphs with good detail',long:'comprehensive description with full fitment, condition detail, and part specifics'}[aiSettings.descriptionLength||'medium'];
-    return `You are writing an eBay listing description for a used Australian auto part.\nPart: ${part.title||'Unknown'}\nMake: ${part.make||car.make||''}\nModel: ${part.model||car.model||''}\nYear (donor): ${part.year||car.year||''}\nCategory: ${part.category||''} > ${part.subcategory||''}\nCondition: ${part.condition||'Used - Good'}\nOEM Part Number: ${part.part_number||'Not specified'}\n\nWrite a ${lengthGuide}.\nInclude: ${[aiSettings.includeYearRange&&'year range compatibility (research which years this part suits beyond just the donor car year — accuracy is critical)',aiSettings.includeSeries&&'series/badge variant if relevant',aiSettings.includePartNumber&&'OEM part number if known',aiSettings.includeConditionDetail&&'condition detail'].filter(Boolean).join(', ')}.\n${aiSettings.customPromptNotes?'Additional: '+aiSettings.customPromptNotes:''}\nDo NOT include a store footer. Plain text only. Return ONLY the description.`;
+    const includes=[aiSettings.includeYearRange&&'year range compatibility (research which years this part suits beyond just the donor car year — accuracy is critical)',aiSettings.includeSeries&&'series/badge variant if relevant',aiSettings.includePartNumber&&'OEM part number if known',aiSettings.includeConditionDetail&&'condition detail'].filter(Boolean).join(', ');
+    return 'You are writing an eBay listing description for a used Australian auto part.\n'
+      +'Part: '+(part.title||'Unknown')+'\n'
+      +'Make: '+(part.make||car.make||'')+'\n'
+      +'Model: '+(part.model||car.model||'')+'\n'
+      +'Year (donor): '+(part.year||car.year||'')+'\n'
+      +'Category: '+(part.category||'')+' > '+(part.subcategory||'')+'\n'
+      +'Condition: '+(part.condition||'Used - Good')+'\n'
+      +'OEM Part Number: '+(part.part_number||'Not specified')+'\n\n'
+      +'Write a '+lengthGuide+'.\n'
+      +'Include: '+includes+'.\n'
+      +(aiSettings.customPromptNotes?'Additional: '+aiSettings.customPromptNotes+'\n':'')
+      +'Do NOT include a store footer. Plain text only. Return ONLY the description.';
   };
 
   const handleBulkAI=async()=>{
@@ -696,12 +708,8 @@ function CarScreen({car,profile,onHome,T,S,settings}){
       }catch(e){console.warn('AI failed for part',part.id,e);}
       await new Promise(r=>setTimeout(r,500));
     }
-   setBulkProgress(p=>({...p,done:pending.length,current:''}));
+    setBulkProgress(p=>({...p,done:pending.length,current:''}));
     setBulkGenerating(false);
-    // Refresh parts from Supabase
-    const{data}=await sb.from('parts').select('*').eq('car_id',car.id).is('deleted_at',null).order('created_at',{ascending:false});
-    if(data)setParts(data);
-  };
   };
 
   const saveDraft=async p=>{
