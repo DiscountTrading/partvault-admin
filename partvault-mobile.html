@@ -39,7 +39,7 @@ const{useState,useEffect,useRef,useCallback,useMemo}=React;
 const SUPABASE_URL='https://mtpektsxaklhedknincs.supabase.co';
 const SUPABASE_KEY='sb_publishable_STtCN1zWydiIFtgHR1Yn5g_n9YBH102';
 const AI_PROXY='https://partvault-proxy.leap00.workers.dev';
-const APP_VERSION='3.4.1';
+const APP_VERSION='3.4.2';
 
 const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{
   auth:{
@@ -177,14 +177,24 @@ function AuthScreen({T,S}){
   const[mode,setMode]=useState('login');
   const[loading,setLoading]=useState(false);
   const[err,setErr]=useState('');
-  const[magicSent,setMagicSent]=useState(false);
+  const[otpSent,setOtpSent]=useState(false);
+  const[otp,setOtp]=useState('');
+  const[verifying,setVerifying]=useState(false);
 
-  const sendMagic=async()=>{
+  const sendOtp=async()=>{
     if(!email){setErr('Enter your email');return;}
     setLoading(true);setErr('');
-    const{error}=await sb.auth.signInWithOtp({email,options:{emailRedirectTo:window.location.href}});
-    if(error)setErr(error.message);else setMagicSent(true);
+    const{error}=await sb.auth.signInWithOtp({email,options:{shouldCreateUser:false}});
+    if(error)setErr(error.message);else setOtpSent(true);
     setLoading(false);
+  };
+
+  const verifyOtp=async()=>{
+    if(!otp||otp.length<6){setErr('Enter the 6-digit code');return;}
+    setVerifying(true);setErr('');
+    const{error}=await sb.auth.verifyOtp({email,token:otp,type:'email'});
+    if(error)setErr(error.message);
+    setVerifying(false);
   };
 
   const login=async()=>{
@@ -207,12 +217,25 @@ function AuthScreen({T,S}){
     setLoading(false);
   };
 
-  if(magicSent)return(
+  if(otpSent)return(
     <div style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:32,background:T.bg,minHeight:'100vh',textAlign:'center'}}>
       <div style={{fontSize:64,marginBottom:16}}>📧</div>
-      <div style={{fontSize:22,fontWeight:800,color:T.text,marginBottom:12}}>Check your email</div>
-      <div style={{fontSize:14,color:T.muted,marginBottom:24,lineHeight:1.7}}>We sent a login link to <strong style={{color:T.text}}>{email}</strong>. Tap it to sign in.</div>
-      <button onClick={()=>setMagicSent(false)} style={{background:'none',border:'none',color:C.accent,fontSize:15,fontWeight:600}}>← Back</button>
+      <div style={{fontSize:22,fontWeight:800,color:T.text,marginBottom:8}}>Check your email</div>
+      <div style={{fontSize:14,color:T.muted,marginBottom:24,lineHeight:1.7}}>We sent a <strong style={{color:T.text}}>6-digit code</strong> to <strong style={{color:T.text}}>{email}</strong>. Enter it below — no need to leave the app.</div>
+      <div style={{width:'100%',maxWidth:340,display:'flex',flexDirection:'column',gap:12}}>
+        <input
+          style={{...S.input,fontSize:32,fontWeight:800,letterSpacing:12,textAlign:'center',padding:'16px 14px'}}
+          type="number" inputMode="numeric" pattern="[0-9]*" maxLength={6}
+          value={otp} onChange={e=>setOtp(e.target.value.slice(0,6))}
+          placeholder="000000" autoComplete="one-time-code" autoFocus
+        />
+        {err&&<div style={{color:C.red,fontSize:13,background:'#fef2f2',padding:12,borderRadius:10}}>{err}</div>}
+        <button style={S.btn(C.green)} onClick={verifyOtp} disabled={verifying||otp.length<6}>
+          {verifying?'Verifying...':'✓ Verify Code'}
+        </button>
+        <button onClick={()=>{setOtpSent(false);setOtp('');setErr('');}} style={{background:'none',border:'none',color:T.muted,fontSize:14,padding:'8px 0'}}>← Back</button>
+        <button onClick={sendOtp} style={{background:'none',border:'none',color:C.accent,fontSize:14,fontWeight:600}}>Resend code</button>
+      </div>
     </div>
   );
 
@@ -223,11 +246,11 @@ function AuthScreen({T,S}){
       <div style={{fontSize:13,color:T.muted,marginBottom:32}}>Australian Car Parts Manager</div>
       <div style={{width:'100%',maxWidth:380,display:'flex',flexDirection:'column',gap:12}}>
         <input style={S.input} type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email" autoComplete="email"/>
-        <button style={S.btn(C.purple)} onClick={sendMagic} disabled={loading}>{loading?'Sending...':'✉️ Send Magic Login Link'}</button>
+        <button style={S.btn(C.purple)} onClick={sendOtp} disabled={loading}>{loading?'Sending...':'✉️ Send 6-Digit Code'}</button>
         <div style={{textAlign:'center',fontSize:12,color:T.muted}}>— or sign in with password —</div>
         {mode==='login'?(
           <>
-            <input style={S.input} type="password" value={pass} onChange={e=>setPass(e.target.value)} placeholder="Password"/>
+            <input style={S.input} type="password" value={pass} onChange={e=>setPass(e.target.value)} placeholder="Password" autoComplete="current-password"/>
             {err&&<div style={{color:C.red,fontSize:13,background:'#fef2f2',padding:12,borderRadius:10}}>{err}</div>}
             <button style={S.btn()} onClick={login} disabled={loading}>{loading?'Signing in...':'Sign In with Password'}</button>
             <button onClick={()=>{setMode('signup');setErr('');}} style={{background:'none',border:'none',color:C.accent,fontSize:14,fontWeight:600}}>No account? Sign Up</button>
@@ -672,19 +695,7 @@ function CarScreen({car,profile,onHome,T,S,settings}){
 
   const buildAIPrompt=part=>{
     const lengthGuide={short:'2-3 sentences covering key facts',medium:'1-2 paragraphs with good detail',long:'comprehensive description with full fitment, condition detail, and part specifics'}[aiSettings.descriptionLength||'medium'];
-    const includes=[aiSettings.includeYearRange&&'year range compatibility (research which years this part suits beyond just the donor car year — accuracy is critical)',aiSettings.includeSeries&&'series/badge variant if relevant',aiSettings.includePartNumber&&'OEM part number if known',aiSettings.includeConditionDetail&&'condition detail'].filter(Boolean).join(', ');
-    return 'You are writing an eBay listing description for a used Australian auto part.\n'
-      +'Part: '+(part.title||'Unknown')+'\n'
-      +'Make: '+(part.make||car.make||'')+'\n'
-      +'Model: '+(part.model||car.model||'')+'\n'
-      +'Year (donor): '+(part.year||car.year||'')+'\n'
-      +'Category: '+(part.category||'')+' > '+(part.subcategory||'')+'\n'
-      +'Condition: '+(part.condition||'Used - Good')+'\n'
-      +'OEM Part Number: '+(part.part_number||'Not specified')+'\n\n'
-      +'Write a '+lengthGuide+'.\n'
-      +'Include: '+includes+'.\n'
-      +(aiSettings.customPromptNotes?'Additional: '+aiSettings.customPromptNotes+'\n':'')
-      +'Do NOT include a store footer. Plain text only. Return ONLY the description.';
+    return `You are writing an eBay listing description for a used Australian auto part.\nPart: ${part.title||'Unknown'}\nMake: ${part.make||car.make||''}\nModel: ${part.model||car.model||''}\nYear (donor): ${part.year||car.year||''}\nCategory: ${part.category||''} > ${part.subcategory||''}\nCondition: ${part.condition||'Used - Good'}\nOEM Part Number: ${part.part_number||'Not specified'}\n\nWrite a ${lengthGuide}.\nInclude: ${[aiSettings.includeYearRange&&'year range compatibility (research which years this part suits beyond just the donor car year — accuracy is critical)',aiSettings.includeSeries&&'series/badge variant if relevant',aiSettings.includePartNumber&&'OEM part number if known',aiSettings.includeConditionDetail&&'condition detail'].filter(Boolean).join(', ')}.\n${aiSettings.customPromptNotes?'Additional: '+aiSettings.customPromptNotes:''}\nDo NOT include a store footer. Plain text only. Return ONLY the description.`;
   };
 
   const handleBulkAI=async()=>{
