@@ -41,6 +41,32 @@ const SUPABASE_KEY='sb_publishable_STtCN1zWydiIFtgHR1Yn5g_n9YBH102';
 const AI_PROXY='https://partvault-proxy.leap00.workers.dev';
 const APP_VERSION='3.4.2';
 
+// ─── SERVICE WORKER (auto-update) ────────────────────────────
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>{
+    navigator.serviceWorker.register('/partvault-admin/sw-mobile.js').then(reg=>{
+      reg.addEventListener('updatefound',()=>{
+        const newWorker=reg.installing;
+        newWorker.addEventListener('statechange',()=>{
+          if(newWorker.state==='installed'&&navigator.serviceWorker.controller){
+            // New version available — show banner
+            const banner=document.createElement('div');
+            banner.id='update-banner';
+            banner.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1c1c1e;color:#fff;padding:12px 20px;border-radius:12px;font-size:14px;font-weight:600;z-index:9999;display:flex;align-items:center;gap:12px;box-shadow:0 8px 30px rgba(0,0,0,0.3);white-space:nowrap;font-family:Inter,system-ui,sans-serif';
+            banner.innerHTML='🔄 Update available <button onclick="navigator.serviceWorker.controller.postMessage({type:\'SKIP_WAITING\'});location.reload();" style="background:#e8590c;border:none;color:#fff;border-radius:8px;padding:6px 14px;cursor:pointer;font-size:13px;font-weight:700;font-family:inherit">Update Now</button>';
+            document.body.appendChild(banner);
+          }
+        });
+      });
+    }).catch(e=>console.log('SW registration failed:',e));
+    // Listen for controller change and reload
+    let refreshing=false;
+    navigator.serviceWorker.addEventListener('controllerchange',()=>{
+      if(!refreshing){refreshing=true;window.location.reload();}
+    });
+  });
+}
+
 const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{
   auth:{
     persistSession:true,
