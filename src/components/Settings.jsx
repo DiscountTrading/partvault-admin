@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { C, S, APP_VERSION } from '../lib/constants'
 import { sb } from '../lib/supabase'
 
@@ -28,6 +28,12 @@ const DESCRIPTION_LENGTH_OPTIONS = [
   { value: 'medium', label: 'Medium', desc: '1–2 paragraphs, good detail' },
   { value: 'long', label: 'Long', desc: 'Full description with all details' },
 ]
+
+// eBay OAuth config
+const EBAY_CLIENT_ID = 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
+const EBAY_RUNAME = 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
+const EBAY_OAUTH_URL = `https://auth.ebay.com/oauth2/authorize?client_id=${EBAY_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(EBAY_RUNAME)}&scope=${encodeURIComponent('https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.inventory.readonly https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly https://api.ebay.com/oauth/api_scope/sell.finances')}`
+const CLOUDFLARE_PROXY = 'https://partvault-proxy.leap00.workers.dev'
 
 function Section({ title, children }) {
   return (
@@ -71,9 +77,35 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const [loading, setLoading] = useState(true)
   const [previewOpen, setPreviewOpen] = useState(false)
 
+  // eBay state
+  const [ebayCreds, setEbayCreds] = useState({ appId: EBAY_CLIENT_ID, certId: '', ruName: EBAY_RUNAME })
+  const [showCert, setShowCert] = useState(false)
+  const [ebayConnected, setEbayConnected] = useState(false)
+  const [ebayExpiry, setEbayExpiry] = useState(null)
+  const [ebayTesting, setEbayTesting] = useState(false)
+  const [ebayTestResult, setEbayTestResult] = useState(null)
+  const [credsSaving, setCredsSaving] = useState(false)
+  const [credsSaved, setCredsSaved] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [importJob, setImportJob] = useState(null)
+  const [parsing, setParsing] = useState(false)
+  const pollRef = useRef(null)
+
   useEffect(() => {
     loadSettings()
+    // Check for OAuth callback code in URL
+    const params = new URLSearchParams(window.location.search)
+    const code = params.get('code')
+    if (code) {
+      handleOAuthCallback(code)
+      // Clean up URL
+      window.history.replaceState({}, '', window.location.pathname + '#settings-ebay')
+      setTab('ebay')
+    }
   }, [storeId])
+
+  // Cleanup poll on unmount
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
 
   const loadSettings = async () => {
     if (!storeId) return
@@ -82,6 +114,11 @@ export default function Settings({ profile, storeId, onSignOut }) {
       if (data?.settings) {
         if (data.settings.footer) setFooter(data.settings.footer)
         if (data.settings.aiDescription) setAiSettings(s => ({ ...s, ...data.settings.aiDescription }))
+        if (data.settings.ebayCreds) setEbayCreds(c => ({ ...c, ...data.settings.ebayCreds }))
+        if (data.settings.ebayOAuth?.accessToken) {
+          setEbayConnected(true)
+          setEbayExpiry(data.settings.ebayOAuth.expiresAt)
+        }
       }
     } catch (e) {
       console.error('Failed to load settings', e)
@@ -93,8 +130,8 @@ export default function Settings({ profile, storeId, onSignOut }) {
     if (!storeId) return
     setSaving(true)
     try {
-      const current = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const merged = { ...(current.data?.settings || {}), footer, aiDescription: aiSettings }
+      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      const merged = { ...(current?.settings || {}), footer, aiDescription: aiSettings }
       await sb.from('stores').update({ settings: merged }).eq('id', storeId)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
@@ -104,13 +141,198 @@ export default function Settings({ profile, storeId, onSignOut }) {
     setSaving(false)
   }
 
+  const saveEbayCreds = async () => {
+    if (!storeId) return
+    setCredsSaving(true)
+    try {
+      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      const merged = { ...(current?.settings || {}), ebayCreds }
+      await sb.from('stores').update({ settings: merged }).eq('id', storeId)
+      setCredsSaved(true)
+      setTimeout(() => setCredsSaved(false), 2000)
+    } catch (e) {
+      console.error('Save creds failed', e)
+    }
+    setCredsSaving(false)
+  }
+
+  // Exchange auth code for tokens via Cloudflare proxy, then save to Supabase
+  const handleOAuthCallback = async (code) => {
+    try {
+      const res = await fetch(`${CLOUDFLARE_PROXY}/ebay/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, certId: ebayCreds.certId }),
+      })
+      const tokens = await res.json()
+      if (!tokens.access_token) throw new Error(tokens.error || 'No token returned')
+
+      const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString()
+      const ebayOAuth = {
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token,
+        expiresAt,
+        expiresIn: tokens.expires_in,
+      }
+
+      // Save to Supabase store settings
+      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      const merged = { ...(current?.settings || {}), ebayOAuth, ebayCreds }
+      await sb.from('stores').update({ settings: merged }).eq('id', storeId)
+
+      setEbayConnected(true)
+      setEbayExpiry(expiresAt)
+      setEbayTestResult({ ok: true, msg: 'Connected to eBay successfully!' })
+    } catch (e) {
+      console.error('OAuth callback failed', e)
+      setEbayTestResult({ ok: false, msg: `Connection failed: ${e.message}` })
+    }
+  }
+
+  const connectEbay = () => {
+    if (!ebayCreds.certId) {
+      setEbayTestResult({ ok: false, msg: 'Please enter your Cert ID first and save credentials.' })
+      return
+    }
+    window.location.href = EBAY_OAUTH_URL
+  }
+
+  const disconnectEbay = async () => {
+    try {
+      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      const merged = { ...(current?.settings || {}), ebayOAuth: null }
+      await sb.from('stores').update({ settings: merged }).eq('id', storeId)
+      setEbayConnected(false)
+      setEbayExpiry(null)
+      setEbayTestResult(null)
+    } catch (e) {
+      console.error('Disconnect failed', e)
+    }
+  }
+
+  const testEbayConnection = async () => {
+    setEbayTesting(true)
+    setEbayTestResult(null)
+    try {
+      // Get fresh token from store settings via Edge Function or direct proxy call
+      const { data: store } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      const token = store?.settings?.ebayOAuth?.accessToken
+      if (!token) throw new Error('No token — please reconnect')
+
+      const res = await fetch(`${CLOUDFLARE_PROXY}/ebay/trading`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/xml',
+          'Authorization': `Bearer ${token}`,
+          'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling',
+          'X-EBAY-API-APP-NAME': ebayCreds.appId,
+          'X-EBAY-API-CERT-NAME': ebayCreds.certId,
+          'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+          'X-EBAY-API-SITEID': '15',
+        },
+        body: `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents"><ActiveList><Include>true</Include><Pagination><EntriesPerPage>1</EntriesPerPage><PageNumber>1</PageNumber></Pagination></ActiveList></GetMyeBaySellingRequest>`,
+      })
+      const text = await res.text()
+      if (text.includes('Success') || text.includes('TotalNumberOfEntries')) {
+        const match = text.match(/<TotalNumberOfEntries>(\d+)<\/TotalNumberOfEntries>/)
+        const count = match ? match[1] : '?'
+        setEbayTestResult({ ok: true, msg: `Connected — ${count} active listings found` })
+      } else if (text.includes('Invalid access token')) {
+        setEbayTestResult({ ok: false, msg: 'Token expired — please reconnect' })
+        setEbayConnected(false)
+      } else {
+        setEbayTestResult({ ok: false, msg: 'Unexpected response from eBay' })
+      }
+    } catch (e) {
+      setEbayTestResult({ ok: false, msg: `Failed: ${e.message}` })
+    }
+    setEbayTesting(false)
+  }
+
+  // Import all eBay listings via Edge Function
+  const importAllListings = async () => {
+    setImporting(true)
+    setImportJob({ status: 'starting', current_item: 'Starting import...' })
+    try {
+      const res = await fetch(`https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'start', storeId }),
+      })
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+
+      const jobId = data.jobId
+      // Poll for status
+      pollRef.current = setInterval(async () => {
+        try {
+          const pollRes = await fetch(`https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'status', jobId, storeId }),
+          })
+          const job = await pollRes.json()
+          setImportJob(job)
+          if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
+            clearInterval(pollRef.current)
+            setImporting(false)
+          }
+        } catch (e) {
+          console.error('Poll error', e)
+        }
+      }, 3000)
+    } catch (e) {
+      setImportJob({ status: 'failed', error_message: e.message })
+      setImporting(false)
+    }
+  }
+
+  const cancelImport = async () => {
+    if (!importJob?.id) return
+    clearInterval(pollRef.current)
+    await fetch(`https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'cancel', jobId: importJob.id, storeId }),
+    })
+    setImporting(false)
+    setImportJob(j => ({ ...j, status: 'cancelled' }))
+  }
+
+  const parseMakeModelYear = async () => {
+    setParsing(true)
+    try {
+      const apiKey = localStorage.getItem('pv_api_key')
+      if (!apiKey) { alert('No Anthropic API key saved. Set it in localStorage as pv_api_key.'); setParsing(false); return }
+      const { data: parts } = await sb.from('parts').select('id,title,make,model,year').eq('store_id', storeId).is('make', null).limit(10)
+      if (!parts?.length) { alert('No unprocessed parts found.'); setParsing(false); return }
+      for (const part of parts) {
+        const res = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+          body: JSON.stringify({
+            model: 'claude-haiku-4-5-20251001', max_tokens: 200,
+            messages: [{ role: 'user', content: `Extract make, model, and year range from this eBay car parts listing title. Return JSON only: {"make":"","model":"","year_from":null,"year_to":null}\n\nTitle: ${part.title}` }]
+          })
+        })
+        const d = await res.json()
+        const text = d.content?.[0]?.text || '{}'
+        try {
+          const parsed = JSON.parse(text.replace(/```json|```/g, '').trim())
+          await sb.from('parts').update({ make: parsed.make || null, model: parsed.model || null, year_from: parsed.year_from || null, year_to: parsed.year_to || null }).eq('id', part.id)
+        } catch {}
+        await new Promise(r => setTimeout(r, 300))
+      }
+      alert(`Processed ${parts.length} parts.`)
+    } catch (e) {
+      alert(`Parse failed: ${e.message}`)
+    }
+    setParsing(false)
+  }
+
   const setAi = (k, v) => setAiSettings(s => ({ ...s, [k]: v }))
 
   const previewDescription = () => {
-    const parts = []
-    if (aiSettings.includeMake) parts.push('[Make]')
-    if (aiSettings.includeModel) parts.push('[Model]')
-    if (aiSettings.includeSeries) parts.push('[Series/Badge]')
     const yearRange = aiSettings.includeYearRange ? 'Suits [XXXX]–[XXXX] models (AI-determined)' : ''
     const partDesc = {
       short: 'Genuine OEM [Part Name] in [Condition] condition.',
@@ -134,16 +356,18 @@ export default function Settings({ profile, storeId, onSignOut }) {
     { id: 'ebay', label: '🛒 eBay Sync' },
   ]
 
+  const importProgress = importJob ? (() => {
+    const total = importJob.total_ids || 0
+    const done = importJob.imported_count || 0
+    return total > 0 ? Math.round((done / total) * 100) : 0
+  })() : 0
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, paddingBottom: 16, borderBottom: `1px solid ${C.border}` }}>
         <h2 style={S.h1}>⚙️ Settings</h2>
-        {(tab === 'descriptions') && (
-          <button
-            style={{ ...S.btn(), opacity: saving ? 0.6 : 1 }}
-            onClick={saveSettings}
-            disabled={saving}
-          >
+        {tab === 'descriptions' && (
+          <button style={{ ...S.btn(), opacity: saving ? 0.6 : 1 }} onClick={saveSettings} disabled={saving}>
             {saving ? 'Saving...' : saved ? '✓ Saved' : 'Save Settings'}
           </button>
         )}
@@ -152,17 +376,13 @@ export default function Settings({ profile, storeId, onSignOut }) {
       {/* Sub-tabs */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: `2px solid ${C.border}`, paddingBottom: 0 }}>
         {SETTING_TABS.map(t => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            style={{
-              background: 'none', border: 'none', cursor: 'pointer',
-              padding: '8px 18px', fontSize: 13, fontWeight: tab === t.id ? 700 : 500,
-              color: tab === t.id ? C.accent : C.muted,
-              borderBottom: tab === t.id ? `2px solid ${C.accent}` : '2px solid transparent',
-              marginBottom: -2, transition: 'all .15s'
-            }}
-          >{t.label}</button>
+          <button key={t.id} onClick={() => setTab(t.id)} style={{
+            background: 'none', border: 'none', cursor: 'pointer',
+            padding: '8px 18px', fontSize: 13, fontWeight: tab === t.id ? 700 : 500,
+            color: tab === t.id ? C.accent : C.muted,
+            borderBottom: tab === t.id ? `2px solid ${C.accent}` : '2px solid transparent',
+            marginBottom: -2, transition: 'all .15s'
+          }}>{t.label}</button>
         ))}
       </div>
 
@@ -183,7 +403,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
               <div>Changes from the mobile app appear instantly.</div>
             </div>
           </Section>
-          <div style={{ ...S.card }}>
+          <div style={S.card}>
             <div style={{ fontSize: 12, color: C.muted }}>PartVault Admin v{APP_VERSION}</div>
           </div>
         </>
@@ -194,91 +414,55 @@ export default function Settings({ profile, storeId, onSignOut }) {
         <>
           <Section title="🤖 AI Description Template">
             <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
-              Configure what information the AI includes when generating part descriptions. The AI will attempt to determine the correct year range compatibility — this is editable after generation.
+              Configure what information the AI includes when generating part descriptions.
             </p>
-
             <div style={{ marginBottom: 20 }}>
               <label style={S.label}>Description Length</label>
               <div style={{ display: 'flex', gap: 8 }}>
                 {DESCRIPTION_LENGTH_OPTIONS.map(opt => (
-                  <button
-                    key={opt.value}
-                    onClick={() => setAi('descriptionLength', opt.value)}
-                    style={{
-                      flex: 1, padding: '10px 8px', borderRadius: 8, cursor: 'pointer', textAlign: 'center',
-                      border: `2px solid ${aiSettings.descriptionLength === opt.value ? C.accent : C.border}`,
-                      background: aiSettings.descriptionLength === opt.value ? C.accent + '15' : '#fff',
-                      color: aiSettings.descriptionLength === opt.value ? C.accent : C.text,
-                    }}
-                  >
+                  <button key={opt.value} onClick={() => setAi('descriptionLength', opt.value)} style={{
+                    flex: 1, padding: '10px 8px', borderRadius: 8, cursor: 'pointer', textAlign: 'center',
+                    border: `2px solid ${aiSettings.descriptionLength === opt.value ? C.accent : C.border}`,
+                    background: aiSettings.descriptionLength === opt.value ? C.accent + '15' : '#fff',
+                    color: aiSettings.descriptionLength === opt.value ? C.accent : C.text,
+                  }}>
                     <div style={{ fontWeight: 700, fontSize: 13 }}>{opt.label}</div>
                     <div style={{ fontSize: 11, color: C.muted, marginTop: 3 }}>{opt.desc}</div>
                   </button>
                 ))}
               </div>
             </div>
-
             <Toggle label="Include Make" value={aiSettings.includeMake} onChange={v => setAi('includeMake', v)} />
             <Toggle label="Include Model" value={aiSettings.includeModel} onChange={v => setAi('includeModel', v)} />
             <Toggle label="Include Series/Badge" desc="e.g. GLX, Sport, Executive" value={aiSettings.includeSeries} onChange={v => setAi('includeSeries', v)} />
-            <Toggle
-              label="Include Year Range Compatibility"
-              desc="AI determines which years this part suits — not just the donor car year. Critical for sales."
-              value={aiSettings.includeYearRange}
-              onChange={v => setAi('includeYearRange', v)}
-            />
+            <Toggle label="Include Year Range Compatibility" desc="AI determines which years this part suits — critical for sales." value={aiSettings.includeYearRange} onChange={v => setAi('includeYearRange', v)} />
             <Toggle label="Include OEM Part Number" value={aiSettings.includePartNumber} onChange={v => setAi('includePartNumber', v)} />
             <Toggle label="Include Condition Detail" desc="Describes visible wear based on condition field" value={aiSettings.includeConditionDetail} onChange={v => setAi('includeConditionDetail', v)} />
-            <Toggle
-              label="Include Installation Guide Link"
-              desc="Adds a link with disclaimer recommending professional installation"
-              value={aiSettings.includeInstallLink}
-              onChange={v => setAi('includeInstallLink', v)}
-            />
-
+            <Toggle label="Include Installation Guide Link" desc="Adds a link with disclaimer recommending professional installation" value={aiSettings.includeInstallLink} onChange={v => setAi('includeInstallLink', v)} />
             {aiSettings.includeInstallLink && (
               <div style={{ marginTop: 12 }}>
                 <label style={S.label}>Installation Guide URL</label>
-                <input
-                  style={S.input}
-                  placeholder="https://..."
-                  value={aiSettings.installLinkUrl}
-                  onChange={e => setAi('installLinkUrl', e.target.value)}
-                />
+                <input style={S.input} placeholder="https://..." value={aiSettings.installLinkUrl} onChange={e => setAi('installLinkUrl', e.target.value)} />
               </div>
             )}
-
             <div style={{ marginTop: 16 }}>
               <label style={S.label}>Additional Notes for AI (optional)</label>
-              <textarea
-                style={{ ...S.textarea, minHeight: 70 }}
-                placeholder="e.g. Always mention free returns. Avoid using the word 'used' — say 'pre-owned' instead."
-                value={aiSettings.customPromptNotes}
-                onChange={e => setAi('customPromptNotes', e.target.value)}
-              />
+              <textarea style={{ ...S.textarea, minHeight: 70 }} placeholder="e.g. Always mention free returns. Avoid using the word 'used' — say 'pre-owned' instead." value={aiSettings.customPromptNotes} onChange={e => setAi('customPromptNotes', e.target.value)} />
             </div>
           </Section>
 
           <Section title="📄 Standard Footer">
             <p style={{ fontSize: 13, color: C.muted, marginBottom: 12, lineHeight: 1.6 }}>
-              This text is appended to every listing description below the AI-generated content. Edit it to match your store's policies and tone.
+              This text is appended to every listing description below the AI-generated content.
             </p>
-            <textarea
-              style={{ ...S.textarea, minHeight: 240, fontFamily: 'inherit', fontSize: 13, lineHeight: 1.7 }}
-              value={footer}
-              onChange={e => setFooter(e.target.value)}
-            />
+            <textarea style={{ ...S.textarea, minHeight: 240, fontFamily: 'inherit', fontSize: 13, lineHeight: 1.7 }} value={footer} onChange={e => setFooter(e.target.value)} />
           </Section>
 
           <Section title="👁 Description Preview">
             <p style={{ fontSize: 13, color: C.muted, marginBottom: 12 }}>
-              This is how a generated listing will look with your current settings. Placeholders shown in [brackets] will be filled in by AI.
+              Placeholders in [brackets] will be filled by AI.
             </p>
-            <div style={{
-              background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 8,
-              padding: 16, fontSize: 13, lineHeight: 1.8, whiteSpace: 'pre-wrap',
-              color: C.text, fontFamily: 'inherit', maxHeight: 400, overflowY: 'auto'
-            }}>
+            <div style={{ background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 8, padding: 16, fontSize: 13, lineHeight: 1.8, whiteSpace: 'pre-wrap', color: C.text, fontFamily: 'inherit', maxHeight: 400, overflowY: 'auto' }}>
               {previewDescription()}
             </div>
           </Section>
@@ -287,37 +471,145 @@ export default function Settings({ profile, storeId, onSignOut }) {
 
       {/* EBAY SYNC TAB */}
       {tab === 'ebay' && (
-        <Section title="🛒 eBay Sync">
-          <div style={{ background: '#fffbeb', border: `1px solid #fde68a`, borderRadius: 8, padding: 16, marginBottom: 20 }}>
-            <div style={{ fontWeight: 700, color: '#92400e', marginBottom: 6 }}>⚠️ Read-Only Mode</div>
-            <div style={{ fontSize: 13, color: '#78350f', lineHeight: 1.6 }}>
-              eBay sync is currently read-only. You can compare PartVault inventory against your live eBay listings and download data, but all eBay changes must be made via CSV upload or directly in eBay Seller Hub. Write access will be added in a future update with appropriate disclaimers.
+        <>
+          {/* Credentials */}
+          <Section title="🔑 eBay API Credentials">
+            <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
+              Read-only access — stored in Supabase
+            </p>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+              <div>
+                <label style={S.label}>App ID (Client ID)</label>
+                <input style={S.input} value={ebayCreds.appId} onChange={e => setEbayCreds(c => ({ ...c, appId: e.target.value }))} placeholder="App ID" />
+              </div>
+              <div>
+                <label style={S.label}>RuName</label>
+                <input style={S.input} value={ebayCreds.ruName} onChange={e => setEbayCreds(c => ({ ...c, ruName: e.target.value }))} placeholder="RuName" />
+              </div>
             </div>
-          </div>
-          <div style={{ fontSize: 14, color: C.muted, marginBottom: 20, lineHeight: 1.7 }}>
-            <div style={{ marginBottom: 8 }}>To enable eBay sync you'll need an eBay Developer account:</div>
-            <ol style={{ paddingLeft: 20, lineHeight: 2 }}>
-              <li>Register at <strong>developer.ebay.com</strong> once your business name is confirmed</li>
-              <li>Create an application and obtain your App ID, Cert ID, and OAuth token</li>
-              <li>Enter credentials here to activate read sync</li>
-            </ol>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
-            <div>
-              <label style={S.label}>App ID (Client ID)</label>
-              <input style={{ ...S.input, opacity: 0.5 }} placeholder="Not yet configured" disabled />
-            </div>
-            <div>
+            <div style={{ marginBottom: 16 }}>
               <label style={S.label}>Cert ID (Client Secret)</label>
-              <input style={{ ...S.input, opacity: 0.5 }} placeholder="Not yet configured" disabled />
+              <div style={{ position: 'relative' }}>
+                <input
+                  style={{ ...S.input, paddingRight: 60 }}
+                  type={showCert ? 'text' : 'password'}
+                  value={ebayCreds.certId}
+                  onChange={e => setEbayCreds(c => ({ ...c, certId: e.target.value }))}
+                  placeholder="Cert ID"
+                />
+                <button onClick={() => setShowCert(s => !s)} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: C.muted, fontSize: 12 }}>
+                  {showCert ? 'Hide' : 'Show'}
+                </button>
+              </div>
             </div>
-          </div>
-          <div style={{ marginBottom: 16 }}>
-            <label style={S.label}>OAuth User Token</label>
-            <input style={{ ...S.input, opacity: 0.5 }} placeholder="Not yet configured" disabled />
-          </div>
-          <button style={{ ...S.btn('secondary'), opacity: 0.5 }} disabled>Connect eBay (Coming Soon)</button>
-        </Section>
+            <button
+              style={{ ...S.btn('primary'), opacity: credsSaving ? 0.6 : 1 }}
+              onClick={saveEbayCreds}
+              disabled={credsSaving}
+            >
+              {credsSaving ? 'Saving...' : credsSaved ? '✓ Saved' : 'Save Credentials'}
+            </button>
+          </Section>
+
+          {/* Connection */}
+          <Section title="🔗 eBay Connection">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, padding: 16, background: ebayConnected ? '#f0fdf4' : '#fafaf9', border: `1px solid ${ebayConnected ? '#86efac' : C.border}`, borderRadius: 8 }}>
+              <div style={{ width: 12, height: 12, borderRadius: '50%', background: ebayConnected ? C.green : C.muted, flexShrink: 0 }} />
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 14, color: ebayConnected ? C.green : C.muted }}>
+                  {ebayConnected ? 'Connected to eBay' : 'Not connected'}
+                </div>
+                {ebayConnected && ebayExpiry && (
+                  <div style={{ fontSize: 12, color: C.muted }}>
+                    Expires: {new Date(ebayExpiry).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {ebayTestResult && (
+              <div style={{ padding: 12, borderRadius: 8, marginBottom: 12, background: ebayTestResult.ok ? '#f0fdf4' : '#fef2f2', border: `1px solid ${ebayTestResult.ok ? '#86efac' : '#fca5a5'}`, fontSize: 13, color: ebayTestResult.ok ? C.green : C.red }}>
+                {ebayTestResult.ok ? '✓ ' : '✗ '}{ebayTestResult.msg}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                style={{ ...S.btn('blue'), flex: 1, opacity: ebayTesting ? 0.6 : 1 }}
+                onClick={testEbayConnection}
+                disabled={ebayTesting || !ebayConnected}
+              >
+                {ebayTesting ? 'Testing...' : 'Test'}
+              </button>
+              {ebayConnected ? (
+                <button style={{ ...S.btn('danger'), flex: 1 }} onClick={disconnectEbay}>Disconnect</button>
+              ) : (
+                <button style={{ ...S.btn('primary'), flex: 1 }} onClick={connectEbay}>Connect eBay</button>
+              )}
+            </div>
+          </Section>
+
+          {/* Import */}
+          <Section title="📦 Onboarding Import">
+            <div style={{ background: '#fffbeb', border: `1px solid #fde68a`, borderRadius: 8, padding: 14, marginBottom: 16 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, color: '#92400e', marginBottom: 4 }}>⚠️ One-time step</div>
+              <div style={{ fontSize: 13, color: '#78350f', lineHeight: 1.6 }}>
+                Pulls ALL listings — active, sold and withdrawn — to build your complete eBay history. Runs in the background so you can close this page. Already-imported listings are skipped automatically.
+              </div>
+            </div>
+
+            {importJob && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6 }}>
+                  <span style={{ color: C.text, fontWeight: 500 }}>{importJob.current_item || 'Processing...'}</span>
+                  <span style={{ color: C.muted }}>{importJob.imported_count || 0}/{importJob.total_ids || '?'}</span>
+                </div>
+                <div style={{ height: 8, background: C.border, borderRadius: 4, overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${importProgress}%`, background: importJob.status === 'completed' ? C.green : C.accent, borderRadius: 4, transition: 'width 0.5s' }} />
+                </div>
+                {importJob.skipped_count > 0 && (
+                  <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{importJob.skipped_count} already imported — skipped</div>
+                )}
+                {importJob.status === 'failed' && (
+                  <div style={{ fontSize: 12, color: C.red, marginTop: 4 }}>Error: {importJob.error_message}</div>
+                )}
+                {importJob.status === 'completed' && (
+                  <div style={{ fontSize: 12, color: C.green, marginTop: 4 }}>✓ Import complete — {importJob.imported_count} parts imported</div>
+                )}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                style={{ ...S.btn('primary'), flex: 1, opacity: (importing || !ebayConnected) ? 0.6 : 1 }}
+                onClick={importAllListings}
+                disabled={importing || !ebayConnected}
+              >
+                {importing ? '⏳ Importing...' : '📥 Import All eBay Listings'}
+              </button>
+              {importing && (
+                <button style={{ ...S.btn('danger') }} onClick={cancelImport}>Cancel</button>
+              )}
+            </div>
+            {!ebayConnected && (
+              <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>Connect eBay above to enable import.</div>
+            )}
+          </Section>
+
+          {/* Parse with AI */}
+          <Section title="🤖 Parse with AI">
+            <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
+              After importing, run this to extract make, model and year from listing titles. Processes all unparse listings in batches of 10. Requires your Anthropic API key saved in the browser.
+            </p>
+            <button
+              style={{ ...S.btn('primary'), width: '100%', opacity: parsing ? 0.6 : 1 }}
+              onClick={parseMakeModelYear}
+              disabled={parsing}
+            >
+              {parsing ? '⏳ Parsing...' : '🔍 Parse Make / Model / Year'}
+            </button>
+          </Section>
+        </>
       )}
     </div>
   )
