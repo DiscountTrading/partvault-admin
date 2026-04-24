@@ -282,6 +282,12 @@ export default function Settings({ profile, storeId, onSignOut }) {
             body: JSON.stringify({ action: 'process_chunk', jobId, storeId }),
           })
           const chunk = await chunkRes.json()
+          if (chunk.error && chunk.retry) {
+            // Timeout — just retry the same chunk after a short pause
+            console.log('Chunk timed out, retrying...')
+            setTimeout(processNext, 2000)
+            return
+          }
           if (chunk.error) throw new Error(chunk.error)
 
           setImportJob(j => ({
