@@ -34,6 +34,7 @@ const EBAY_CLIENT_ID = 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const EBAY_RUNAME = 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
 const EBAY_OAUTH_URL = `https://auth.ebay.com/oauth2/authorize?client_id=${EBAY_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(EBAY_RUNAME)}&scope=${encodeURIComponent('https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.inventory.readonly https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly https://api.ebay.com/oauth/api_scope/sell.finances')}`
 const CLOUDFLARE_PROXY = 'https://partvault-proxy.leap00.workers.dev'
+const EDGE_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import'
 
 function Section({ title, children }) {
   return (
@@ -68,6 +69,17 @@ function Toggle({ label, desc, value, onChange }) {
   )
 }
 
+// ─── RECONCILE STAT CARD ────────────────────────────────────────────────────
+function StatCard({ label, value, color, sub }) {
+  return (
+    <div style={{ background: '#fafaf9', border: `1px solid ${C.border}`, borderRadius: 10, padding: '14px 18px', textAlign: 'center', flex: 1 }}>
+      <div style={{ fontSize: 28, fontWeight: 800, fontFamily: "'Inter Tight',system-ui,sans-serif", color: color || C.text }}>{value ?? '—'}</div>
+      <div style={{ fontSize: 12, color: C.muted, fontWeight: 600, marginTop: 2 }}>{label}</div>
+      {sub && <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{sub}</div>}
+    </div>
+  )
+}
+
 export default function Settings({ profile, storeId, onSignOut }) {
   const [tab, setTab] = useState('account')
   const [footer, setFooter] = useState(DEFAULT_FOOTER)
@@ -75,7 +87,6 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [previewOpen, setPreviewOpen] = useState(false)
 
   // eBay state
   const [ebayCreds, setEbayCreds] = useState({ appId: EBAY_CLIENT_ID, certId: '', ruName: EBAY_RUNAME })
@@ -91,20 +102,25 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const [parsing, setParsing] = useState(false)
   const pollRef = useRef(null)
 
+  // Reconcile state
+  const [reconciling, setReconciling] = useState(false)
+  const [reconcileResult, setReconcileResult] = useState(null)
+  const [reconcileError, setReconcileError] = useState(null)
+  const [retrying, setRetrying] = useState(false)
+  const [retryResult, setRetryResult] = useState(null)
+  const [clearingFlag, setClearingFlag] = useState(null) // partId being cleared
+
   useEffect(() => {
     loadSettings()
-    // Check for OAuth callback code in URL
     const params = new URLSearchParams(window.location.search)
     const code = params.get('code')
     if (code) {
       handleOAuthCallback(code)
-      // Clean up URL
       window.history.replaceState({}, '', window.location.pathname + '#settings-ebay')
       setTab('ebay')
     }
   }, [storeId])
 
-  // Cleanup poll on unmount
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
 
   const loadSettings = async () => {
@@ -156,7 +172,6 @@ export default function Settings({ profile, storeId, onSignOut }) {
     setCredsSaving(false)
   }
 
-  // Exchange auth code for tokens via Cloudflare proxy, then save to Supabase
   const handleOAuthCallback = async (code) => {
     try {
       const res = await fetch(`${CLOUDFLARE_PROXY}/ebay/token`, {
@@ -166,20 +181,11 @@ export default function Settings({ profile, storeId, onSignOut }) {
       })
       const tokens = await res.json()
       if (!tokens.access_token) throw new Error(tokens.error || 'No token returned')
-
       const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString()
-      const ebayOAuth = {
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
-        expiresAt,
-        expiresIn: tokens.expires_in,
-      }
-
-      // Save to Supabase store settings
+      const ebayOAuth = { accessToken: tokens.access_token, refreshToken: tokens.refresh_token, expiresAt, expiresIn: tokens.expires_in }
       const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
       const merged = { ...(current?.settings || {}), ebayOAuth, ebayCreds }
       await sb.from('stores').update({ settings: merged }).eq('id', storeId)
-
       setEbayConnected(true)
       setEbayExpiry(expiresAt)
       setEbayTestResult({ ok: true, msg: 'Connected to eBay successfully!' })
@@ -214,21 +220,15 @@ export default function Settings({ profile, storeId, onSignOut }) {
     setEbayTesting(true)
     setEbayTestResult(null)
     try {
-      // Get fresh token from store settings via Edge Function or direct proxy call
       const { data: store } = await sb.from('stores').select('settings').eq('id', storeId).single()
       const token = store?.settings?.ebayOAuth?.accessToken
       if (!token) throw new Error('No token — please reconnect')
-
       const res = await fetch(`${CLOUDFLARE_PROXY}/ebay/trading`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'text/xml',
-          'Authorization': `Bearer ${token}`,
-          'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling',
-          'X-EBAY-API-APP-NAME': ebayCreds.appId,
-          'X-EBAY-API-CERT-NAME': ebayCreds.certId,
-          'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
-          'X-EBAY-API-SITEID': '15',
+          'Content-Type': 'text/xml', 'Authorization': `Bearer ${token}`,
+          'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling', 'X-EBAY-API-APP-NAME': ebayCreds.appId,
+          'X-EBAY-API-CERT-NAME': ebayCreds.certId, 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-SITEID': '15',
         },
         body: `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents"><ActiveList><Include>true</Include><Pagination><EntriesPerPage>1</EntriesPerPage><PageNumber>1</PageNumber></Pagination></ActiveList></GetMyeBaySellingRequest>`,
       })
@@ -249,37 +249,31 @@ export default function Settings({ profile, storeId, onSignOut }) {
     setEbayTesting(false)
   }
 
-  // Import all eBay listings via Edge Function
   const importAllListings = async () => {
     setImporting(true)
     setImportJob({ status: 'starting', current_item: 'Starting import...' })
     try {
-      const res = await fetch(`https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import`, {
+      const res = await fetch(EDGE_FN, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'start', storeId }),
       })
       const data = await res.json()
       if (data.error) throw new Error(data.error)
-
-      const jobId = data.jobId
-      // Poll for status
       pollRef.current = setInterval(async () => {
         try {
-          const pollRes = await fetch(`https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import`, {
+          const pollRes = await fetch(EDGE_FN, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'status', jobId, storeId }),
+            body: JSON.stringify({ action: 'status', jobId: data.jobId, storeId }),
           })
           const job = await pollRes.json()
           setImportJob(job)
-          if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
+          if (['completed', 'failed', 'cancelled'].includes(job.status)) {
             clearInterval(pollRef.current)
             setImporting(false)
           }
-        } catch (e) {
-          console.error('Poll error', e)
-        }
+        } catch (e) { console.error('Poll error', e) }
       }, 3000)
     } catch (e) {
       setImportJob({ status: 'failed', error_message: e.message })
@@ -290,13 +284,71 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const cancelImport = async () => {
     if (!importJob?.id) return
     clearInterval(pollRef.current)
-    await fetch(`https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import`, {
+    await fetch(EDGE_FN, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'cancel', jobId: importJob.id, storeId }),
     })
     setImporting(false)
     setImportJob(j => ({ ...j, status: 'cancelled' }))
+  }
+
+  // ─── RECONCILE ───────────────────────────────────────────────────────────
+  const runReconcile = async () => {
+    setReconciling(true)
+    setReconcileResult(null)
+    setReconcileError(null)
+    setRetryResult(null)
+    try {
+      const res = await fetch(EDGE_FN, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'reconcile', storeId }),
+      })
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+      setReconcileResult(data)
+    } catch (e) {
+      setReconcileError(e.message)
+    }
+    setReconciling(false)
+  }
+
+  const retryFailed = async () => {
+    if (!reconcileResult?.failedItems?.length) return
+    setRetrying(true)
+    setRetryResult(null)
+    try {
+      const ids = reconcileResult.failedItems.map(f => f.itemId)
+      const res = await fetch(EDGE_FN, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'retry', storeId, retryIds: ids }),
+      })
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+      setRetryResult(data)
+      // Re-run reconcile to refresh counts
+      await runReconcile()
+    } catch (e) {
+      setRetryResult({ error: e.message })
+    }
+    setRetrying(false)
+  }
+
+  const clearStaleFlag = async (partId) => {
+    setClearingFlag(partId)
+    try {
+      await sb.from('parts').update({ reconcile_flagged: false, reconcile_flagged_at: null }).eq('id', partId)
+      setReconcileResult(r => ({
+        ...r,
+        staleParts: r.staleParts.filter(p => p.id !== partId),
+        staleCount: r.staleCount - 1,
+      }))
+    } catch (e) {
+      console.error('Clear flag failed', e)
+    }
+    setClearingFlag(null)
   }
 
   const parseMakeModelYear = async () => {
@@ -339,13 +391,10 @@ export default function Settings({ profile, storeId, onSignOut }) {
       medium: 'Genuine OEM [Part Name] removed from a [Year] [Make] [Model]. Part is in [Condition] condition with [minor/no] visible wear. All photos are of the actual item.',
       long: 'Genuine OEM [Part Name] removed from a [Year] [Make] [Model] [Series]. This part is in [Condition] condition. [Detail about wear/function]. Part number: [OEM#]. All photos are of the exact item you will receive — no stock images used.',
     }[aiSettings.descriptionLength]
-
     let preview = `${partDesc}\n\n`
     if (yearRange) preview += `${yearRange}\n\n`
     if (aiSettings.includePartNumber) preview += `OEM Part Number: [Part Number]\n\n`
-    if (aiSettings.includeInstallLink && aiSettings.installLinkUrl) {
-      preview += `Installation guide: ${aiSettings.installLinkUrl}\nDisclaimer: We recommend all parts are installed by a qualified mechanic.\n\n`
-    }
+    if (aiSettings.includeInstallLink && aiSettings.installLinkUrl) preview += `Installation guide: ${aiSettings.installLinkUrl}\nDisclaimer: We recommend all parts are installed by a qualified mechanic.\n\n`
     preview += '---\n\n' + footer
     return preview
   }
@@ -361,6 +410,160 @@ export default function Settings({ profile, storeId, onSignOut }) {
     const done = importJob.imported_count || 0
     return total > 0 ? Math.round((done / total) * 100) : 0
   })() : 0
+
+  // ─── RECONCILE SECTION COMPONENT ─────────────────────────────────────────
+  const ReconcileSection = () => (
+    <>
+      <Section title="🔄 Reconcile with eBay">
+        <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
+          Compares your live eBay active listings against PartVault. Stale parts (Listed in PartVault but gone from eBay) are flagged for your review — nothing is changed automatically.
+        </p>
+
+        {reconcileError && (
+          <div style={{ padding: 12, borderRadius: 8, marginBottom: 12, background: '#fef2f2', border: `1px solid #fca5a5`, fontSize: 13, color: C.red }}>
+            ✗ {reconcileError}
+          </div>
+        )}
+
+        {reconcileResult && (
+          <>
+            {/* Count comparison */}
+            <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+              <StatCard label="eBay Active" value={reconcileResult.ebayActiveCount} color={C.blue} />
+              <StatCard label="PartVault Listed" value={reconcileResult.pvListedCount} color={C.accent} />
+              <StatCard label="Missing" value={reconcileResult.missingCount} color={reconcileResult.missingCount > 0 ? C.yellow : C.green} sub="in eBay, not imported" />
+              <StatCard label="Stale" value={reconcileResult.staleCount} color={reconcileResult.staleCount > 0 ? C.red : C.green} sub="flagged for review" />
+            </div>
+
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 16 }}>
+              Last reconciled: {new Date(reconcileResult.reconciledAt).toLocaleString('en-AU')}
+            </div>
+
+            {/* Stale parts */}
+            {reconcileResult.staleCount > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontWeight: 600, fontSize: 14, color: C.text, marginBottom: 8 }}>
+                  ⚠️ Stale Parts — Listed in PartVault but not active on eBay
+                </div>
+                <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ background: '#f5f4f0' }}>
+                        <th style={{ padding: '8px 12px', textAlign: 'left', color: C.muted, fontWeight: 600 }}>SKU / Item ID</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'left', color: C.muted, fontWeight: 600 }}>Title</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'center', color: C.muted, fontWeight: 600 }}>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reconcileResult.staleParts.map((p, i) => (
+                        <tr key={p.id} style={{ borderTop: i > 0 ? `1px solid ${C.border}` : 'none', background: '#fff' }}>
+                          <td style={{ padding: '8px 12px', color: C.muted, fontFamily: 'monospace', fontSize: 12 }}>{p.sku}</td>
+                          <td style={{ padding: '8px 12px', color: C.text }}>{p.title?.substring(0, 60)}{p.title?.length > 60 ? '…' : ''}</td>
+                          <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                            <button
+                              onClick={() => clearStaleFlag(p.id)}
+                              disabled={clearingFlag === p.id}
+                              style={{ ...S.btn('secondary'), fontSize: 11, padding: '4px 10px', opacity: clearingFlag === p.id ? 0.5 : 1 }}
+                            >
+                              {clearingFlag === p.id ? '...' : 'Clear Flag'}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>
+                  These parts may have been sold, ended, or deleted on eBay. Review each one and update the status manually in the Parts tab.
+                </div>
+              </div>
+            )}
+
+            {/* Missing IDs */}
+            {reconcileResult.missingCount > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontWeight: 600, fontSize: 14, color: C.text, marginBottom: 8 }}>
+                  📥 Missing from PartVault ({reconcileResult.missingCount} items{reconcileResult.missingCount > 50 ? ', showing first 50' : ''})
+                </div>
+                <div style={{ background: '#fffbeb', border: `1px solid #fde68a`, borderRadius: 8, padding: 12, fontSize: 12, color: '#78350f', lineHeight: 1.8, fontFamily: 'monospace', maxHeight: 120, overflowY: 'auto' }}>
+                  {reconcileResult.missingIds.join(', ')}
+                </div>
+                <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>
+                  These eBay item IDs are active on eBay but not yet in PartVault. Run Import to pull them in.
+                </div>
+              </div>
+            )}
+
+            {/* Failed items */}
+            {reconcileResult.failedCount > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14, color: C.text }}>
+                    ✗ Failed Items ({reconcileResult.failedCount})
+                  </div>
+                  <button
+                    onClick={retryFailed}
+                    disabled={retrying}
+                    style={{ ...S.btn('primary'), fontSize: 12, padding: '6px 14px', opacity: retrying ? 0.6 : 1 }}
+                  >
+                    {retrying ? '⏳ Retrying...' : '↺ Retry All Failed'}
+                  </button>
+                </div>
+
+                {retryResult && !retryResult.error && (
+                  <div style={{ padding: 10, borderRadius: 8, marginBottom: 10, background: '#f0fdf4', border: `1px solid #86efac`, fontSize: 13, color: C.green }}>
+                    ✓ Retry complete — {retryResult.imported} imported, {retryResult.failed} still failing
+                  </div>
+                )}
+                {retryResult?.error && (
+                  <div style={{ padding: 10, borderRadius: 8, marginBottom: 10, background: '#fef2f2', border: `1px solid #fca5a5`, fontSize: 13, color: C.red }}>
+                    ✗ {retryResult.error}
+                  </div>
+                )}
+
+                <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ background: '#f5f4f0' }}>
+                        <th style={{ padding: '8px 12px', textAlign: 'left', color: C.muted, fontWeight: 600 }}>Item ID</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'left', color: C.muted, fontWeight: 600 }}>Reason</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reconcileResult.failedItems.map((f, i) => (
+                        <tr key={f.itemId} style={{ borderTop: i > 0 ? `1px solid ${C.border}` : 'none', background: '#fff' }}>
+                          <td style={{ padding: '8px 12px', color: C.muted, fontFamily: 'monospace', fontSize: 12 }}>{f.itemId}</td>
+                          <td style={{ padding: '8px 12px', color: C.red, fontSize: 12 }}>{f.reason}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* All clear */}
+            {reconcileResult.staleCount === 0 && reconcileResult.missingCount === 0 && reconcileResult.failedCount === 0 && (
+              <div style={{ padding: 14, borderRadius: 8, background: '#f0fdf4', border: `1px solid #86efac`, fontSize: 14, color: C.green, fontWeight: 600, textAlign: 'center' }}>
+                ✓ All clear — PartVault matches eBay
+              </div>
+            )}
+          </>
+        )}
+
+        <button
+          style={{ ...S.btn('primary'), width: '100%', marginTop: reconcileResult ? 12 : 0, opacity: (reconciling || !ebayConnected) ? 0.6 : 1 }}
+          onClick={runReconcile}
+          disabled={reconciling || !ebayConnected}
+        >
+          {reconciling ? '⏳ Reconciling...' : reconcileResult ? '↺ Run Again' : '🔄 Run Reconcile'}
+        </button>
+        {!ebayConnected && (
+          <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>Connect eBay above to enable reconcile.</div>
+        )}
+      </Section>
+    </>
+  )
 
   return (
     <div>
@@ -502,11 +705,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
                 </button>
               </div>
             </div>
-            <button
-              style={{ ...S.btn('primary'), opacity: credsSaving ? 0.6 : 1 }}
-              onClick={saveEbayCreds}
-              disabled={credsSaving}
-            >
+            <button style={{ ...S.btn('primary'), opacity: credsSaving ? 0.6 : 1 }} onClick={saveEbayCreds} disabled={credsSaving}>
               {credsSaving ? 'Saving...' : credsSaved ? '✓ Saved' : 'Save Credentials'}
             </button>
           </Section>
@@ -534,11 +733,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
             )}
 
             <div style={{ display: 'flex', gap: 8 }}>
-              <button
-                style={{ ...S.btn('blue'), flex: 1, opacity: ebayTesting ? 0.6 : 1 }}
-                onClick={testEbayConnection}
-                disabled={ebayTesting || !ebayConnected}
-              >
+              <button style={{ ...S.btn('blue'), flex: 1, opacity: ebayTesting ? 0.6 : 1 }} onClick={testEbayConnection} disabled={ebayTesting || !ebayConnected}>
                 {ebayTesting ? 'Testing...' : 'Test'}
               </button>
               {ebayConnected ? (
@@ -567,45 +762,30 @@ export default function Settings({ profile, storeId, onSignOut }) {
                 <div style={{ height: 8, background: C.border, borderRadius: 4, overflow: 'hidden' }}>
                   <div style={{ height: '100%', width: `${importProgress}%`, background: importJob.status === 'completed' ? C.green : C.accent, borderRadius: 4, transition: 'width 0.5s' }} />
                 </div>
-                {importJob.skipped_count > 0 && (
-                  <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{importJob.skipped_count} already imported — skipped</div>
-                )}
-                {importJob.status === 'failed' && (
-                  <div style={{ fontSize: 12, color: C.red, marginTop: 4 }}>Error: {importJob.error_message}</div>
-                )}
-                {importJob.status === 'completed' && (
-                  <div style={{ fontSize: 12, color: C.green, marginTop: 4 }}>✓ Import complete — {importJob.imported_count} parts imported</div>
-                )}
+                {importJob.skipped_count > 0 && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{importJob.skipped_count} already imported — skipped</div>}
+                {importJob.status === 'failed' && <div style={{ fontSize: 12, color: C.red, marginTop: 4 }}>Error: {importJob.error_message}</div>}
+                {importJob.status === 'completed' && <div style={{ fontSize: 12, color: C.green, marginTop: 4 }}>✓ Import complete — {importJob.imported_count} parts imported</div>}
               </div>
             )}
 
             <div style={{ display: 'flex', gap: 8 }}>
-              <button
-                style={{ ...S.btn('primary'), flex: 1, opacity: (importing || !ebayConnected) ? 0.6 : 1 }}
-                onClick={importAllListings}
-                disabled={importing || !ebayConnected}
-              >
+              <button style={{ ...S.btn('primary'), flex: 1, opacity: (importing || !ebayConnected) ? 0.6 : 1 }} onClick={importAllListings} disabled={importing || !ebayConnected}>
                 {importing ? '⏳ Importing...' : '📥 Import All eBay Listings'}
               </button>
-              {importing && (
-                <button style={{ ...S.btn('danger') }} onClick={cancelImport}>Cancel</button>
-              )}
+              {importing && <button style={{ ...S.btn('danger') }} onClick={cancelImport}>Cancel</button>}
             </div>
-            {!ebayConnected && (
-              <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>Connect eBay above to enable import.</div>
-            )}
+            {!ebayConnected && <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>Connect eBay above to enable import.</div>}
           </Section>
+
+          {/* Reconcile */}
+          <ReconcileSection />
 
           {/* Parse with AI */}
           <Section title="🤖 Parse with AI">
             <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
-              After importing, run this to extract make, model and year from listing titles. Processes all unparse listings in batches of 10. Requires your Anthropic API key saved in the browser.
+              After importing, run this to extract make, model and year from listing titles. Processes all unparsed listings in batches of 10. Requires your Anthropic API key saved in the browser.
             </p>
-            <button
-              style={{ ...S.btn('primary'), width: '100%', opacity: parsing ? 0.6 : 1 }}
-              onClick={parseMakeModelYear}
-              disabled={parsing}
-            >
+            <button style={{ ...S.btn('primary'), width: '100%', opacity: parsing ? 0.6 : 1 }} onClick={parseMakeModelYear} disabled={parsing}>
               {parsing ? '⏳ Parsing...' : '🔍 Parse Make / Model / Year'}
             </button>
           </Section>
