@@ -251,8 +251,9 @@ export default function Settings({ profile, storeId, onSignOut }) {
 
   const importAllListings = async () => {
     setImporting(true)
-    setImportJob({ status: 'starting', current_item: 'Starting import...' })
+    setImportJob({ status: 'starting', current_item: 'Fetching eBay listing IDs...' })
     try {
+      // Step 1: start — fetches all IDs from eBay and creates job record
       const res = await fetch(EDGE_FN, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -260,22 +261,59 @@ export default function Settings({ profile, storeId, onSignOut }) {
       })
       const data = await res.json()
       if (data.error) throw new Error(data.error)
-      pollRef.current = setInterval(async () => {
+
+      const jobId = data.jobId
+      setImportJob({ status: 'running', current_item: 'Starting...', total_ids: data.totalIds, imported_count: 0, skipped_count: 0, failed_count: 0, id: jobId })
+
+      // Step 2: repeatedly call process_chunk until complete or cancelled
+      const processNext = async () => {
+        // Check for cancellation via Supabase
+        const { data: jobCheck } = await sb.from('import_jobs').select('status').eq('id', jobId).single()
+        if (jobCheck?.status === 'cancelled') {
+          setImporting(false)
+          setImportJob(j => ({ ...j, status: 'cancelled' }))
+          return
+        }
+
         try {
-          const pollRes = await fetch(EDGE_FN, {
+          const chunkRes = await fetch(EDGE_FN, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'status', jobId: data.jobId, storeId }),
+            body: JSON.stringify({ action: 'process_chunk', jobId, storeId }),
           })
-          const job = await pollRes.json()
-          setImportJob(job)
-          if (['completed', 'failed', 'cancelled'].includes(job.status)) {
-            clearInterval(pollRef.current)
+          const chunk = await chunkRes.json()
+          if (chunk.error) throw new Error(chunk.error)
+
+          setImportJob(j => ({
+            ...j,
+            id: jobId,
+            status: chunk.status,
+            imported_count: chunk.imported,
+            skipped_count: chunk.skipped,
+            failed_count: chunk.failed,
+            batch_offset: chunk.offset,
+            total_ids: chunk.total,
+            current_item: chunk.isComplete
+              ? `✓ Complete — ${chunk.imported} imported, ${chunk.skipped} skipped`
+              : `Processing ${chunk.offset} of ${chunk.total}...`,
+          }))
+
+          if (chunk.isComplete || chunk.status === 'completed') {
             setImporting(false)
+            return
           }
-        } catch (e) { console.error('Poll error', e) }
-      }, 3000)
-    } catch (e) {
+
+          // Small pause then next chunk
+          setTimeout(processNext, 500)
+        } catch (e: any) {
+          setImportJob(j => ({ ...j, status: 'failed', error_message: e.message }))
+          setImporting(false)
+        }
+      }
+
+      setTimeout(processNext, 300)
+
+    } catch (e: any) {
       setImportJob({ status: 'failed', error_message: e.message })
       setImporting(false)
     }
@@ -283,12 +321,8 @@ export default function Settings({ profile, storeId, onSignOut }) {
 
   const cancelImport = async () => {
     if (!importJob?.id) return
-    clearInterval(pollRef.current)
-    await fetch(EDGE_FN, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'cancel', jobId: importJob.id, storeId }),
-    })
+    // Mark cancelled in Supabase — processNext loop checks this before each chunk
+    await sb.from('import_jobs').update({ status: 'cancelled' }).eq('id', importJob.id)
     setImporting(false)
     setImportJob(j => ({ ...j, status: 'cancelled' }))
   }
@@ -407,7 +441,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
 
   const importProgress = importJob ? (() => {
     const total = importJob.total_ids || 0
-    const done = importJob.imported_count || 0
+    const done = (importJob.imported_count || 0) + (importJob.skipped_count || 0)
     return total > 0 ? Math.round((done / total) * 100) : 0
   })() : 0
 
@@ -674,7 +708,8 @@ export default function Settings({ profile, storeId, onSignOut }) {
 
       {/* EBAY SYNC TAB */}
       {tab === 'ebay' && (
-        <>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignItems: 'start' }}>
+          <div>
           {/* Credentials */}
           <Section title="🔑 eBay API Credentials">
             <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
@@ -744,52 +779,54 @@ export default function Settings({ profile, storeId, onSignOut }) {
             </div>
           </Section>
 
-          {/* Import */}
-          <Section title="📦 Onboarding Import">
-            <div style={{ background: '#fffbeb', border: `1px solid #fde68a`, borderRadius: 8, padding: 14, marginBottom: 16 }}>
-              <div style={{ fontWeight: 700, fontSize: 13, color: '#92400e', marginBottom: 4 }}>⚠️ One-time step</div>
-              <div style={{ fontSize: 13, color: '#78350f', lineHeight: 1.6 }}>
-                Pulls ALL listings — active, sold and withdrawn — to build your complete eBay history. Runs in the background so you can close this page. Already-imported listings are skipped automatically.
-              </div>
-            </div>
-
-            {importJob && (
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6 }}>
-                  <span style={{ color: C.text, fontWeight: 500 }}>{importJob.current_item || 'Processing...'}</span>
-                  <span style={{ color: C.muted }}>{importJob.imported_count || 0}/{importJob.total_ids || '?'}</span>
-                </div>
-                <div style={{ height: 8, background: C.border, borderRadius: 4, overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${importProgress}%`, background: importJob.status === 'completed' ? C.green : C.accent, borderRadius: 4, transition: 'width 0.5s' }} />
-                </div>
-                {importJob.skipped_count > 0 && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{importJob.skipped_count} already imported — skipped</div>}
-                {importJob.status === 'failed' && <div style={{ fontSize: 12, color: C.red, marginTop: 4 }}>Error: {importJob.error_message}</div>}
-                {importJob.status === 'completed' && <div style={{ fontSize: 12, color: C.green, marginTop: 4 }}>✓ Import complete — {importJob.imported_count} parts imported</div>}
-              </div>
-            )}
-
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button style={{ ...S.btn('primary'), flex: 1, opacity: (importing || !ebayConnected) ? 0.6 : 1 }} onClick={importAllListings} disabled={importing || !ebayConnected}>
-                {importing ? '⏳ Importing...' : '📥 Import All eBay Listings'}
-              </button>
-              {importing && <button style={{ ...S.btn('danger') }} onClick={cancelImport}>Cancel</button>}
-            </div>
-            {!ebayConnected && <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>Connect eBay above to enable import.</div>}
-          </Section>
-
-          {/* Reconcile */}
-          <ReconcileSection />
-
           {/* Parse with AI */}
           <Section title="🤖 Parse with AI">
             <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
-              After importing, run this to extract make, model and year from listing titles. Processes all unparsed listings in batches of 10. Requires your Anthropic API key saved in the browser.
+              Extracts make, model and year from listing titles. Processes unparsed listings in batches of 10. Requires your Anthropic API key saved in the browser.
             </p>
             <button style={{ ...S.btn('primary'), width: '100%', opacity: parsing ? 0.6 : 1 }} onClick={parseMakeModelYear} disabled={parsing}>
               {parsing ? '⏳ Parsing...' : '🔍 Parse Make / Model / Year'}
             </button>
           </Section>
-        </>
+
+          </div>{/* end left column */}
+
+          {/* RIGHT COLUMN */}
+          <div>
+            {/* Import */}
+            <Section title="📥 eBay Import">
+              <p style={{ fontSize: 13, color: C.muted, marginBottom: 12, lineHeight: 1.6 }}>
+                Pulls all listings — active, sold and withdrawn. Already-imported listings are skipped automatically. Runs in the background.
+              </p>
+
+              {importJob && (
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6 }}>
+                    <span style={{ color: C.text, fontWeight: 500 }}>{importJob.current_item || 'Processing...'}</span>
+                    <span style={{ color: C.muted }}>{(importJob.imported_count || 0) + (importJob.skipped_count || 0)}/{importJob.total_ids || '?'}</span>
+                  </div>
+                  <div style={{ height: 8, background: C.border, borderRadius: 4, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${importProgress}%`, background: importJob.status === 'completed' ? C.green : C.accent, borderRadius: 4, transition: 'width 0.5s' }} />
+                  </div>
+                  {importJob.skipped_count > 0 && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{importJob.skipped_count} already imported — skipped</div>}
+                  {importJob.status === 'failed' && <div style={{ fontSize: 12, color: C.red, marginTop: 4 }}>Error: {importJob.error_message}</div>}
+                  {importJob.status === 'completed' && <div style={{ fontSize: 12, color: C.green, marginTop: 4 }}>✓ Import complete — {importJob.imported_count} parts imported</div>}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button style={{ ...S.btn('primary'), flex: 1, opacity: (importing || !ebayConnected) ? 0.6 : 1 }} onClick={importAllListings} disabled={importing || !ebayConnected}>
+                  {importing ? '⏳ Importing...' : '📥 Import All eBay Listings'}
+                </button>
+                {importing && <button style={{ ...S.btn('danger') }} onClick={cancelImport}>Cancel</button>}
+              </div>
+              {!ebayConnected && <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>Connect eBay above to enable import.</div>}
+            </Section>
+
+            {/* Reconcile */}
+            <ReconcileSection />
+          </div>{/* end right column */}
+        </div>
       )}
     </div>
   )
