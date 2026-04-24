@@ -305,7 +305,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
 
           // Small pause then next chunk
           setTimeout(processNext, 500)
-        } catch (e: any) {
+        } catch (e) {
           setImportJob(j => ({ ...j, status: 'failed', error_message: e.message }))
           setImporting(false)
         }
@@ -313,7 +313,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
 
       setTimeout(processNext, 300)
 
-    } catch (e: any) {
+    } catch (e) {
       setImportJob({ status: 'failed', error_message: e.message })
       setImporting(false)
     }
