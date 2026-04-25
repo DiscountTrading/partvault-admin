@@ -53,7 +53,7 @@ export function useParts() {
       .neq('status', 'Deleted')
       .is('deleted_at', null)
       .order('created_at', { ascending: false })
-      .limit(2000)
+      .limit(10000) // v2.3.3: bumped from 2000; proper count-only query refactor scheduled
     if (!error && data) {
       setParts(data.map(mapRow))
       setTotalCount(count || data.length)
