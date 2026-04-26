@@ -47,21 +47,44 @@ export function useParts() {
   const channelRef = useRef(null)
 
   const fetch = useCallback(async () => {
-    const { data, error, count } = await sb
+    // Step 1: get the total count (lightweight, head-only request)
+    const { count, error: countErr } = await sb
       .from('parts')
-      .select('*', { count: 'exact' })
+      .select('id', { count: 'exact', head: true })
       .neq('status', 'Deleted')
       .is('deleted_at', null)
-      .order('created_at', { ascending: false })
-      .limit(10000) // v2.3.3: bumped from 2000; proper count-only query refactor scheduled
-    if (!error && data) {
-      setParts(data.map(mapRow))
-      setTotalCount(count || data.length)
-      setSyncStatus('live')
-    } else {
-      console.error('Parts fetch error:', error)
+    if (countErr) {
+      console.error('Parts count error:', countErr)
       setSyncStatus('error')
+      setLoading(false)
+      return
     }
+    setTotalCount(count || 0)
+
+    // Step 2: page through all rows. Supabase caps each query at 1000 by default,
+    // so we paginate explicitly. PAGE_SIZE_FETCH set to 1000 to match the cap exactly.
+    const PAGE_SIZE_FETCH = 1000
+    const totalRows = count || 0
+    const allRows = []
+    for (let from = 0; from < totalRows; from += PAGE_SIZE_FETCH) {
+      const to = Math.min(from + PAGE_SIZE_FETCH - 1, totalRows - 1)
+      const { data, error } = await sb
+        .from('parts')
+        .select('*')
+        .neq('status', 'Deleted')
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false })
+        .range(from, to)
+      if (error) {
+        console.error('Parts fetch error (page):', error)
+        setSyncStatus('error')
+        setLoading(false)
+        return
+      }
+      if (data) allRows.push(...data)
+    }
+    setParts(allRows.map(mapRow))
+    setSyncStatus('live')
     setLoading(false)
   }, [])
 

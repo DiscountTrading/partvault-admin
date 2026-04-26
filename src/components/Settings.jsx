@@ -109,19 +109,15 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const [retrying, setRetrying] = useState(false)
   const [retryResult, setRetryResult] = useState(null)
   const [clearingFlag, setClearingFlag] = useState(null) // partId being cleared
-  const oauthExchangeRef = useRef(false) // v2.3.2: guard against double-exchange
 
   useEffect(() => {
     loadSettings()
-    if (!storeId) return
     const params = new URLSearchParams(window.location.search)
     const code = params.get('code')
-    if (code && !oauthExchangeRef.current) {
-      oauthExchangeRef.current = true // v2.3.2: latch BEFORE async work
-      // Clear the URL FIRST so any re-render of this effect cannot re-read the code
+    if (code) {
+      handleOAuthCallback(code)
       window.history.replaceState({}, '', window.location.pathname + '#settings-ebay')
       setTab('ebay')
-      handleOAuthCallback(code)
     }
   }, [storeId])
 
@@ -178,44 +174,24 @@ export default function Settings({ profile, storeId, onSignOut }) {
 
   const handleOAuthCallback = async (code) => {
     try {
-      // v2.3.2: Pull credentials directly from DB rather than React state, because
-      // ebayCreds state may not yet be hydrated when the OAuth redirect lands.
-      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const savedCreds = current?.settings?.ebayCreds || {}
-      const appId = savedCreds.appId || ebayCreds.appId || EBAY_CLIENT_ID
-      const certId = savedCreds.certId || ebayCreds.certId
-      const ruName = savedCreds.ruName || ebayCreds.ruName || EBAY_RUNAME
-
-      if (!certId) throw new Error('Cert ID missing — please save credentials first')
-
       const res = await fetch(`${CLOUDFLARE_PROXY}/ebay/token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, appId, certId, ruName }), // v2.3.2: was missing appId + ruName
+        body: JSON.stringify({ code, certId: ebayCreds.certId }),
       })
       const tokens = await res.json()
-      if (!tokens.access_token) {
-        throw new Error(tokens.error_description || tokens.error || 'No token returned')
-      }
+      if (!tokens.access_token) throw new Error(tokens.error || 'No token returned')
       const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString()
-      const ebayOAuth = {
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
-        expiresAt,
-        expiresIn: tokens.expires_in,
-        connectedAt: new Date().toISOString(),
-      }
-      const merged = { ...(current?.settings || {}), ebayOAuth, ebayCreds: { appId, certId, ruName } }
+      const ebayOAuth = { accessToken: tokens.access_token, refreshToken: tokens.refresh_token, expiresAt, expiresIn: tokens.expires_in }
+      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      const merged = { ...(current?.settings || {}), ebayOAuth, ebayCreds }
       await sb.from('stores').update({ settings: merged }).eq('id', storeId)
       setEbayConnected(true)
       setEbayExpiry(expiresAt)
-      setEbayCreds({ appId, certId, ruName })
       setEbayTestResult({ ok: true, msg: 'Connected to eBay successfully!' })
     } catch (e) {
       console.error('OAuth callback failed', e)
       setEbayTestResult({ ok: false, msg: `Connection failed: ${e.message}` })
-      // v2.3.2: reset the ref so user can retry without page reload
-      oauthExchangeRef.current = false
     }
   }
 
@@ -833,7 +809,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6 }}>
                     <span style={{ color: C.text, fontWeight: 500 }}>{importJob.current_item || 'Processing...'}</span>
-                    <span style={{ color: C.muted }}>{(importJob.imported_count || 0) + (importJob.skipped_count || 0)}/{importJob.total_ids || '?'}</span>
+                    <span style={{ color: C.muted }}>{(importJob.imported_count || 0) + (importJob.skipped_count || 0) + (importJob.failed_count || 0)}/{importJob.total_ids || '?'}</span>
                   </div>
                   <div style={{ height: 8, background: C.border, borderRadius: 4, overflow: 'hidden' }}>
                     <div style={{ height: '100%', width: `${importProgress}%`, background: importJob.status === 'completed' ? C.green : C.accent, borderRadius: 4, transition: 'width 0.5s' }} />
