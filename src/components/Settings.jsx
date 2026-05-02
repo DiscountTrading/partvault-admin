@@ -177,31 +177,35 @@ export default function Settings({ profile, storeId, onSignOut }) {
 
   const handleOAuthCallback = async (code) => {
     try {
+      // Read fresh creds from DB rather than relying on state (avoids race with loadSettings)
+      const { data: storeData } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      const creds = storeData?.settings?.ebayCreds
+      if (!creds?.appId || !creds?.certId || !creds?.ruName) {
+        setEbayTestResult({ ok: false, msg: 'eBay credentials not found in database. Please save credentials first.' })
+        return
+      }
       const res = await fetch(`${CLOUDFLARE_PROXY}/ebay/token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           code, 
-          appId: ebayCreds.appId,
-          certId: ebayCreds.certId,
-          ruName: ebayCreds.ruName,
-          }),
+          appId: creds.appId,
+          certId: creds.certId,
+          ruName: creds.ruName,
+        }),
       })
       const tokens = await res.json()
-      if (!tokens.access_token) throw new Error(tokens.error || 'No token returned')
+      if (!tokens.access_token) throw new Error(tokens.error_description || tokens.error || 'No token returned')
       const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString()
       const ebayOAuth = { accessToken: tokens.access_token, refreshToken: tokens.refresh_token, expiresAt, expiresIn: tokens.expires_in }
       const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const merged = { ...(current?.settings || {}), ebayOAuth, ebayCreds }
+      const merged = { ...(current?.settings || {}), ebayOAuth, ebayCreds: creds }
       await sb.from('stores').update({ settings: merged }).eq('id', storeId)
       setEbayConnected(true)
       setEbayExpiry(expiresAt)
       setEbayTestResult({ ok: true, msg: 'Connected to eBay successfully!' })
     } catch (e) {
       console.error('OAuth callback failed', e)
-      setEbayTestResult({ ok: false, msg: `Connection failed: ${e.message}` })
-    }
-  }
 
   const connectEbay = () => {
     if (!ebayCreds.certId) {
