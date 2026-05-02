@@ -110,18 +110,22 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const [retryResult, setRetryResult] = useState(null)
   const [clearingFlag, setClearingFlag] = useState(null) // partId being cleared
 
+  // Stale resolution state
+  const [enrichingStale, setEnrichingStale] = useState(false)
+  const [enrichmentProgress, setEnrichmentProgress] = useState(null)
+  const [enrichedData, setEnrichedData] = useState(null) // { [itemId]: { ebayStatus, endDate, salePrice, soldDate } }
+  const [applyingResolutions, setApplyingResolutions] = useState(false)
+  const [resolutionResult, setResolutionResult] = useState(null)
+
   useEffect(() => {
-    const init = async () => {
-      await loadSettings()
-      const params = new URLSearchParams(window.location.search)
-      const code = params.get('code')
-      if (code) {
-        handleOAuthCallback(code)
-        window.history.replaceState({}, '', window.location.pathname + '#settings-ebay')
-        setTab('ebay')
-      }
+    loadSettings()
+    const params = new URLSearchParams(window.location.search)
+    const code = params.get('code')
+    if (code) {
+      handleOAuthCallback(code)
+      window.history.replaceState({}, '', window.location.pathname + '#settings-ebay')
+      setTab('ebay')
     }
-    init()
   }, [storeId])
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
@@ -177,34 +181,22 @@ export default function Settings({ profile, storeId, onSignOut }) {
 
   const handleOAuthCallback = async (code) => {
     try {
-      // Read fresh creds from DB rather than relying on state (avoids race with loadSettings)
-      const { data: storeData } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const creds = storeData?.settings?.ebayCreds
-      if (!creds?.appId || !creds?.certId || !creds?.ruName) {
-        setEbayTestResult({ ok: false, msg: 'eBay credentials not found in database. Please save credentials first.' })
-        return
-      }
       const res = await fetch(`${CLOUDFLARE_PROXY}/ebay/token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          code, 
-          appId: creds.appId,
-          certId: creds.certId,
-          ruName: creds.ruName,
-        }),
+        body: JSON.stringify({ code, certId: ebayCreds.certId }),
       })
       const tokens = await res.json()
-      if (!tokens.access_token) throw new Error(tokens.error_description || tokens.error || 'No token returned')
+      if (!tokens.access_token) throw new Error(tokens.error || 'No token returned')
       const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString()
       const ebayOAuth = { accessToken: tokens.access_token, refreshToken: tokens.refresh_token, expiresAt, expiresIn: tokens.expires_in }
       const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const merged = { ...(current?.settings || {}), ebayOAuth, ebayCreds: creds }
+      const merged = { ...(current?.settings || {}), ebayOAuth, ebayCreds }
       await sb.from('stores').update({ settings: merged }).eq('id', storeId)
       setEbayConnected(true)
       setEbayExpiry(expiresAt)
       setEbayTestResult({ ok: true, msg: 'Connected to eBay successfully!' })
-  } catch (e) {
+    } catch (e) {
       console.error('OAuth callback failed', e)
       setEbayTestResult({ ok: false, msg: `Connection failed: ${e.message}` })
     }
@@ -391,6 +383,105 @@ export default function Settings({ profile, storeId, onSignOut }) {
     setRetrying(false)
   }
 
+  const enrichStaleParts = async () => {
+    if (!reconcileResult?.staleParts?.length) return
+    setEnrichingStale(true)
+    setEnrichedData(null)
+    setResolutionResult(null)
+    setEnrichmentProgress({ current: 0, total: reconcileResult.staleParts.length })
+    try {
+      const itemIds = reconcileResult.staleParts.map(p => p.ebayItemId).filter(Boolean)
+      const res = await fetch(EDGE_FN, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'enrich_stale', storeId, itemIds }),
+      })
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+      const indexed = {}
+      data.enriched.forEach(e => { indexed[e.itemId] = e })
+      setEnrichedData(indexed)
+    } catch (e) {
+      alert(`Enrichment failed: ${e.message}`)
+    }
+    setEnrichingStale(false)
+    setEnrichmentProgress(null)
+  }
+
+  const suggestedAction = (enriched) => {
+    if (!enriched) return null
+    if (enriched.ebayStatus === 'Sold') return { newStatus: 'Sold', label: `Mark Sold${enriched.salePrice ? ` ($${enriched.salePrice})` : ''}`, color: C.green }
+    if (enriched.ebayStatus === 'Ended') return { newStatus: 'Archived', label: 'Mark Archived', color: C.yellow }
+    if (enriched.ebayStatus === 'NotFound') return { newStatus: 'Archived', label: 'Mark Archived', color: C.red }
+    if (enriched.ebayStatus === 'Active') return { newStatus: 'Listed', label: 'Clear Flag (still active)', color: C.blue }
+    return { newStatus: 'Listed', label: 'Clear Flag', color: C.muted }
+  }
+
+  const applyResolution = async (partId, ebayItemId) => {
+    const enriched = enrichedData?.[ebayItemId]
+    const action = suggestedAction(enriched)
+    if (!action) return
+    setClearingFlag(partId)
+    try {
+      const res = await fetch(EDGE_FN, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'apply_stale_resolution',
+          storeId,
+          resolutions: [{
+            partId,
+            newStatus: action.newStatus,
+            salePrice: enriched?.salePrice,
+            soldDate: enriched?.soldDate,
+          }],
+        }),
+      })
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+      setReconcileResult(r => ({
+        ...r,
+        staleParts: r.staleParts.filter(p => p.id !== partId),
+        staleCount: r.staleCount - 1,
+      }))
+    } catch (e) {
+      alert(`Resolution failed: ${e.message}`)
+    }
+    setClearingFlag(null)
+  }
+
+  const applyAllResolutions = async () => {
+    if (!enrichedData || !reconcileResult?.staleParts?.length) return
+    if (!confirm(`Apply suggested actions to all ${reconcileResult.staleParts.length} stale parts? This will update statuses in PartVault.`)) return
+    setApplyingResolutions(true)
+    setResolutionResult(null)
+    try {
+      const resolutions = reconcileResult.staleParts.map(p => {
+        const enriched = enrichedData[p.ebayItemId]
+        const action = suggestedAction(enriched)
+        return {
+          partId: p.id,
+          newStatus: action?.newStatus || 'Listed',
+          salePrice: enriched?.salePrice,
+          soldDate: enriched?.soldDate,
+        }
+      })
+      const res = await fetch(EDGE_FN, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'apply_stale_resolution', storeId, resolutions }),
+      })
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+      setResolutionResult({ ok: true, msg: `✓ Updated ${data.updated} parts` })
+      setReconcileResult(r => ({ ...r, staleParts: [], staleCount: 0 }))
+      setEnrichedData(null)
+    } catch (e) {
+      setResolutionResult({ ok: false, msg: `Failed: ${e.message}` })
+    }
+    setApplyingResolutions(false)
+  }
+
   const clearStaleFlag = async (partId) => {
     setClearingFlag(partId)
     try {
@@ -500,36 +591,128 @@ export default function Settings({ profile, storeId, onSignOut }) {
                 <div style={{ fontWeight: 600, fontSize: 14, color: C.text, marginBottom: 8 }}>
                   ⚠️ Stale Parts — Listed in PartVault but not active on eBay
                 </div>
+
+                {/* Enrichment banner */}
+                {!enrichedData && (
+                  <div style={{ padding: 14, borderRadius: 8, marginBottom: 12, background: '#fffbeb', border: `1px solid #fde68a` }}>
+                    <div style={{ fontSize: 13, color: '#78350f', marginBottom: 10, lineHeight: 1.6 }}>
+                      Check the actual status of these {reconcileResult.staleCount} listings on eBay (sold, ended, withdrawn) so PartVault can be updated automatically.
+                    </div>
+                    <button
+                      onClick={enrichStaleParts}
+                      disabled={enrichingStale}
+                      style={{ ...S.btn('primary'), fontSize: 13, padding: '8px 16px', opacity: enrichingStale ? 0.6 : 1 }}
+                    >
+                      {enrichingStale
+                        ? `⏳ Checking ${enrichmentProgress?.total || ''} listings...`
+                        : `🔍 Check eBay Status (${reconcileResult.staleCount} listings)`}
+                    </button>
+                  </div>
+                )}
+
+                {/* Bulk action banner — shows after enrichment */}
+                {enrichedData && (
+                  <div style={{ padding: 14, borderRadius: 8, marginBottom: 12, background: '#f0fdf4', border: `1px solid #86efac` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: 13, color: C.green, lineHeight: 1.6 }}>
+                        ✓ Status retrieved from eBay. Review actions below or apply all suggestions at once.
+                      </div>
+                      <button
+                        onClick={applyAllResolutions}
+                        disabled={applyingResolutions}
+                        style={{ ...S.btn('primary'), fontSize: 13, padding: '8px 16px', opacity: applyingResolutions ? 0.6 : 1 }}
+                      >
+                        {applyingResolutions ? '⏳ Applying...' : '✓ Apply All Suggested Actions'}
+                      </button>
+                    </div>
+                    {resolutionResult && (
+                      <div style={{ marginTop: 8, fontSize: 12, color: resolutionResult.ok ? C.green : C.red }}>
+                        {resolutionResult.msg}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                     <thead>
                       <tr style={{ background: '#f5f4f0' }}>
                         <th style={{ padding: '8px 12px', textAlign: 'left', color: C.muted, fontWeight: 600 }}>SKU / Item ID</th>
                         <th style={{ padding: '8px 12px', textAlign: 'left', color: C.muted, fontWeight: 600 }}>Title</th>
+                        {enrichedData && (
+                          <>
+                            <th style={{ padding: '8px 12px', textAlign: 'left', color: C.muted, fontWeight: 600 }}>eBay Status</th>
+                            <th style={{ padding: '8px 12px', textAlign: 'left', color: C.muted, fontWeight: 600 }}>End Date</th>
+                          </>
+                        )}
                         <th style={{ padding: '8px 12px', textAlign: 'center', color: C.muted, fontWeight: 600 }}>Action</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {reconcileResult.staleParts.map((p, i) => (
-                        <tr key={p.id} style={{ borderTop: i > 0 ? `1px solid ${C.border}` : 'none', background: '#fff' }}>
-                          <td style={{ padding: '8px 12px', color: C.muted, fontFamily: 'monospace', fontSize: 12 }}>{p.sku}</td>
-                          <td style={{ padding: '8px 12px', color: C.text }}>{p.title?.substring(0, 60)}{p.title?.length > 60 ? '…' : ''}</td>
-                          <td style={{ padding: '8px 12px', textAlign: 'center' }}>
-                            <button
-                              onClick={() => clearStaleFlag(p.id)}
-                              disabled={clearingFlag === p.id}
-                              style={{ ...S.btn('secondary'), fontSize: 11, padding: '4px 10px', opacity: clearingFlag === p.id ? 0.5 : 1 }}
-                            >
-                              {clearingFlag === p.id ? '...' : 'Clear Flag'}
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
+                      {reconcileResult.staleParts.map((p, i) => {
+                        const enriched = enrichedData?.[p.ebayItemId]
+                        const action = suggestedAction(enriched)
+                        return (
+                          <tr key={p.id} style={{ borderTop: i > 0 ? `1px solid ${C.border}` : 'none', background: '#fff' }}>
+                            <td style={{ padding: '8px 12px', color: C.muted, fontFamily: 'monospace', fontSize: 12 }}>{p.sku}</td>
+                            <td style={{ padding: '8px 12px', color: C.text }}>{p.title?.substring(0, 50)}{p.title?.length > 50 ? '…' : ''}</td>
+                            {enrichedData && (
+                              <>
+                                <td style={{ padding: '8px 12px', fontSize: 12 }}>
+                                  {enriched ? (
+                                    <span style={{
+                                      fontWeight: 600,
+                                      color: enriched.ebayStatus === 'Sold' ? C.green
+                                        : enriched.ebayStatus === 'Active' ? C.blue
+                                        : enriched.ebayStatus === 'NotFound' ? C.red
+                                        : enriched.ebayStatus === 'Error' ? C.red
+                                        : C.yellow
+                                    }}>
+                                      {enriched.ebayStatus}
+                                      {enriched.salePrice ? ` ($${enriched.salePrice})` : ''}
+                                    </span>
+                                  ) : (
+                                    <span style={{ color: C.muted }}>—</span>
+                                  )}
+                                </td>
+                                <td style={{ padding: '8px 12px', fontSize: 12, color: C.muted }}>
+                                  {enriched?.endDate
+                                    ? new Date(enriched.endDate).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: '2-digit' })
+                                    : '—'}
+                                </td>
+                              </>
+                            )}
+                            <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                              {enrichedData ? (
+                                <button
+                                  onClick={() => applyResolution(p.id, p.ebayItemId)}
+                                  disabled={clearingFlag === p.id || !action}
+                                  style={{
+                                    ...S.btn('secondary'),
+                                    fontSize: 11,
+                                    padding: '4px 10px',
+                                    opacity: clearingFlag === p.id ? 0.5 : 1,
+                                    background: action?.color === C.green ? '#dcfce7' : action?.color === C.red ? '#fee2e2' : action?.color === C.yellow ? '#fef3c7' : action?.color === C.blue ? '#dbeafe' : undefined,
+                                    color: action?.color || undefined,
+                                  }}
+                                >
+                                  {clearingFlag === p.id ? '...' : (action?.label || 'Clear Flag')}
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => clearStaleFlag(p.id)}
+                                  disabled={clearingFlag === p.id}
+                                  style={{ ...S.btn('secondary'), fontSize: 11, padding: '4px 10px', opacity: clearingFlag === p.id ? 0.5 : 1 }}
+                                >
+                                  {clearingFlag === p.id ? '...' : 'Clear Flag'}
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        )
+                      })}
                     </tbody>
                   </table>
-                </div>
-                <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>
-                  These parts may have been sold, ended, or deleted on eBay. Review each one and update the status manually in the Parts tab.
                 </div>
               </div>
             )}
