@@ -411,16 +411,17 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const suggestedAction = (enriched) => {
     if (!enriched) return null
     if (enriched.ebayStatus === 'Sold') return { newStatus: 'Sold', label: `Mark Sold${enriched.salePrice ? ` ($${enriched.salePrice})` : ''}`, color: C.green }
-    if (enriched.ebayStatus === 'Ended') return { newStatus: 'Archived', label: 'Mark Archived', color: C.yellow }
+    if (enriched.ebayStatus === 'Ended') return { newStatus: 'Listed', label: 'Defer for Review', color: C.muted, isDefer: true }
     if (enriched.ebayStatus === 'NotFound') return { newStatus: 'Archived', label: 'Mark Archived', color: C.red }
     if (enriched.ebayStatus === 'Active') return { newStatus: 'Listed', label: 'Clear Flag (still active)', color: C.blue }
     return { newStatus: 'Listed', label: 'Clear Flag', color: C.muted }
   }
 
-  const applyResolution = async (partId, ebayItemId) => {
+  const applyResolution = async (partId, ebayItemId, overrideStatus = null) => {
     const enriched = enrichedData?.[ebayItemId]
     const action = suggestedAction(enriched)
-    if (!action) return
+    const newStatus = overrideStatus || action?.newStatus
+    if (!newStatus) return
     setClearingFlag(partId)
     try {
       const res = await fetch(EDGE_FN, {
@@ -431,7 +432,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
           storeId,
           resolutions: [{
             partId,
-            newStatus: action.newStatus,
+            newStatus,
             salePrice: enriched?.salePrice,
             soldDate: enriched?.soldDate,
           }],
@@ -615,7 +616,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
                   <div style={{ padding: 14, borderRadius: 8, marginBottom: 12, background: '#f0fdf4', border: `1px solid #86efac` }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                       <div style={{ fontSize: 13, color: C.green, lineHeight: 1.6 }}>
-                        ✓ Status retrieved from eBay. Review actions below or apply all suggestions at once.
+                        ✓ Status retrieved from eBay. Sold items are auto-marked. Ended items default to "Defer for Review" — keeping them in PartVault for later inventory decisions (relist / discount / scrap). Override individual rows with "Archive" if a part is definitely gone.
                       </div>
                       <button
                         onClick={applyAllResolutions}
@@ -684,20 +685,39 @@ export default function Settings({ profile, storeId, onSignOut }) {
                             )}
                             <td style={{ padding: '8px 12px', textAlign: 'center' }}>
                               {enrichedData ? (
-                                <button
-                                  onClick={() => applyResolution(p.id, p.ebayItemId)}
-                                  disabled={clearingFlag === p.id || !action}
-                                  style={{
-                                    ...S.btn('secondary'),
-                                    fontSize: 11,
-                                    padding: '4px 10px',
-                                    opacity: clearingFlag === p.id ? 0.5 : 1,
-                                    background: action?.color === C.green ? '#dcfce7' : action?.color === C.red ? '#fee2e2' : action?.color === C.yellow ? '#fef3c7' : action?.color === C.blue ? '#dbeafe' : undefined,
-                                    color: action?.color || undefined,
-                                  }}
-                                >
-                                  {clearingFlag === p.id ? '...' : (action?.label || 'Clear Flag')}
-                                </button>
+                                <div style={{ display: 'flex', gap: 4, justifyContent: 'center', flexWrap: 'wrap' }}>
+                                  <button
+                                    onClick={() => applyResolution(p.id, p.ebayItemId)}
+                                    disabled={clearingFlag === p.id || !action}
+                                    style={{
+                                      ...S.btn('secondary'),
+                                      fontSize: 11,
+                                      padding: '4px 10px',
+                                      opacity: clearingFlag === p.id ? 0.5 : 1,
+                                      background: action?.color === C.green ? '#dcfce7' : action?.color === C.red ? '#fee2e2' : action?.color === C.yellow ? '#fef3c7' : action?.color === C.blue ? '#dbeafe' : undefined,
+                                      color: action?.color || undefined,
+                                    }}
+                                  >
+                                    {clearingFlag === p.id ? '...' : (action?.label || 'Clear Flag')}
+                                  </button>
+                                  {action?.isDefer && (
+                                    <button
+                                      onClick={() => applyResolution(p.id, p.ebayItemId, 'Archived')}
+                                      disabled={clearingFlag === p.id}
+                                      style={{
+                                        ...S.btn('secondary'),
+                                        fontSize: 11,
+                                        padding: '4px 10px',
+                                        opacity: clearingFlag === p.id ? 0.5 : 1,
+                                        background: '#fef3c7',
+                                        color: C.yellow,
+                                      }}
+                                      title="Override: this part is gone, archive it now"
+                                    >
+                                      Archive
+                                    </button>
+                                  )}
+                                </div>
                               ) : (
                                 <button
                                   onClick={() => clearStaleFlag(p.id)}
