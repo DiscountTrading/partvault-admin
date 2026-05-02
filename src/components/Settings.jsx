@@ -111,14 +111,17 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const [clearingFlag, setClearingFlag] = useState(null) // partId being cleared
 
   useEffect(() => {
-    loadSettings()
-    const params = new URLSearchParams(window.location.search)
-    const code = params.get('code')
-    if (code) {
-      handleOAuthCallback(code)
-      window.history.replaceState({}, '', window.location.pathname + '#settings-ebay')
-      setTab('ebay')
+    const init = async () => {
+      await loadSettings()
+      const params = new URLSearchParams(window.location.search)
+      const code = params.get('code')
+      if (code) {
+        handleOAuthCallback(code)
+        window.history.replaceState({}, '', window.location.pathname + '#settings-ebay')
+        setTab('ebay')
+      }
     }
+    init()
   }, [storeId])
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
