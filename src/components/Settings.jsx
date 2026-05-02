@@ -177,7 +177,12 @@ export default function Settings({ profile, storeId, onSignOut }) {
       const res = await fetch(`${CLOUDFLARE_PROXY}/ebay/token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, certId: ebayCreds.certId }),
+        body: JSON.stringify({ 
+          code, 
+          appId: ebayCreds.appId,
+          certId: ebayCreds.certId,
+          ruName: ebayCreds.ruName,
+          }),
       })
       const tokens = await res.json()
       if (!tokens.access_token) throw new Error(tokens.error || 'No token returned')
