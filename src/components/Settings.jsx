@@ -204,8 +204,11 @@ export default function Settings({ profile, storeId, onSignOut }) {
       setEbayConnected(true)
       setEbayExpiry(expiresAt)
       setEbayTestResult({ ok: true, msg: 'Connected to eBay successfully!' })
-    } catch (e) {
+  } catch (e) {
       console.error('OAuth callback failed', e)
+      setEbayTestResult({ ok: false, msg: `Connection failed: ${e.message}` })
+    }
+  }
 
   const connectEbay = () => {
     if (!ebayCreds.certId) {
