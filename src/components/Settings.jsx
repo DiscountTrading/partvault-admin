@@ -126,6 +126,11 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const [resolutionResult, setResolutionResult] = useState(null)
   const [rowSelections, setRowSelections] = useState({}) // { [partId]: actionKey } — overrides suggested action
 
+  // Enrich-from-eBay state (Phase B: backfill acquired_date + weight)
+  const [enrichJob, setEnrichJob] = useState(null) // { id, total, enriched, noData, failed, status, currentItem }
+  const [enriching, setEnriching] = useState(false)
+  const enrichCancelRef = useRef(false)
+
   useEffect(() => {
     const init = async () => {
       await loadSettings()
@@ -381,6 +386,183 @@ export default function Settings({ profile, storeId, onSignOut }) {
     setImportJob(j => ({ ...j, status: 'cancelled' }))
   }
 
+  // ─── ENRICH FROM EBAY (Phase B: backfill acquired_date + weight) ─────────
+  const enrichFromEbay = async () => {
+    enrichCancelRef.current = false
+    setEnriching(true)
+    setEnrichJob({ status: 'starting', current_item: 'Finding parts to enrich…' })
+    try {
+      const res = await fetch(EDGE_FN, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'enrich_start', storeId }),
+      })
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+
+      if (!data.jobId) {
+        // Nothing to enrich — already done
+        setEnrichJob({ status: 'completed', current_item: data.message || 'Nothing to enrich.', total: 0, enriched: 0, noData: 0, failed: 0 })
+        setEnriching(false)
+        return
+      }
+
+      const jobId = data.jobId
+      setEnrichJob({
+        status: 'running',
+        id: jobId,
+        total: data.totalIds,
+        enriched: 0,
+        noData: 0,
+        failed: 0,
+        current_item: 'Starting…',
+      })
+
+      const processNext = async () => {
+        if (enrichCancelRef.current) {
+          await sb.from('import_jobs').update({ status: 'cancelled' }).eq('id', jobId)
+          setEnrichJob(j => ({ ...j, status: 'cancelled' }))
+          setEnriching(false)
+          return
+        }
+
+        const { data: jobCheck } = await sb.from('import_jobs').select('status').eq('id', jobId).single()
+        if (jobCheck?.status === 'cancelled') {
+          setEnrichJob(j => ({ ...j, status: 'cancelled' }))
+          setEnriching(false)
+          return
+        }
+
+        try {
+          const chunkRes = await fetch(EDGE_FN, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'enrich_chunk', jobId, storeId }),
+          })
+          const chunk = await chunkRes.json()
+          if (chunk.error && chunk.retry) {
+            console.log('Enrich chunk timed out, retrying…')
+            setTimeout(processNext, 2000)
+            return
+          }
+          if (chunk.error) throw new Error(chunk.error)
+
+          setEnrichJob(j => ({
+            ...j,
+            id: jobId,
+            status: chunk.status,
+            enriched: chunk.enriched,
+            noData: chunk.noData,
+            failed: chunk.failed,
+            offset: chunk.offset,
+            total: chunk.total,
+            current_item: chunk.isComplete
+              ? `✓ Complete — ${chunk.enriched} enriched, ${chunk.noData} no eBay data, ${chunk.failed} failed`
+              : `Enriching ${chunk.offset} of ${chunk.total}…`,
+          }))
+
+          if (chunk.isComplete || chunk.status === 'completed') {
+            setEnriching(false)
+            return
+          }
+
+          setTimeout(processNext, 300)
+        } catch (e) {
+          setEnrichJob(j => ({ ...j, status: 'failed', error_message: e.message }))
+          setEnriching(false)
+        }
+      }
+
+      setTimeout(processNext, 300)
+
+    } catch (e) {
+      setEnrichJob({ status: 'failed', error_message: e.message })
+      setEnriching(false)
+    }
+  }
+
+  const cancelEnrich = () => {
+    enrichCancelRef.current = true
+  }
+
+  // Reattach progress on mount if there's an active enrichment job from a previous session
+  useEffect(() => {
+    if (!storeId) return
+    let cancelled = false
+    ;(async () => {
+      const { data: jobs } = await sb.from('import_jobs')
+        .select('*')
+        .eq('store_id', storeId)
+        .eq('status', 'running')
+        .order('updated_at', { ascending: false })
+        .limit(5)
+      if (cancelled) return
+      const enrichJobInProgress = (jobs || []).find(j => j?.meta?.job_type === 'enrich_from_ebay')
+      if (enrichJobInProgress) {
+        setEnrichJob({
+          id: enrichJobInProgress.id,
+          status: 'running',
+          total: enrichJobInProgress.total_ids,
+          enriched: enrichJobInProgress.imported_count || 0,
+          noData: enrichJobInProgress.skipped_count || 0,
+          failed: enrichJobInProgress.failed_count || 0,
+          offset: enrichJobInProgress.batch_offset,
+          current_item: enrichJobInProgress.current_item || 'Resuming…',
+        })
+        // Resume processing from where it left off
+        setEnriching(true)
+        enrichCancelRef.current = false
+        const resumeJobId = enrichJobInProgress.id
+        const processNext = async () => {
+          if (enrichCancelRef.current) {
+            await sb.from('import_jobs').update({ status: 'cancelled' }).eq('id', resumeJobId)
+            setEnrichJob(j => ({ ...j, status: 'cancelled' }))
+            setEnriching(false)
+            return
+          }
+          const { data: jobCheck } = await sb.from('import_jobs').select('status').eq('id', resumeJobId).single()
+          if (jobCheck?.status !== 'running') {
+            setEnrichJob(j => ({ ...j, status: jobCheck?.status || 'completed' }))
+            setEnriching(false)
+            return
+          }
+          try {
+            const chunkRes = await fetch(EDGE_FN, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'enrich_chunk', jobId: resumeJobId, storeId }),
+            })
+            const chunk = await chunkRes.json()
+            if (chunk.error && chunk.retry) { setTimeout(processNext, 2000); return }
+            if (chunk.error) throw new Error(chunk.error)
+            setEnrichJob(j => ({
+              ...j,
+              status: chunk.status,
+              enriched: chunk.enriched,
+              noData: chunk.noData,
+              failed: chunk.failed,
+              offset: chunk.offset,
+              total: chunk.total,
+              current_item: chunk.isComplete
+                ? `✓ Complete — ${chunk.enriched} enriched, ${chunk.noData} no eBay data, ${chunk.failed} failed`
+                : `Enriching ${chunk.offset} of ${chunk.total}…`,
+            }))
+            if (chunk.isComplete || chunk.status === 'completed') {
+              setEnriching(false)
+              return
+            }
+            setTimeout(processNext, 300)
+          } catch (e) {
+            setEnrichJob(j => ({ ...j, status: 'failed', error_message: e.message }))
+            setEnriching(false)
+          }
+        }
+        setTimeout(processNext, 300)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [storeId])
+
   // ─── RECONCILE ───────────────────────────────────────────────────────────
   const runReconcile = async () => {
     setReconciling(true)
@@ -553,16 +735,52 @@ export default function Settings({ profile, storeId, onSignOut }) {
     setClearingFlag(null)
   }
 
+  // ===== Persistent parse loop (lives on window, survives component unmount) =====
+  // Settings.jsx mounts → reattaches to in-flight parse if any.
+  // Settings.jsx unmounts → loop keeps running because it's not tied to React.
+
+  // On mount, sync local state from window.__partvaultParse if a parse is in progress
+  useEffect(() => {
+    const w = typeof window !== 'undefined' ? window : null
+    if (!w) return
+    if (w.__partvaultParse?.running) {
+      setParsing(true)
+      setParseProgress(w.__partvaultParse.progress || null)
+    }
+    const onUpdate = () => {
+      const p = w.__partvaultParse
+      if (p?.running) {
+        setParsing(true)
+        setParseProgress(p.progress)
+      } else {
+        setParsing(false)
+        setParseProgress(null)
+      }
+    }
+    w.addEventListener('partvault-parse-update', onUpdate)
+    return () => w.removeEventListener('partvault-parse-update', onUpdate)
+  }, [])
+
   const parseMakeModelYear = async () => {
     if (!anthropicKey) {
       alert('No Anthropic API key saved. Add it in the Account tab and click Save.')
       return
     }
-    parseCancelRef.current = false
-    setParsing(true)
-    setParseProgress({ processed: 0, total: 0, failed: 0, current: 'Loading parts…' })
+    if (window.__partvaultParse?.running) {
+      alert('A parse is already running.')
+      return
+    }
+
+    // Initialise the singleton on window
+    const job = window.__partvaultParse = {
+      running: true,
+      cancelled: false,
+      progress: { processed: 0, total: 0, failed: 0, current: 'Loading parts…' },
+    }
+    const broadcast = () => window.dispatchEvent(new CustomEvent('partvault-parse-update'))
+    broadcast()
+
     try {
-      // Fetch ALL unparsed parts (not just 10)
       const { data: parts, error } = await sb
         .from('parts')
         .select('id,title')
@@ -572,18 +790,21 @@ export default function Settings({ profile, storeId, onSignOut }) {
       if (error) throw error
       if (!parts?.length) {
         alert('No unprocessed parts found.')
-        setParsing(false)
-        setParseProgress(null)
+        job.running = false
+        broadcast()
+        delete window.__partvaultParse
         return
       }
       const total = parts.length
-      setParseProgress({ processed: 0, total, failed: 0, current: '' })
+      job.progress = { processed: 0, total, failed: 0, current: '' }
+      broadcast()
 
       let processed = 0
       let failed = 0
       for (const part of parts) {
-        if (parseCancelRef.current) break
-        setParseProgress({ processed, total, failed, current: part.title?.slice(0, 60) || '' })
+        if (job.cancelled) break
+        job.progress = { processed, total, failed, current: part.title?.slice(0, 60) || '' }
+        broadcast()
         try {
           const res = await fetch(CLOUDFLARE_PROXY, {
             method: 'POST',
@@ -607,20 +828,30 @@ export default function Settings({ profile, storeId, onSignOut }) {
           failed += 1
         }
         processed += 1
-        setParseProgress({ processed, total, failed, current: part.title?.slice(0, 60) || '' })
+        job.progress = { processed, total, failed, current: part.title?.slice(0, 60) || '' }
+        broadcast()
         await new Promise(r => setTimeout(r, 400))
       }
-      const cancelled = parseCancelRef.current
-      alert(`${cancelled ? 'Cancelled' : 'Done'}. Processed ${processed} of ${total} parts. ${failed} failed.`)
+
+      const wasCancelled = job.cancelled
+      const summary = `${wasCancelled ? 'Cancelled' : 'Done'}. Processed ${processed} of ${total} parts. ${failed} failed.`
+      job.running = false
+      job.summary = summary
+      broadcast()
+      alert(summary)
     } catch (e) {
+      job.running = false
+      broadcast()
       alert(`Parse failed: ${e.message}`)
+    } finally {
+      // Clear after a short delay so the UI can react to running=false
+      setTimeout(() => { delete window.__partvaultParse; broadcast() }, 500)
     }
-    setParsing(false)
-    setParseProgress(null)
-    parseCancelRef.current = false
   }
 
-  const cancelParse = () => { parseCancelRef.current = true }
+  const cancelParse = () => {
+    if (window.__partvaultParse) window.__partvaultParse.cancelled = true
+  }
 
   const setAi = (k, v) => setAiSettings(s => ({ ...s, [k]: v }))
 
@@ -1133,6 +1364,63 @@ export default function Settings({ profile, storeId, onSignOut }) {
                 <button style={{ ...S.btn('primary'), flex: 1 }} onClick={connectEbay}>Connect eBay</button>
               )}
             </div>
+          </Section>
+
+          {/* Enrich from eBay (Phase B) */}
+          <Section title="📅 Enrich from eBay">
+            <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
+              Pulls <strong>acquired date</strong> (first listed on eBay) and <strong>weight</strong> from eBay for parts that are missing these fields.
+              Existing values are never overwritten — only blanks are filled. Runs server-side so it survives navigating away.
+            </p>
+
+            {enrichJob && (
+              <div style={{ marginBottom: 12, padding: 12, background: '#f8fafb', borderRadius: 8, border: `1px solid ${C.border}` }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>
+                    {enrichJob.status === 'completed' ? '✓ Done'
+                      : enrichJob.status === 'cancelled' ? 'Cancelled'
+                      : enrichJob.status === 'failed' ? 'Failed'
+                      : enrichJob.total ? `Enriching ${enrichJob.offset || 0} of ${enrichJob.total}` : 'Loading…'}
+                  </div>
+                  <div style={{ fontSize: 12, color: C.muted }}>
+                    {enrichJob.total > 0 && `${Math.round(((enrichJob.offset || 0) / enrichJob.total) * 100)}%`}
+                  </div>
+                </div>
+                <div style={{ height: 6, background: C.border, borderRadius: 3, overflow: 'hidden', marginBottom: 8 }}>
+                  <div style={{
+                    height: '100%',
+                    width: enrichJob.total > 0 ? `${((enrichJob.offset || 0) / enrichJob.total) * 100}%` : '0%',
+                    background: enrichJob.status === 'completed' ? C.green : enrichJob.status === 'failed' ? C.red : C.accent,
+                    transition: 'width .3s ease',
+                  }} />
+                </div>
+                <div style={{ display: 'flex', gap: 16, fontSize: 12, color: C.muted, marginBottom: 4 }}>
+                  <span><strong style={{ color: C.green }}>{enrichJob.enriched || 0}</strong> enriched</span>
+                  <span><strong>{enrichJob.noData || 0}</strong> no eBay data</span>
+                  {enrichJob.failed > 0 && <span style={{ color: C.red }}><strong>{enrichJob.failed}</strong> failed</span>}
+                </div>
+                {enrichJob.current_item && (
+                  <div style={{ fontSize: 11, color: C.muted, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {enrichJob.current_item}
+                  </div>
+                )}
+                {enrichJob.error_message && (
+                  <div style={{ fontSize: 12, color: C.red, marginTop: 4 }}>
+                    {enrichJob.error_message}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {enriching ? (
+              <button style={{ ...S.btn('danger'), width: '100%' }} onClick={cancelEnrich}>
+                ✕ Cancel
+              </button>
+            ) : (
+              <button style={{ ...S.btn('primary'), width: '100%' }} onClick={enrichFromEbay}>
+                📅 Pull dates &amp; weights from eBay
+              </button>
+            )}
           </Section>
 
           {/* Parse with AI */}
