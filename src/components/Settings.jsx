@@ -88,6 +88,12 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(true)
 
+  // Anthropic API key (store-wide, used for AI parsing)
+  const [anthropicKey, setAnthropicKey] = useState('')
+  const [showAnthropicKey, setShowAnthropicKey] = useState(false)
+  const [anthropicKeySaving, setAnthropicKeySaving] = useState(false)
+  const [anthropicKeySaved, setAnthropicKeySaved] = useState(false)
+
   // eBay state
   const [ebayCreds, setEbayCreds] = useState({ appId: EBAY_CLIENT_ID, certId: '', ruName: EBAY_RUNAME })
   const [showCert, setShowCert] = useState(false)
@@ -119,14 +125,17 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const [rowSelections, setRowSelections] = useState({}) // { [partId]: actionKey } — overrides suggested action
 
   useEffect(() => {
-    loadSettings()
-    const params = new URLSearchParams(window.location.search)
-    const code = params.get('code')
-    if (code) {
-      handleOAuthCallback(code)
-      window.history.replaceState({}, '', window.location.pathname + '#settings-ebay')
-      setTab('ebay')
+    const init = async () => {
+      await loadSettings()
+      const params = new URLSearchParams(window.location.search)
+      const code = params.get('code')
+      if (code) {
+        handleOAuthCallback(code)
+        window.history.replaceState({}, '', window.location.pathname + '#settings-ebay')
+        setTab('ebay')
+      }
     }
+    init()
   }, [storeId])
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
@@ -139,6 +148,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
         if (data.settings.footer) setFooter(data.settings.footer)
         if (data.settings.aiDescription) setAiSettings(s => ({ ...s, ...data.settings.aiDescription }))
         if (data.settings.ebayCreds) setEbayCreds(c => ({ ...c, ...data.settings.ebayCreds }))
+        if (data.settings.anthropicKey) setAnthropicKey(data.settings.anthropicKey)
         if (data.settings.ebayOAuth?.accessToken) {
           setEbayConnected(true)
           setEbayExpiry(data.settings.ebayOAuth.expiresAt)
@@ -180,19 +190,47 @@ export default function Settings({ profile, storeId, onSignOut }) {
     setCredsSaving(false)
   }
 
+  const saveAnthropicKey = async () => {
+    if (!storeId) return
+    setAnthropicKeySaving(true)
+    try {
+      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      const merged = { ...(current?.settings || {}), anthropicKey }
+      await sb.from('stores').update({ settings: merged }).eq('id', storeId)
+      setAnthropicKeySaved(true)
+      setTimeout(() => setAnthropicKeySaved(false), 2000)
+    } catch (e) {
+      console.error('Save Anthropic key failed', e)
+      alert(`Failed to save: ${e.message}`)
+    }
+    setAnthropicKeySaving(false)
+  }
+
   const handleOAuthCallback = async (code) => {
     try {
+      // Read fresh creds from DB rather than relying on state (avoids race with loadSettings)
+      const { data: storeData } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      const creds = storeData?.settings?.ebayCreds
+      if (!creds?.appId || !creds?.certId || !creds?.ruName) {
+        setEbayTestResult({ ok: false, msg: 'eBay credentials not found in database. Please save credentials first.' })
+        return
+      }
       const res = await fetch(`${CLOUDFLARE_PROXY}/ebay/token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, certId: ebayCreds.certId }),
+        body: JSON.stringify({
+          code,
+          appId: creds.appId,
+          certId: creds.certId,
+          ruName: creds.ruName,
+        }),
       })
       const tokens = await res.json()
-      if (!tokens.access_token) throw new Error(tokens.error || 'No token returned')
+      if (!tokens.access_token) throw new Error(tokens.error_description || tokens.error || 'No token returned')
       const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString()
       const ebayOAuth = { accessToken: tokens.access_token, refreshToken: tokens.refresh_token, expiresAt, expiresIn: tokens.expires_in }
       const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const merged = { ...(current?.settings || {}), ebayOAuth, ebayCreds }
+      const merged = { ...(current?.settings || {}), ebayOAuth, ebayCreds: creds }
       await sb.from('stores').update({ settings: merged }).eq('id', storeId)
       setEbayConnected(true)
       setEbayExpiry(expiresAt)
@@ -516,14 +554,17 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const parseMakeModelYear = async () => {
     setParsing(true)
     try {
-      const apiKey = localStorage.getItem('pv_api_key')
-      if (!apiKey) { alert('No Anthropic API key saved. Set it in localStorage as pv_api_key.'); setParsing(false); return }
+      if (!anthropicKey) {
+        alert('No Anthropic API key saved. Add it in the Account tab and click Save.')
+        setParsing(false)
+        return
+      }
       const { data: parts } = await sb.from('parts').select('id,title,make,model,year').eq('store_id', storeId).is('make', null).limit(10)
       if (!parts?.length) { alert('No unprocessed parts found.'); setParsing(false); return }
       for (const part of parts) {
-        const res = await fetch('https://api.anthropic.com/v1/messages', {
+        const res = await fetch(CLOUDFLARE_PROXY, {
           method: 'POST',
-          headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+          headers: { 'x-api-key': anthropicKey, 'content-type': 'application/json' },
           body: JSON.stringify({
             model: 'claude-haiku-4-5-20251001', max_tokens: 200,
             messages: [{ role: 'user', content: `Extract make, model, and year range from this eBay car parts listing title. Return JSON only: {"make":"","model":"","year_from":null,"year_to":null}\n\nTitle: ${part.title}` }]
@@ -879,6 +920,38 @@ export default function Settings({ profile, storeId, onSignOut }) {
               <div>Store: <strong style={{ color: C.text }}>{profile?.store?.name || '—'}</strong></div>
             </div>
             <button style={{ ...S.btn('danger'), padding: '10px 24px' }} onClick={onSignOut}>Sign Out</button>
+          </Section>
+          <Section title="Anthropic API Key">
+            <div style={{ fontSize: 13, color: C.muted, marginBottom: 12, lineHeight: 1.5 }}>
+              Used for AI-powered parsing of make / model / year from listing titles. Stored against your store, so workers don't need to set it on each device. Get a key at <a href="https://console.anthropic.com/" target="_blank" rel="noopener" style={{ color: C.accent }}>console.anthropic.com</a>.
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'stretch', flexWrap: 'wrap' }}>
+              <div style={{ position: 'relative', flex: '1 1 320px', minWidth: 0 }}>
+                <input
+                  type={showAnthropicKey ? 'text' : 'password'}
+                  value={anthropicKey}
+                  onChange={e => setAnthropicKey(e.target.value)}
+                  placeholder="sk-ant-api03-..."
+                  style={{ ...S.input, width: '100%', paddingRight: 70, fontFamily: 'monospace', fontSize: 13 }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowAnthropicKey(s => !s)}
+                  style={{
+                    position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
+                    background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer',
+                    fontSize: 12, padding: '4px 8px',
+                  }}
+                >{showAnthropicKey ? 'Hide' : 'Show'}</button>
+              </div>
+              <button
+                onClick={saveAnthropicKey}
+                disabled={anthropicKeySaving || !anthropicKey}
+                style={{ ...S.btn(anthropicKeySaved ? 'success' : 'primary'), padding: '0 20px', whiteSpace: 'nowrap' }}
+              >
+                {anthropicKeySaving ? 'Saving…' : anthropicKeySaved ? '✓ Saved' : 'Save'}
+              </button>
+            </div>
           </Section>
           <Section title="Supabase Connection">
             <div style={{ fontSize: 14, color: C.muted, lineHeight: 1.9 }}>
