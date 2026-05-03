@@ -106,6 +106,8 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const [importing, setImporting] = useState(false)
   const [importJob, setImportJob] = useState(null)
   const [parsing, setParsing] = useState(false)
+  const [parseProgress, setParseProgress] = useState(null) // { processed, total, failed }
+  const parseCancelRef = useRef(false)
   const pollRef = useRef(null)
 
   // Reconcile state
@@ -552,38 +554,73 @@ export default function Settings({ profile, storeId, onSignOut }) {
   }
 
   const parseMakeModelYear = async () => {
+    if (!anthropicKey) {
+      alert('No Anthropic API key saved. Add it in the Account tab and click Save.')
+      return
+    }
+    parseCancelRef.current = false
     setParsing(true)
+    setParseProgress({ processed: 0, total: 0, failed: 0, current: 'Loading parts…' })
     try {
-      if (!anthropicKey) {
-        alert('No Anthropic API key saved. Add it in the Account tab and click Save.')
+      // Fetch ALL unparsed parts (not just 10)
+      const { data: parts, error } = await sb
+        .from('parts')
+        .select('id,title')
+        .eq('store_id', storeId)
+        .or('make.is.null,make.eq.')
+        .range(0, 9999)
+      if (error) throw error
+      if (!parts?.length) {
+        alert('No unprocessed parts found.')
         setParsing(false)
+        setParseProgress(null)
         return
       }
-      const { data: parts } = await sb.from('parts').select('id,title,make,model,year').eq('store_id', storeId).is('make', null).limit(10)
-      if (!parts?.length) { alert('No unprocessed parts found.'); setParsing(false); return }
+      const total = parts.length
+      setParseProgress({ processed: 0, total, failed: 0, current: '' })
+
+      let processed = 0
+      let failed = 0
       for (const part of parts) {
-        const res = await fetch(CLOUDFLARE_PROXY, {
-          method: 'POST',
-          headers: { 'x-api-key': anthropicKey, 'content-type': 'application/json' },
-          body: JSON.stringify({
-            model: 'claude-haiku-4-5-20251001', max_tokens: 200,
-            messages: [{ role: 'user', content: `Extract make, model, and year range from this eBay car parts listing title. Return JSON only: {"make":"","model":"","year_from":null,"year_to":null}\n\nTitle: ${part.title}` }]
-          })
-        })
-        const d = await res.json()
-        const text = d.content?.[0]?.text || '{}'
+        if (parseCancelRef.current) break
+        setParseProgress({ processed, total, failed, current: part.title?.slice(0, 60) || '' })
         try {
+          const res = await fetch(CLOUDFLARE_PROXY, {
+            method: 'POST',
+            headers: { 'x-api-key': anthropicKey, 'content-type': 'application/json' },
+            body: JSON.stringify({
+              model: 'claude-haiku-4-5-20251001', max_tokens: 200,
+              messages: [{ role: 'user', content: `Extract make, model, and year range from this eBay car parts listing title. Return JSON only: {"make":"","model":"","year":""}\n\nThe "year" field should be a string like "2011-2017" for a range, or "2014" for a single year, or empty if unknown.\n\nTitle: ${part.title}` }]
+            })
+          })
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          const d = await res.json()
+          const text = d.content?.[0]?.text || '{}'
           const parsed = JSON.parse(text.replace(/```json|```/g, '').trim())
-          await sb.from('parts').update({ make: parsed.make || null, model: parsed.model || null, year_from: parsed.year_from || null, year_to: parsed.year_to || null }).eq('id', part.id)
-        } catch {}
-        await new Promise(r => setTimeout(r, 300))
+          await sb.from('parts').update({
+            make: parsed.make || null,
+            model: parsed.model || null,
+            year: parsed.year || null,
+          }).eq('id', part.id)
+        } catch (err) {
+          console.error('Parse failed for part', part.id, err)
+          failed += 1
+        }
+        processed += 1
+        setParseProgress({ processed, total, failed, current: part.title?.slice(0, 60) || '' })
+        await new Promise(r => setTimeout(r, 400))
       }
-      alert(`Processed ${parts.length} parts.`)
+      const cancelled = parseCancelRef.current
+      alert(`${cancelled ? 'Cancelled' : 'Done'}. Processed ${processed} of ${total} parts. ${failed} failed.`)
     } catch (e) {
       alert(`Parse failed: ${e.message}`)
     }
     setParsing(false)
+    setParseProgress(null)
+    parseCancelRef.current = false
   }
+
+  const cancelParse = () => { parseCancelRef.current = true }
 
   const setAi = (k, v) => setAiSettings(s => ({ ...s, [k]: v }))
 
@@ -1101,11 +1138,45 @@ export default function Settings({ profile, storeId, onSignOut }) {
           {/* Parse with AI */}
           <Section title="🤖 Parse with AI">
             <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
-              Extracts make, model and year from listing titles. Processes unparsed listings in batches of 10. Requires your Anthropic API key saved in the browser.
+              Extracts make, model and year from listing titles using Claude Haiku. Processes all unparsed listings in one run. Requires your Anthropic API key saved in the Account tab.
             </p>
-            <button style={{ ...S.btn('primary'), width: '100%', opacity: parsing ? 0.6 : 1 }} onClick={parseMakeModelYear} disabled={parsing}>
-              {parsing ? '⏳ Parsing...' : '🔍 Parse Make / Model / Year'}
-            </button>
+
+            {parsing && parseProgress && (
+              <div style={{ marginBottom: 12, padding: 12, background: '#f8fafb', borderRadius: 8, border: `1px solid ${C.border}` }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>
+                    {parseProgress.total === 0 ? 'Loading…' : `Processing ${parseProgress.processed} of ${parseProgress.total}`}
+                  </div>
+                  <div style={{ fontSize: 12, color: C.muted }}>
+                    {parseProgress.total > 0 && `${Math.round((parseProgress.processed / parseProgress.total) * 100)}%`}
+                    {parseProgress.failed > 0 && <span style={{ color: C.red, marginLeft: 8 }}>{parseProgress.failed} failed</span>}
+                  </div>
+                </div>
+                <div style={{ height: 6, background: C.border, borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{
+                    height: '100%',
+                    width: parseProgress.total > 0 ? `${(parseProgress.processed / parseProgress.total) * 100}%` : '0%',
+                    background: C.accent,
+                    transition: 'width .3s ease',
+                  }} />
+                </div>
+                {parseProgress.current && (
+                  <div style={{ fontSize: 11, color: C.muted, marginTop: 8, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {parseProgress.current}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {parsing ? (
+              <button style={{ ...S.btn('danger'), width: '100%' }} onClick={cancelParse}>
+                ✕ Cancel
+              </button>
+            ) : (
+              <button style={{ ...S.btn('primary'), width: '100%' }} onClick={parseMakeModelYear}>
+                🔍 Parse Make / Model / Year
+              </button>
+            )}
           </Section>
 
           </div>{/* end left column */}
