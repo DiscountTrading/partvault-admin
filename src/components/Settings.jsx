@@ -116,6 +116,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const [enrichedData, setEnrichedData] = useState(null) // { [itemId]: { ebayStatus, endDate, salePrice, soldDate } }
   const [applyingResolutions, setApplyingResolutions] = useState(false)
   const [resolutionResult, setResolutionResult] = useState(null)
+  const [rowSelections, setRowSelections] = useState({}) // { [partId]: actionKey } — overrides suggested action
 
   useEffect(() => {
     loadSettings()
@@ -408,20 +409,31 @@ export default function Settings({ profile, storeId, onSignOut }) {
     setEnrichmentProgress(null)
   }
 
-  const suggestedAction = (enriched) => {
-    if (!enriched) return null
-    if (enriched.ebayStatus === 'Sold') return { newStatus: 'Sold', label: `Mark Sold${enriched.salePrice ? ` ($${enriched.salePrice})` : ''}`, color: C.green }
-    if (enriched.ebayStatus === 'Ended') return { newStatus: 'Listed', label: 'Defer for Review', color: C.muted, isDefer: true }
-    if (enriched.ebayStatus === 'NotFound') return { newStatus: 'Archived', label: 'Mark Archived', color: C.red }
-    if (enriched.ebayStatus === 'Active') return { newStatus: 'Listed', label: 'Clear Flag (still active)', color: C.blue }
-    return { newStatus: 'Listed', label: 'Clear Flag', color: C.muted }
+  // Action options available per row. The "suggested" one is pre-selected based on eBay status.
+  const ACTION_OPTIONS = {
+    sold: { label: 'Mark Sold', newStatus: 'Sold', color: C.green },
+    archived: { label: 'Mark Archived', newStatus: 'Archived', color: C.yellow },
+    defer: { label: 'Defer for Review', newStatus: 'Listed', color: C.accent, deferReview: true },
+    clear: { label: 'Clear Flag', newStatus: 'Listed', color: C.muted, deferReview: false },
   }
 
-  const applyResolution = async (partId, ebayItemId, overrideStatus = null) => {
+  const suggestedActionKey = (enriched) => {
+    if (!enriched) return 'clear'
+    if (enriched.ebayStatus === 'Sold') return 'sold'
+    if (enriched.ebayStatus === 'Ended') return 'defer'
+    if (enriched.ebayStatus === 'NotFound') return 'archived'
+    if (enriched.ebayStatus === 'Active') return 'clear'
+    return 'clear'
+  }
+
+  const getRowAction = (partId, enriched) => {
+    const key = rowSelections[partId] || suggestedActionKey(enriched)
+    return { key, ...ACTION_OPTIONS[key] }
+  }
+
+  const applyResolution = async (partId, ebayItemId) => {
     const enriched = enrichedData?.[ebayItemId]
-    const action = suggestedAction(enriched)
-    const newStatus = overrideStatus || action?.newStatus
-    if (!newStatus) return
+    const action = getRowAction(partId, enriched)
     setClearingFlag(partId)
     try {
       const res = await fetch(EDGE_FN, {
@@ -432,9 +444,10 @@ export default function Settings({ profile, storeId, onSignOut }) {
           storeId,
           resolutions: [{
             partId,
-            newStatus,
-            salePrice: enriched?.salePrice,
-            soldDate: enriched?.soldDate,
+            newStatus: action.newStatus,
+            deferReview: action.deferReview === true,
+            salePrice: action.key === 'sold' ? enriched?.salePrice : undefined,
+            soldDate: action.key === 'sold' ? enriched?.soldDate : undefined,
           }],
         }),
       })
@@ -459,12 +472,13 @@ export default function Settings({ profile, storeId, onSignOut }) {
     try {
       const resolutions = reconcileResult.staleParts.map(p => {
         const enriched = enrichedData[p.ebayItemId]
-        const action = suggestedAction(enriched)
+        const action = getRowAction(p.id, enriched)
         return {
           partId: p.id,
-          newStatus: action?.newStatus || 'Listed',
-          salePrice: enriched?.salePrice,
-          soldDate: enriched?.soldDate,
+          newStatus: action.newStatus,
+          deferReview: action.deferReview === true,
+          salePrice: action.key === 'sold' ? enriched?.salePrice : undefined,
+          soldDate: action.key === 'sold' ? enriched?.soldDate : undefined,
         }
       })
       const res = await fetch(EDGE_FN, {
@@ -477,6 +491,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
       setResolutionResult({ ok: true, msg: `✓ Updated ${data.updated} parts` })
       setReconcileResult(r => ({ ...r, staleParts: [], staleCount: 0 }))
       setEnrichedData(null)
+      setRowSelections({})
     } catch (e) {
       setResolutionResult({ ok: false, msg: `Failed: ${e.message}` })
     }
@@ -614,18 +629,22 @@ export default function Settings({ profile, storeId, onSignOut }) {
                 {/* Bulk action banner — shows after enrichment */}
                 {enrichedData && (
                   <div style={{ padding: 14, borderRadius: 8, marginBottom: 12, background: '#f0fdf4', border: `1px solid #86efac` }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                      <div style={{ fontSize: 13, color: C.green, lineHeight: 1.6 }}>
-                        ✓ Status retrieved from eBay. Sold items are auto-marked. Ended items default to "Defer for Review" — keeping them in PartVault for later inventory decisions (relist / discount / scrap). Override individual rows with "Archive" if a part is definitely gone.
-                      </div>
-                      <button
-                        onClick={applyAllResolutions}
-                        disabled={applyingResolutions}
-                        style={{ ...S.btn('primary'), fontSize: 13, padding: '8px 16px', opacity: applyingResolutions ? 0.6 : 1 }}
-                      >
-                        {applyingResolutions ? '⏳ Applying...' : '✓ Apply All Suggested Actions'}
-                      </button>
+                    <div style={{ fontSize: 13, color: C.green, lineHeight: 1.6, marginBottom: 10 }}>
+                      ✓ Status retrieved from eBay. Each row has a dropdown with the suggested action pre-selected — change any you want, then click <strong>"Apply All Suggested Actions"</strong> to run them all at once. Or click <strong>Apply</strong> on individual rows.
                     </div>
+                    <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.7, marginBottom: 12 }}>
+                      <strong>Mark Sold</strong> — records sale price and date.
+                      &nbsp;<strong>Mark Archived</strong> — part is gone, removes from active inventory.
+                      &nbsp;<strong>Defer for Review</strong> — keeps part in PartVault and excludes it from future reconciles, awaiting a relist / discount / scrap decision.
+                      &nbsp;<strong>Clear Flag</strong> — keeps part as Listed without deferring (it'll re-flag on next reconcile if still missing from eBay).
+                    </div>
+                    <button
+                      onClick={applyAllResolutions}
+                      disabled={applyingResolutions}
+                      style={{ ...S.btn('primary'), fontSize: 13, padding: '8px 16px', opacity: applyingResolutions ? 0.6 : 1 }}
+                    >
+                      {applyingResolutions ? '⏳ Applying...' : '✓ Apply All Suggested Actions'}
+                    </button>
                     {resolutionResult && (
                       <div style={{ marginTop: 8, fontSize: 12, color: resolutionResult.ok ? C.green : C.red }}>
                         {resolutionResult.msg}
@@ -652,7 +671,8 @@ export default function Settings({ profile, storeId, onSignOut }) {
                     <tbody>
                       {reconcileResult.staleParts.map((p, i) => {
                         const enriched = enrichedData?.[p.ebayItemId]
-                        const action = suggestedAction(enriched)
+                        const action = enriched ? getRowAction(p.id, enriched) : null
+                        const suggestedKey = enriched ? suggestedActionKey(enriched) : null
                         return (
                           <tr key={p.id} style={{ borderTop: i > 0 ? `1px solid ${C.border}` : 'none', background: '#fff' }}>
                             <td style={{ padding: '8px 12px', color: C.muted, fontFamily: 'monospace', fontSize: 12 }}>{p.sku}</td>
@@ -685,38 +705,40 @@ export default function Settings({ profile, storeId, onSignOut }) {
                             )}
                             <td style={{ padding: '8px 12px', textAlign: 'center' }}>
                               {enrichedData ? (
-                                <div style={{ display: 'flex', gap: 4, justifyContent: 'center', flexWrap: 'wrap' }}>
+                                <div style={{ display: 'flex', gap: 6, justifyContent: 'center', alignItems: 'center', flexWrap: 'nowrap' }}>
+                                  <select
+                                    value={rowSelections[p.id] || suggestedKey}
+                                    onChange={e => setRowSelections(s => ({ ...s, [p.id]: e.target.value }))}
+                                    disabled={clearingFlag === p.id}
+                                    style={{
+                                      fontSize: 11,
+                                      padding: '4px 6px',
+                                      borderRadius: 6,
+                                      border: `1px solid ${C.border}`,
+                                      background: '#fff',
+                                      color: C.text,
+                                      cursor: 'pointer',
+                                      minWidth: 130,
+                                    }}
+                                  >
+                                    {Object.entries(ACTION_OPTIONS).map(([key, opt]) => (
+                                      <option key={key} value={key}>
+                                        {opt.label}{key === suggestedKey ? ' (suggested)' : ''}
+                                      </option>
+                                    ))}
+                                  </select>
                                   <button
                                     onClick={() => applyResolution(p.id, p.ebayItemId)}
-                                    disabled={clearingFlag === p.id || !action}
+                                    disabled={clearingFlag === p.id}
                                     style={{
-                                      ...S.btn('secondary'),
+                                      ...S.btn('primary'),
                                       fontSize: 11,
                                       padding: '4px 10px',
                                       opacity: clearingFlag === p.id ? 0.5 : 1,
-                                      background: action?.color === C.green ? '#dcfce7' : action?.color === C.red ? '#fee2e2' : action?.color === C.yellow ? '#fef3c7' : action?.color === C.blue ? '#dbeafe' : undefined,
-                                      color: action?.color || undefined,
                                     }}
                                   >
-                                    {clearingFlag === p.id ? '...' : (action?.label || 'Clear Flag')}
+                                    {clearingFlag === p.id ? '...' : 'Apply'}
                                   </button>
-                                  {action?.isDefer && (
-                                    <button
-                                      onClick={() => applyResolution(p.id, p.ebayItemId, 'Archived')}
-                                      disabled={clearingFlag === p.id}
-                                      style={{
-                                        ...S.btn('secondary'),
-                                        fontSize: 11,
-                                        padding: '4px 10px',
-                                        opacity: clearingFlag === p.id ? 0.5 : 1,
-                                        background: '#fef3c7',
-                                        color: C.yellow,
-                                      }}
-                                      title="Override: this part is gone, archive it now"
-                                    >
-                                      Archive
-                                    </button>
-                                  )}
                                 </div>
                               ) : (
                                 <button
