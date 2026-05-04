@@ -29,108 +29,6 @@ const DESCRIPTION_LENGTH_OPTIONS = [
   { value: 'long', label: 'Long', desc: 'Full description with all details' },
 ]
 
-// ── DISCOVERY: Sample eBay data — TEMPORARY ─────────────────────────────
-// Remove this entire section before commercialisation.
-// ────────────────────────────────────────────────────────────────────────
-
-const [discoveryRunning, setDiscoveryRunning] = useState(false)
-const [discoveryProgress, setDiscoveryProgress] = useState('')
-const [discoveryResult, setDiscoveryResult] = useState(null)
-
-const runDiscovery = async () => {
-  setDiscoveryRunning(true)
-  setDiscoveryResult(null)
-  setDiscoveryProgress('Building sample plan...')
-  
-  try {
-    // 1. Get the sample plan
-    const planRes = await callEdgeFunction('sample_plan', { storeId })
-    if (planRes.error) throw new Error(planRes.error)
-    const itemIds = planRes.plan
-    setDiscoveryProgress(`Plan: ${itemIds.length} listings from ${planRes.categoriesFound} categories`)
-    
-    // 2. Process in chunks of 20
-    const CHUNK = 20
-    let totalStored = 0
-    let totalSkipped = 0
-    let totalFailed = 0
-    
-    for (let i = 0; i < itemIds.length; i += CHUNK) {
-      const chunk = itemIds.slice(i, i + CHUNK)
-      setDiscoveryProgress(`Fetching ${i + 1}–${Math.min(i + CHUNK, itemIds.length)} of ${itemIds.length}...`)
-      
-      const chunkRes = await callEdgeFunction('sample_chunk', { 
-        storeId, 
-        itemIds: chunk 
-      })
-      if (chunkRes.error) throw new Error(chunkRes.error)
-      
-      totalStored += chunkRes.stored
-      totalSkipped += chunkRes.skipped
-      totalFailed += chunkRes.failed
-    }
-    
-    setDiscoveryProgress(`Generating summary report...`)
-    
-    // 3. Generate summary
-    const summaryRes = await callEdgeFunction('sample_summary', { storeId })
-    if (summaryRes.error) throw new Error(summaryRes.error)
-    
-    setDiscoveryResult({
-      stored: totalStored,
-      skipped: totalSkipped,
-      failed: totalFailed,
-      summary: summaryRes,
-    })
-    setDiscoveryProgress(`✓ Complete — ${totalStored} stored, ${totalSkipped} already had, ${totalFailed} failed`)
-  } catch (e) {
-    setDiscoveryProgress(`✗ Error: ${e.message}`)
-  } finally {
-    setDiscoveryRunning(false)
-  }
-}
-
-const downloadDiscoveryResult = () => {
-  if (!discoveryResult) return
-  const blob = new Blob([JSON.stringify(discoveryResult.summary, null, 2)], 
-    { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `discovery-summary-${new Date().toISOString().slice(0, 10)}.json`
-  a.click()
-  URL.revokeObjectURL(url)
-}
-
-// In the JSX, add a section like:
-<div style={{...S.card, marginBottom: 16, borderLeft: '4px solid orange'}}>
-  <h3>🔬 Schema Discovery (TEMPORARY)</h3>
-  <p style={{fontSize: 13, color: '#666'}}>
-    Samples 100 random eBay listings with full detail to design the new schema. 
-    Remove this section before launch.
-  </p>
-  <button 
-    onClick={runDiscovery} 
-    disabled={discoveryRunning}
-    style={S.button}
-  >
-    {discoveryRunning ? 'Running...' : 'Run Discovery Sample'}
-  </button>
-  {discoveryProgress && (
-    <p style={{marginTop: 8, fontFamily: 'monospace', fontSize: 12}}>
-      {discoveryProgress}
-    </p>
-  )}
-  {discoveryResult && (
-    <button 
-      onClick={downloadDiscoveryResult} 
-      style={{...S.button, marginTop: 8}}
-    >
-      📥 Download Summary JSON
-    </button>
-  )}
-</div>
-
 // eBay OAuth config
 const EBAY_CLIENT_ID = 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const EBAY_RUNAME = 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
@@ -232,6 +130,13 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const [enrichJob, setEnrichJob] = useState(null) // { id, total, enriched, noData, failed, status, currentItem }
   const [enriching, setEnriching] = useState(false)
   const enrichCancelRef = useRef(false)
+
+  // ── DISCOVERY: Sample eBay data — TEMPORARY ─────────────────────────────
+  // Remove these state vars + runDiscovery/downloadDiscoveryResult functions
+  // and the JSX section before commercialisation.
+  const [discoveryRunning, setDiscoveryRunning] = useState(false)
+  const [discoveryProgress, setDiscoveryProgress] = useState('')
+  const [discoveryResult, setDiscoveryResult] = useState(null)
 
   useEffect(() => {
     const init = async () => {
@@ -585,6 +490,81 @@ export default function Settings({ profile, storeId, onSignOut }) {
 
   const cancelEnrich = () => {
     enrichCancelRef.current = true
+  }
+
+  // ─── DISCOVERY: run sample plan + chunks + summary — TEMPORARY ──────────
+  const runDiscovery = async () => {
+    setDiscoveryRunning(true)
+    setDiscoveryResult(null)
+    setDiscoveryProgress('Building sample plan...')
+
+    try {
+      // 1. Get the sample plan
+      const planRes = await fetch(EDGE_FN, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'sample_plan', storeId }),
+      }).then(r => r.json())
+      if (planRes.error) throw new Error(planRes.error)
+      const itemIds = planRes.plan
+      setDiscoveryProgress(`Plan: ${itemIds.length} listings from ${planRes.categoriesFound} categories`)
+
+      // 2. Process in chunks of 20
+      const CHUNK = 20
+      let totalStored = 0
+      let totalSkipped = 0
+      let totalFailed = 0
+
+      for (let i = 0; i < itemIds.length; i += CHUNK) {
+        const chunk = itemIds.slice(i, i + CHUNK)
+        setDiscoveryProgress(`Fetching ${i + 1}–${Math.min(i + CHUNK, itemIds.length)} of ${itemIds.length}...`)
+
+        const chunkRes = await fetch(EDGE_FN, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'sample_chunk', storeId, itemIds: chunk }),
+        }).then(r => r.json())
+        if (chunkRes.error) throw new Error(chunkRes.error)
+
+        totalStored += chunkRes.stored
+        totalSkipped += chunkRes.skipped
+        totalFailed += chunkRes.failed
+      }
+
+      setDiscoveryProgress('Generating summary report...')
+
+      // 3. Generate summary
+      const summaryRes = await fetch(EDGE_FN, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'sample_summary', storeId }),
+      }).then(r => r.json())
+      if (summaryRes.error) throw new Error(summaryRes.error)
+
+      setDiscoveryResult({
+        stored: totalStored,
+        skipped: totalSkipped,
+        failed: totalFailed,
+        summary: summaryRes,
+      })
+      setDiscoveryProgress(`✓ Complete — ${totalStored} stored, ${totalSkipped} already had, ${totalFailed} failed`)
+    } catch (e) {
+      setDiscoveryProgress(`✗ Error: ${e.message}`)
+    } finally {
+      setDiscoveryRunning(false)
+    }
+  }
+
+  const downloadDiscoveryResult = () => {
+    if (!discoveryResult) return
+    const blob = new Blob([JSON.stringify(discoveryResult.summary, null, 2)],
+      { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `discovery-summary-${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
   }
 
   // Reattach progress on mount if there's an active enrichment job from a previous session
@@ -1399,6 +1379,38 @@ export default function Settings({ profile, storeId, onSignOut }) {
       {tab === 'ebay' && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignItems: 'start' }}>
           <div>
+          {/* DISCOVERY — TEMPORARY, remove before commercialisation */}
+          <div style={{ ...S.card, marginBottom: 16, borderLeft: '4px solid orange' }}>
+            <h2 style={S.h2}>🔬 Schema Discovery (TEMPORARY)</h2>
+            <p style={{ fontSize: 13, color: C.muted, marginBottom: 12, lineHeight: 1.6 }}>
+              Samples 100 random eBay listings with full detail to design the new schema.
+              Remove this section before launch.
+            </p>
+            <button
+              onClick={runDiscovery}
+              disabled={discoveryRunning || !ebayConnected}
+              style={{ ...S.btn('primary'), width: '100%', opacity: (discoveryRunning || !ebayConnected) ? 0.6 : 1 }}
+            >
+              {discoveryRunning ? '⏳ Running...' : '🔬 Run Discovery Sample'}
+            </button>
+            {discoveryProgress && (
+              <p style={{ marginTop: 8, fontFamily: 'monospace', fontSize: 12, color: C.muted }}>
+                {discoveryProgress}
+              </p>
+            )}
+            {discoveryResult && (
+              <button
+                onClick={downloadDiscoveryResult}
+                style={{ ...S.btn('primary'), width: '100%', marginTop: 8 }}
+              >
+                📥 Download Summary JSON
+              </button>
+            )}
+            {!ebayConnected && (
+              <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>Connect eBay below to enable discovery.</div>
+            )}
+          </div>
+
           {/* Credentials */}
           <Section title="🔑 eBay API Credentials">
             <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
