@@ -380,17 +380,53 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const runBackfill = async () => {
     setBackfilling(true)
     setBackfillResult(null)
+
+    const WINDOW_DAYS = 30
+    const YEARS_BACK  = 5
+    const startDate   = new Date(Date.now() - YEARS_BACK * 365 * 24 * 60 * 60 * 1000)
+    let windowEnd     = new Date()
+    let totalUpdated  = 0
+    let totalAlready  = 0
+    let totalNotFound = 0
+    const allErrors   = []
+
     try {
-      const res = await fetch(EDGE_FN, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'backfill_orders', storeId }),
-      })
-      const data = await res.json()
-      if (data.error) throw new Error(data.error)
-      setBackfillResult(data)
+      while (windowEnd > startDate) {
+        const windowStart = new Date(Math.max(
+          windowEnd.getTime() - WINDOW_DAYS * 24 * 60 * 60 * 1000,
+          startDate.getTime()
+        ))
+
+        setBackfillResult({
+          progress: `Checking ${windowStart.toLocaleDateString('en-AU', { month: 'short', year: 'numeric' })}…`,
+          updated: totalUpdated,
+          alreadySold: totalAlready,
+        })
+
+        const res = await fetch(EDGE_FN, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action:   'backfill_orders',
+            storeId,
+            fromDate: windowStart.toISOString(),
+            toDate:   windowEnd.toISOString(),
+          }),
+        })
+        const data = await res.json()
+        if (data.error) throw new Error(data.error)
+
+        totalUpdated  += data.updated    || 0
+        totalAlready  += data.alreadySold || 0
+        totalNotFound += data.notFound   || 0
+        if (data.errors?.length) allErrors.push(...data.errors)
+
+        windowEnd = windowStart
+      }
+
+      setBackfillResult({ done: true, updated: totalUpdated, alreadySold: totalAlready, notFound: totalNotFound, errors: allErrors.slice(0, 20) })
     } catch (e) {
-      setBackfillResult({ error: e.message })
+      setBackfillResult({ error: e.message, updated: totalUpdated })
     }
     setBackfilling(false)
   }
@@ -1650,10 +1686,13 @@ export default function Settings({ profile, storeId, onSignOut }) {
                   {backfilling ? '⏳ Backfilling...' : '🕓 Backfill Historical Sales'}
                 </button>
                 {backfillResult && !backfillResult.error && (
-                  <div style={{ marginTop: 10, padding: '10px 14px', background: '#f0fdf4', border: `1px solid #86efac`, borderRadius: 8, fontSize: 13 }}>
-                    <strong style={{ color: C.green }}>✓ Complete</strong>
-                    <span style={{ color: C.muted, marginLeft: 12 }}>
-                      {backfillResult.updated} updated · {backfillResult.alreadySold} already sold · {backfillResult.notFound} not in PartVault
+                  <div style={{ marginTop: 10, padding: '10px 14px', background: backfillResult.done ? '#f0fdf4' : '#fffbeb', border: `1px solid ${backfillResult.done ? '#86efac' : '#fde68a'}`, borderRadius: 8, fontSize: 13 }}>
+                    {backfillResult.progress && !backfillResult.done && (
+                      <div style={{ color: '#78350f', marginBottom: 4 }}>⏳ {backfillResult.progress}</div>
+                    )}
+                    {backfillResult.done && <strong style={{ color: C.green }}>✓ Complete — </strong>}
+                    <span style={{ color: C.muted }}>
+                      {backfillResult.updated} marked sold · {backfillResult.alreadySold} already sold · {backfillResult.notFound} not in PartVault
                     </span>
                     {backfillResult.errors?.length > 0 && (
                       <div style={{ color: C.red, fontSize: 12, marginTop: 4 }}>{backfillResult.errors.length} errors</div>
