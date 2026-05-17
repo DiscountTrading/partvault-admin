@@ -452,23 +452,33 @@ export default function Settings({ profile, storeId, onSignOut }) {
           skipped: totalSkipped,
         })
 
-        const res = await fetch(EDGE_FN, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action:   'import_sold_history',
-            storeId,
-            fromDate: windowStart.toISOString(),
-            toDate:   windowEnd.toISOString(),
-          }),
-        })
-        const data = await res.json()
-        if (data.error) throw new Error(data.error)
+        let hasMore = true
+        while (hasMore && !historyCancelRef.current) {
+          const res = await fetch(EDGE_FN, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action:   'import_sold_history',
+              storeId,
+              fromDate: windowStart.toISOString(),
+              toDate:   windowEnd.toISOString(),
+            }),
+          })
+          const data = await res.json()
+          if (data.error) throw new Error(data.error)
 
-        totalCreated  += data.created    || 0
-        totalSkipped  += data.skipped    || 0
-        totalNoData   += data.noData     || 0
-        if (data.errors?.length) allErrors.push(...data.errors)
+          totalCreated  += data.created || 0
+          totalSkipped  += data.skipped || 0
+          totalNoData   += data.noData  || 0
+          if (data.errors?.length) allErrors.push(...data.errors)
+          hasMore = data.hasMore || false
+
+          setHistoryResult({
+            progress: `Checking ${windowStart.toLocaleDateString('en-AU', { month: 'short', year: 'numeric' })}${hasMore ? ' (continuing…)' : ''}`,
+            created: totalCreated,
+            skipped: totalSkipped,
+          })
+        }
 
         windowEnd = windowStart
       }
