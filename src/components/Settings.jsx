@@ -97,6 +97,8 @@ export default function Settings({ profile, storeId, onSignOut }) {
   // eBay state
   const [ebayCreds, setEbayCreds] = useState({ appId: EBAY_CLIENT_ID, certId: '', ruName: EBAY_RUNAME })
   const [showCert, setShowCert] = useState(false)
+  const [certIsSet, setCertIsSet] = useState(false)
+  const [certUpdating, setCertUpdating] = useState(false)
   const [ebayConnected, setEbayConnected] = useState(false)
   const [ebayExpiry, setEbayExpiry] = useState(null)
   const [ebayTesting, setEbayTesting] = useState(false)
@@ -163,12 +165,14 @@ export default function Settings({ profile, storeId, onSignOut }) {
         if (data.settings.aiDescription) setAiSettings(s => ({ ...s, ...data.settings.aiDescription }))
         if (data.settings.anthropicKey) setAnthropicKey(data.settings.anthropicKey)
       }
-      // eBay credentials now stored in ebay_tokens (tokens in vault, non-sensitive fields in table)
+      // eBay credentials — non-sensitive fields from ebay_tokens; cert_id status via RPC (never exposed)
       const { data: tokenRow } = await sb.from('ebay_tokens').select('app_id, ru_name, expires_at').eq('store_id', storeId).maybeSingle()
       if (tokenRow) {
         setEbayCreds(c => ({ ...c, appId: tokenRow.app_id||c.appId, ruName: tokenRow.ru_name||c.ruName }))
         if (tokenRow.expires_at) { setEbayConnected(true); setEbayExpiry(tokenRow.expires_at) }
       }
+      const { data: hasCert } = await sb.rpc('has_ebay_cert_id', { p_store_id: storeId })
+      setCertIsSet(!!hasCert)
     } catch (e) {
       console.error('Failed to load settings', e)
     }
@@ -194,7 +198,15 @@ export default function Settings({ profile, storeId, onSignOut }) {
     if (!storeId) return
     setCredsSaving(true)
     try {
-      // Save non-sensitive fields (appId, ruName) to ebay_tokens. certId is already in Supabase Vault.
+      // If a cert_id was entered, store it in Supabase Vault via SECURITY DEFINER RPC — it never persists in the browser
+      if (ebayCreds.certId) {
+        const { error: certErr } = await sb.rpc('set_ebay_cert_id', { p_store_id: storeId, p_cert_id: ebayCreds.certId })
+        if (certErr) throw certErr
+        setEbayCreds(c => ({ ...c, certId: '' }))
+        setCertIsSet(true)
+        setCertUpdating(false)
+      }
+      // App ID and RuName are non-sensitive — stored directly in ebay_tokens
       await sb.from('ebay_tokens').upsert(
         { store_id: storeId, app_id: ebayCreds.appId, ru_name: ebayCreds.ruName },
         { onConflict: 'store_id' }
@@ -203,6 +215,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
       setTimeout(() => setCredsSaved(false), 2000)
     } catch (e) {
       console.error('Save creds failed', e)
+      alert(`Failed to save credentials: ${e.message}`)
     }
     setCredsSaving(false)
   }
@@ -225,35 +238,18 @@ export default function Settings({ profile, storeId, onSignOut }) {
 
   const handleOAuthCallback = async (code) => {
     try {
-      // Read fresh creds from DB rather than relying on state (avoids race with loadSettings)
-      const { data: storeData } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const creds = storeData?.settings?.ebayCreds
-      if (!creds?.appId || !creds?.certId || !creds?.ruName) {
-        setEbayTestResult({ ok: false, msg: 'eBay credentials not found in database. Please save credentials first.' })
-        return
-      }
-      const res = await fetch(`${CLOUDFLARE_PROXY}/ebay/token`, {
+      // Token exchange performed server-side — cert_id is read from Supabase Vault by the Edge Function
+      // and never exposed to the browser. The browser only receives a success flag and expiry timestamp.
+      const { data: { session } } = await sb.auth.getSession()
+      const res = await fetch(EDGE_FN, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          code,
-          appId: creds.appId,
-          certId: creds.certId,
-          ruName: creds.ruName,
-        }),
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ action: 'exchange_oauth_code', storeId, code }),
       })
-      const tokens = await res.json()
-      if (!tokens.access_token) throw new Error(tokens.error_description || tokens.error || 'No token returned')
-      const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString()
-      // Store access token in Supabase Vault via the centralised RPC function
-      await sb.rpc('update_ebay_access_token', {
-        p_store_id: storeId,
-        p_access_token: tokens.access_token,
-        p_expires_at: expiresAt,
-        p_expires_in: tokens.expires_in,
-      })
+      const result = await res.json()
+      if (!res.ok || result.error) throw new Error(result.error || 'Token exchange failed')
       setEbayConnected(true)
-      setEbayExpiry(expiresAt)
+      setEbayExpiry(result.expires_at)
       setEbayTestResult({ ok: true, msg: 'Connected to eBay successfully!' })
     } catch (e) {
       console.error('OAuth callback failed', e)
@@ -262,8 +258,8 @@ export default function Settings({ profile, storeId, onSignOut }) {
   }
 
   const connectEbay = () => {
-    if (!ebayCreds.certId) {
-      setEbayTestResult({ ok: false, msg: 'Please enter your Cert ID first and save credentials.' })
+    if (!certIsSet) {
+      setEbayTestResult({ ok: false, msg: 'Please enter and save your Cert ID first.' })
       return
     }
     window.location.href = EBAY_OAUTH_URL
@@ -1422,18 +1418,31 @@ export default function Settings({ profile, storeId, onSignOut }) {
             </div>
             <div style={{ marginBottom: 16 }}>
               <label style={S.label}>Cert ID (Client Secret)</label>
-              <div style={{ position: 'relative' }}>
-                <input
-                  style={{ ...S.input, paddingRight: 60 }}
-                  type={showCert ? 'text' : 'password'}
-                  value={ebayCreds.certId}
-                  onChange={e => setEbayCreds(c => ({ ...c, certId: e.target.value }))}
-                  placeholder="Cert ID"
-                />
-                <button onClick={() => setShowCert(s => !s)} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: C.muted, fontSize: 12 }}>
-                  {showCert ? 'Hide' : 'Show'}
-                </button>
-              </div>
+              {certIsSet && !certUpdating ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: '#f0fdf4', border: `1.5px solid #86efac`, borderRadius: 8 }}>
+                  <span style={{ fontSize: 13, color: C.green, fontWeight: 600, flex: 1 }}>●●●●●●●●●●●● Stored securely in Vault</span>
+                  <button onClick={() => setCertUpdating(true)} style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer', color: C.muted }}>
+                    Update
+                  </button>
+                </div>
+              ) : (
+                <div style={{ position: 'relative' }}>
+                  <input
+                    style={{ ...S.input, paddingRight: 60 }}
+                    type={showCert ? 'text' : 'password'}
+                    value={ebayCreds.certId}
+                    onChange={e => setEbayCreds(c => ({ ...c, certId: e.target.value }))}
+                    placeholder={certUpdating ? 'Enter new Cert ID to replace stored value' : 'Cert ID'}
+                    autoFocus={certUpdating}
+                  />
+                  <button onClick={() => setShowCert(s => !s)} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: C.muted, fontSize: 12 }}>
+                    {showCert ? 'Hide' : 'Show'}
+                  </button>
+                </div>
+              )}
+              <p style={{ fontSize: 11, color: C.muted, marginTop: 5 }}>
+                Write-only — once saved, this value is encrypted in Supabase Vault and never returned to the browser.
+              </p>
             </div>
             <button style={{ ...S.btn('primary'), opacity: credsSaving ? 0.6 : 1 }} onClick={saveEbayCreds} disabled={credsSaving}>
               {credsSaving ? 'Saving...' : credsSaved ? '✓ Saved' : 'Save Credentials'}
