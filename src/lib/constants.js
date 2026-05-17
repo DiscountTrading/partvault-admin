@@ -9,7 +9,8 @@ export const C = {
 
 export const PART_CONDITIONS = ['Used – Excellent','Used – Good','Used – Fair','For Parts Only','Refurbished']
 export const AU_SHIPPING = ['Standard Post','Express Post','Courier','Courier (Bulky)','Collect Only','Free Postage']
-export const STATUS_COLORS = {'In Stock':C.blue,'Listed':C.accent,'Sold':C.green,'Archived':C.muted,'Deleted':C.red}
+export const STATUS_COLORS = {in_stock:C.blue,listed:C.accent,sold:C.green,scrapped:C.muted,deferred:C.yellow}
+export const STATUS_LABELS = {in_stock:'In Stock',listed:'Listed',sold:'Sold',scrapped:'Scrapped',deferred:'Deferred'}
 
 export const EBAY_AU_CATEGORIES = {
   'Air & Fuel Delivery':['Air Filters','Carburettors & Parts','Fuel Filters','Fuel Injectors','Fuel Pumps','Intercoolers','Throttle Bodies','Turbochargers & Parts','Other'],

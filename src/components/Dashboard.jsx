@@ -11,10 +11,10 @@ function StatCard({ label, value, sub, color }) {
 }
 
 export default function Dashboard({ parts }) {
-  const active = parts.filter(p=>p.status!=='Deleted')
-  const inStock = active.filter(p=>p.status==='In Stock')
-  const listed = active.filter(p=>p.status==='Listed')
-  const sold = active.filter(p=>p.status==='Sold')
+  const active = parts.filter(p=>!p.deletedAt)
+  const inStock = active.filter(p=>p.status==='in_stock')
+  const listed = active.filter(p=>p.status==='listed')
+  const sold = active.filter(p=>p.status==='sold')
   const soldRev = sold.reduce((a,p)=>a+(+p.soldPrice||+p.list_price||0),0)
   const soldCogs = sold.reduce((a,p)=>a+totalCost(p),0)
   const gross = soldRev - soldCogs

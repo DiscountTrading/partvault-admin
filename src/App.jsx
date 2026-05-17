@@ -38,7 +38,7 @@ function SyncBadge({ status }) {
 
 export default function App() {
   const { session, profile, storeId, authReady, signOut } = useAuth()
-  const { parts, loading, syncStatus, totalCount, addPart, editPart, softDelete, softDeleteCar, refetch } = useParts()
+  const { parts, loading, syncStatus, totalCount, addPart, editPart, softDelete, softDeleteCar, refetch } = useParts(storeId)
   const [tab, setTab] = useState('dashboard')
   const [toast, setToast] = useState(null)
   const [aiSettings, setAiSettings] = useState(DEFAULT_AI_SETTINGS)

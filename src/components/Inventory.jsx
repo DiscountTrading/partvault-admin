@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef } from 'react'
-import { C, S, fmt, pct, totalCost, CATEGORY_NAMES, EBAY_AU_CATEGORIES, PART_CONDITIONS, AU_SHIPPING, STATUS_COLORS } from '../lib/constants'
+import { C, S, fmt, pct, totalCost, CATEGORY_NAMES, EBAY_AU_CATEGORIES, PART_CONDITIONS, STATUS_COLORS, STATUS_LABELS } from '../lib/constants'
 import { sb } from '../lib/supabase'
 
 const AI_PROXY = 'https://partvault-proxy.leap00.workers.dev'
@@ -158,8 +158,8 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
   const defCat = CATEGORY_NAMES[4]
   const [form, setForm] = useState(part ? { ...part, costs: { ...part.costs }, listPrice: part.list_price||part.listPrice||0, ai_assessed: part.ai_assessed??false } : {
     title:'', category:defCat, subcategory:EBAY_AU_CATEGORIES[defCat][0], make:'', model:'', year:'', condition:PART_CONDITIONS[1],
-    description:'', acquiredDate:'', costs:defCosts(), listPrice:'', soldPrice:'', photos:[], weight:'', status:'In Stock',
-    partNumber:'', shippingOption:AU_SHIPPING[0], notes:'', ai_assessed:false, car_id:null,
+    description:'', acquiredDate:'', costs:defCosts(), listPrice:'', soldPrice:'', photos:[], weight:'', status:'in_stock',
+    partNumber:'', notes:'', ai_assessed:false, car_id:null,
   })
   const [generating, setGenerating] = useState(false)
   const [analysing, setAnalysing] = useState(false)
@@ -194,7 +194,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
     try {
       const car = cars?.find(c => c.id === form.car_id)
       const parsed = await analysePartPhoto(aiPhotos[0].split(',')[1], car||form)
-      setForm(f => ({ ...f, title:parsed.title||f.title, category:parsed.category||f.category, subcategory:parsed.subcategory||f.subcategory, condition:parsed.condition||f.condition, description:parsed.description||f.description, partNumber:parsed.partNumber||f.partNumber, listPrice:parsed.listPrice||f.listPrice, weight:parsed.weight||f.weight, shippingOption:parsed.shippingOption||f.shippingOption, costs:parsed.sizeTier?COST_TIERS[parsed.sizeTier]||f.costs:f.costs, ai_assessed:true }))
+      setForm(f => ({ ...f, title:parsed.title||f.title, category:parsed.category||f.category, subcategory:parsed.subcategory||f.subcategory, condition:parsed.condition||f.condition, description:parsed.description||f.description, partNumber:parsed.partNumber||f.partNumber, listPrice:parsed.listPrice||f.listPrice, weight:parsed.weight||f.weight, costs:parsed.sizeTier?COST_TIERS[parsed.sizeTier]||f.costs:f.costs, ai_assessed:true }))
     } catch(e) { setAiError(e.message) }
     setAnalysing(false)
   }
@@ -294,20 +294,15 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
         </Field>
         <Field label="Year"><input style={S.input} value={form.year||''} onChange={e => set('year', e.target.value)} /></Field>
       </div>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
         <Field label="Condition">
           <select style={S.select} value={form.condition||''} onChange={e => set('condition', e.target.value)}>
             {PART_CONDITIONS.map(c => <option key={c}>{c}</option>)}
           </select>
         </Field>
         <Field label="Status">
-          <select style={S.select} value={form.status||'In Stock'} onChange={e => set('status', e.target.value)}>
-            {['In Stock','Listed','Sold','Archived'].map(s => <option key={s}>{s}</option>)}
-          </select>
-        </Field>
-        <Field label="Shipping">
-          <select style={S.select} value={form.shippingOption||AU_SHIPPING[0]} onChange={e => set('shippingOption', e.target.value)}>
-            {AU_SHIPPING.map(s => <option key={s}>{s}</option>)}
+          <select style={S.select} value={form.status||'in_stock'} onChange={e => set('status', e.target.value)}>
+            {['in_stock','listed','sold','scrapped','deferred'].map(s => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
           </select>
         </Field>
       </div>
@@ -436,9 +431,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
   const models = useMemo(() => { const src=filterMake?parts.filter(p=>p.make===filterMake):parts; return [...new Set(src.filter(p=>p.model).map(p=>p.model))].sort() }, [parts, filterMake])
 
   const filtered = useMemo(() => parts.filter(p => {
-    if (p.status==='Deleted'&&!showDeleted) return false
-    if (!showSold&&p.status==='Sold') return false
-    if (showDeleted&&p.status!=='Deleted') return false
+    if (!showSold&&p.status==='sold') return false
     const q=search.toLowerCase()
     if (q&&![p.title,p.make,p.model,p.year,p.sku,p.partNumber,p.category,p.subcategory,p.condition,p.status].some(v=>(v||'').toLowerCase().includes(q))) return false
     if (filterMake&&p.make!==filterMake) return false
@@ -453,8 +446,8 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
   const carGroups = useMemo(() => {
     const g={}
     filtered.forEach(p => {
-      const key=[p.make||'Unknown',p.model||'',p.year||'',p.car_id||p.session_id||''].join('|')
-      if (!g[key]) g[key]={make:p.make||'Unknown',model:p.model||'',year:p.year||'',carId:p.car_id||null,sessionId:p.session_id||'',parts:[]}
+      const key=[p.make||'Unknown',p.model||'',p.year||'',p.car_id||''].join('|')
+      if (!g[key]) g[key]={make:p.make||'Unknown',model:p.model||'',year:p.year||'',carId:p.car_id||null,parts:[]}
       g[key].parts.push(p)
     })
     return Object.values(g).sort((a,b)=>(a.make+a.model).localeCompare(b.make+b.model))
@@ -528,7 +521,6 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
             <button onClick={() => setViewMode('car')} style={{ padding:'5px 14px', fontSize:12, fontWeight:600, background:viewMode==='car'?C.accent:'white', color:viewMode==='car'?'white':C.muted, border:'none', cursor:'pointer', borderLeft:`1px solid ${C.border}` }}>🚗 By Car</button>
           </div>
           <button onClick={() => setShowSold(s=>!s)} style={{ ...S.btn(showSold?'green':'secondary'), padding:'5px 12px', fontSize:12 }}>{showSold?'✓ Sold Shown':'Show Sold'}</button>
-          <button onClick={() => setShowDeleted(d=>!d)} style={{ ...S.btn(showDeleted?'danger':'secondary'), padding:'5px 12px', fontSize:12 }}>{showDeleted?'← Back':'🗑 Deleted'}</button>
           <span style={{ fontSize:12, color:C.muted, background:C.panel, borderRadius:10, padding:'2px 10px', fontWeight:600 }}>{totals.count} parts</span>
         </div>
       </div>
@@ -560,7 +552,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
             <option value="">All Categories</option>{CATEGORY_NAMES.map(c=><option key={c}>{c}</option>)}
           </select>
           <select style={{ ...selSm, minWidth:110 }} value={filterStatus} onChange={e => { setFilterStatus(e.target.value); setPage(0) }}>
-            <option value="">All Statuses</option>{['In Stock','Listed','Sold','Archived'].map(s=><option key={s}>{s}</option>)}
+            <option value="">All Statuses</option>{['in_stock','listed','sold','scrapped','deferred'].map(s=><option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
           </select>
           <select style={{ ...selSm, minWidth:130 }} value={filterCond} onChange={e => { setFilterCond(e.target.value); setPage(0) }}>
             <option value="">All Conditions</option>{PART_CONDITIONS.map(c=><option key={c}>{c}</option>)}
@@ -572,19 +564,19 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
         <div>
           <div style={{ display:'flex', gap:8, marginBottom:10, alignItems:'center' }}>
             <span style={{ fontSize:13, color:C.muted }}>{carGroups.length} car{carGroups.length!==1?'s':''}</span>
-            <button onClick={() => setExpandedCars(new Set(carGroups.map(g=>g.make+'|'+g.model+'|'+g.year+'|'+(g.carId||g.sessionId))))} style={{ ...S.btn('secondary'), padding:'3px 10px', fontSize:11 }}>Expand All</button>
+            <button onClick={() => setExpandedCars(new Set(carGroups.map(g=>g.make+'|'+g.model+'|'+g.year+'|'+(g.carId||''))))} style={{ ...S.btn('secondary'), padding:'3px 10px', fontSize:11 }}>Expand All</button>
             <button onClick={() => setExpandedCars(new Set())} style={{ ...S.btn('secondary'), padding:'3px 10px', fontSize:11 }}>Collapse All</button>
           </div>
           {bulkAIGroup && <BulkAIPanel group={bulkAIGroup} aiSettings={aiSettings} footer={footer} onComplete={() => setBulkAIGroup(null)} />}
           {carGroups.map(g => {
-            const key=g.make+'|'+g.model+'|'+g.year+'|'+(g.carId||g.sessionId)
+            const key=g.make+'|'+g.model+'|'+g.year+'|'+(g.carId||'')
             const isOpen=expandedCars.has(key)
             const gList=g.parts.reduce((a,p)=>a+(+p.list_price||0),0)
             const gCost=g.parts.reduce((a,p)=>a+totalCost(p),0)
             const gProfit=gList-gCost
-            const gStock=g.parts.filter(p=>p.status==='In Stock').length
-            const gListed=g.parts.filter(p=>p.status==='Listed').length
-            const gSold=g.parts.filter(p=>p.status==='Sold').length
+            const gStock=g.parts.filter(p=>p.status==='in_stock').length
+            const gListed=g.parts.filter(p=>p.status==='listed').length
+            const gSold=g.parts.filter(p=>p.status==='sold').length
             const aiPending=g.parts.filter(p=>!p.ai_assessed).length
             return (
               <div key={key} style={{ ...S.card, marginBottom:8, padding:0, overflow:'hidden' }}>
@@ -626,7 +618,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                               </td>
                               <td style={{ padding:'8px 12px', fontSize:12, color:C.muted, whiteSpace:'nowrap' }}>{p.subcategory||p.category}</td>
                               <td style={{ padding:'8px 12px', fontSize:12, color:C.muted, whiteSpace:'nowrap' }}>{p.condition}</td>
-                              <td style={{ padding:'8px 12px' }}><span style={{ ...S.pill(stCol), fontSize:11 }}>{p.status}</span></td>
+                              <td style={{ padding:'8px 12px' }}><span style={{ ...S.pill(stCol), fontSize:11 }}>{STATUS_LABELS[p.status]||p.status}</span></td>
                               <td style={{ padding:'8px 12px', textAlign:'center' }}><span title={p.ai_assessed?'AI Assessed':'Needs AI'}>{p.ai_assessed?'✅':'⬜'}</span></td>
                               <td style={{ padding:'8px 12px', fontWeight:700, whiteSpace:'nowrap' }}>${lp.toFixed(0)}</td>
                               <td style={{ padding:'8px 12px', color:C.red, whiteSpace:'nowrap' }}>${cost.toFixed(0)}</td>
@@ -671,7 +663,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                 {paged.map((p,i)=>{
                   const cost=totalCost(p),lp=+p.list_price||0,pr=lp-cost
                   const stCol=STATUS_COLORS[p.status]||C.muted
-                  const bg=p.status==='Deleted'?'#fff5f5':p.status==='Sold'?'#f0fdf4':i%2===0?'#ffffff':'#faf9f7'
+                  const bg=p.deletedAt?'#fff5f5':p.status==='sold'?'#f0fdf4':i%2===0?'#ffffff':'#faf9f7'
                   const td=(v,col,bold)=><td style={{ padding:'4px 8px', fontSize:12, color:col||C.text, fontWeight:bold?700:400, borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`, overflow:'hidden', whiteSpace:'nowrap', textOverflow:'ellipsis', maxWidth:260 }} title={String(v||'')}>{v||<span style={{color:C.border}}>—</span>}</td>
                   return (
                     <tr key={p.id} style={{ background:bg }}>
@@ -680,7 +672,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                       </td>
                       {td(p.sku)}{td(p.title)}{td(p.make)}{td(p.model)}{td(p.year)}{td(p.subcategory||p.category)}
                       <td style={{ padding:'4px 8px', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}` }}>
-                        <span style={{ ...S.pill(stCol), fontSize:10, padding:'1px 6px' }}>{p.status}</span>
+                        <span style={{ ...S.pill(stCol), fontSize:10, padding:'1px 6px' }}>{STATUS_LABELS[p.status]||p.status}</span>
                       </td>
                       <td style={{ padding:'4px 8px', textAlign:'center', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}` }}>
                         <span title={p.ai_assessed?'AI Assessed':'Needs AI'}>{p.ai_assessed?'✅':'⬜'}</span>

@@ -1,25 +1,21 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { sb } from '../lib/supabase'
 
-const PAGE_SIZE = 100
-
 const mapRow = r => ({
-  id: r.id, sku: r.sku||'', title: r.title||'', category: r.category||'',
-  subcategory: r.subcategory||'', make: r.make||'', model: r.model||'',
-  year: r.year||'', condition: r.condition||'Used – Good',
-  description: r.description||'', status: r.status||'In Stock',
+  id: r.id, store_id: r.store_id, sku: r.sku||'', title: r.title||'',
+  category: r.category||'', subcategory: r.subcategory||'',
+  make: r.make||'', model: r.model||'', year: r.year||'',
+  condition: r.condition||'Used – Good',
+  description: r.description||'', status: r.status||'in_stock',
   costs: r.costs||{acquisition:0,labour:0,storage:0,packaging:0,postage:0,holding:0},
   list_price: +r.list_price||0, listPrice: +r.list_price||0,
   soldPrice: r.sold_price ? +r.sold_price : null,
   weight: r.weight ? +r.weight : null,
   photos: r.photos||[], partNumber: r.part_number||'',
-  ebayItemId: r.ebay_item_id||'', ebayCategoryId: r.ebay_category_id||'',
-  shippingOption: r.shipping_option||'Standard Post',
   notes: r.notes||'', acquiredDate: r.acquired_date||null,
   listedDate: r.listed_date||null, soldDate: r.sold_date||null,
   deletedAt: r.deleted_at||null, createdAt: r.created_at,
-  session_id: r.session_id||null, car_id: r.car_id||null,
-  sync_status: r.sync_status||'synced',
+  car_id: r.car_id||null, source: r.source||null,
   ai_assessed: r.ai_assessed||false,
 })
 
@@ -30,16 +26,14 @@ const mapToRow = p => ({
   list_price: +p.listPrice||+p.list_price||0,
   sold_price: p.soldPrice ? +p.soldPrice : null,
   weight: p.weight ? +p.weight : null, photos: p.photos||[],
-  part_number: p.partNumber||'', ebay_item_id: p.ebayItemId||'',
-  ebay_category_id: p.ebayCategoryId||'',
-  shipping_option: p.shippingOption||'Standard Post',
+  part_number: p.partNumber||'',
   notes: p.notes||'', acquired_date: p.acquiredDate||null,
   listed_date: p.listedDate||null, sold_date: p.soldDate||null,
-  deleted_at: p.deletedAt||null,
+  deleted_at: p.deletedAt||null, car_id: p.car_id||null,
   ai_assessed: p.ai_assessed||false,
 })
 
-export function useParts() {
+export function useParts(storeId) {
   const [parts, setParts] = useState([])
   const [loading, setLoading] = useState(true)
   const [syncStatus, setSyncStatus] = useState('connecting')
@@ -47,11 +41,9 @@ export function useParts() {
   const channelRef = useRef(null)
 
   const fetch = useCallback(async () => {
-    // Step 1: get the total count (lightweight, head-only request)
     const { count, error: countErr } = await sb
       .from('parts')
       .select('id', { count: 'exact', head: true })
-      .neq('status', 'Deleted')
       .is('deleted_at', null)
     if (countErr) {
       console.error('Parts count error:', countErr)
@@ -61,8 +53,6 @@ export function useParts() {
     }
     setTotalCount(count || 0)
 
-    // Step 2: page through all rows. Supabase caps each query at 1000 by default,
-    // so we paginate explicitly. PAGE_SIZE_FETCH set to 1000 to match the cap exactly.
     const PAGE_SIZE_FETCH = 1000
     const totalRows = count || 0
     const allRows = []
@@ -71,7 +61,6 @@ export function useParts() {
       const { data, error } = await sb
         .from('parts')
         .select('*')
-        .neq('status', 'Deleted')
         .is('deleted_at', null)
         .order('created_at', { ascending: false })
         .range(from, to)
@@ -105,27 +94,31 @@ export function useParts() {
 
   const addPart = async p => {
     const { data: { user } } = await sb.auth.getUser()
-    const { data, error } = await sb.from('parts').insert({ ...mapToRow(p), user_id: user?.id }).select().single()
+    const { data, error } = await sb.from('parts').insert({
+      ...mapToRow(p),
+      store_id: storeId,
+      created_by: user?.id,
+    }).select().single()
     if (!error) { setParts(ps => [mapRow(data), ...ps]); return mapRow(data) }
     throw error
   }
 
   const editPart = async p => {
     const { error } = await sb.from('parts').update(mapToRow(p)).eq('id', p.id)
-    if (!error) setParts(ps => ps.map(x => x.id===p.id ? {...x,...p} : x))
+    if (!error) setParts(ps => ps.map(x => x.id===p.id ? {...x,...mapRow({...x,...mapToRow(p)})} : x))
     else throw error
   }
 
   const softDelete = async id => {
     const now = new Date().toISOString()
-    await sb.from('parts').update({ status: 'Deleted', deleted_at: now }).eq('id', id)
+    await sb.from('parts').update({ deleted_at: now }).eq('id', id)
     setParts(ps => ps.filter(p => p.id !== id))
   }
 
   const softDeleteCar = async (carId, partIds) => {
     const now = new Date().toISOString()
     if (partIds.length > 0) {
-      await sb.from('parts').update({ status: 'Deleted', deleted_at: now }).in('id', partIds)
+      await sb.from('parts').update({ deleted_at: now }).in('id', partIds)
     }
     if (carId) {
       await sb.from('cars').update({ deleted_at: now, status: 'deleted' }).eq('id', carId)
