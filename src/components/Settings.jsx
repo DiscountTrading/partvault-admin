@@ -1446,7 +1446,14 @@ export default function Settings({ profile, storeId, onSignOut }) {
                     </span>
                     {historyResult.cancelled && <span style={{ color: C.yellow, marginLeft: 8 }}>(cancelled)</span>}
                     {historyResult.errors?.length > 0 && (
-                      <div style={{ color: C.red, fontSize: 12, marginTop: 4 }}>{historyResult.errors.length} errors</div>
+                      <div style={{ marginTop: 8 }}>
+                        <div style={{ color: C.red, fontSize: 12, marginBottom: 4, fontWeight: 600 }}>{historyResult.errors.length} errors (first 20):</div>
+                        {historyResult.errors.slice(0, 5).map((e, i) => (
+                          <div key={i} style={{ fontSize: 11, color: C.red, fontFamily: 'monospace', marginBottom: 2 }}>
+                            {e.itemId}: {e.error}
+                          </div>
+                        ))}
+                      </div>
                     )}
                   </div>
                 )}
