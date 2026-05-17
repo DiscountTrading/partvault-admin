@@ -107,6 +107,8 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const [credsSaved, setCredsSaved] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importJob, setImportJob] = useState(null)
+  const [backfilling, setBackfilling] = useState(false)
+  const [backfillResult, setBackfillResult] = useState(null)
   const [parsing, setParsing] = useState(false)
   const [parseProgress, setParseProgress] = useState(null) // { processed, total, failed }
   const parseCancelRef = useRef(false)
@@ -373,6 +375,24 @@ export default function Settings({ profile, storeId, onSignOut }) {
       setImportJob({ status: 'failed', error_message: e.message })
       setImporting(false)
     }
+  }
+
+  const runBackfill = async () => {
+    setBackfilling(true)
+    setBackfillResult(null)
+    try {
+      const res = await fetch(EDGE_FN, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'backfill_orders', storeId }),
+      })
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+      setBackfillResult(data)
+    } catch (e) {
+      setBackfillResult({ error: e.message })
+    }
+    setBackfilling(false)
   }
 
   const cancelImport = async () => {
@@ -1616,6 +1636,36 @@ export default function Settings({ profile, storeId, onSignOut }) {
                 {importing && <button style={{ ...S.btn('danger') }} onClick={cancelImport}>Cancel</button>}
               </div>
               {!ebayConnected && <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>Connect eBay above to enable import.</div>}
+
+              <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>Backfill Historical Sales</div>
+                <div style={{ fontSize: 12, color: C.muted, marginBottom: 10, lineHeight: 1.6 }}>
+                  Fetches your full eBay order history (up to 5 years) and marks matching parts as sold with the correct price and date. Run this once after the initial import.
+                </div>
+                <button
+                  style={{ ...S.btn('secondary'), opacity: (backfilling || !ebayConnected) ? 0.6 : 1 }}
+                  onClick={runBackfill}
+                  disabled={backfilling || !ebayConnected}
+                >
+                  {backfilling ? '⏳ Backfilling...' : '🕓 Backfill Historical Sales'}
+                </button>
+                {backfillResult && !backfillResult.error && (
+                  <div style={{ marginTop: 10, padding: '10px 14px', background: '#f0fdf4', border: `1px solid #86efac`, borderRadius: 8, fontSize: 13 }}>
+                    <strong style={{ color: C.green }}>✓ Complete</strong>
+                    <span style={{ color: C.muted, marginLeft: 12 }}>
+                      {backfillResult.updated} updated · {backfillResult.alreadySold} already sold · {backfillResult.notFound} not in PartVault
+                    </span>
+                    {backfillResult.errors?.length > 0 && (
+                      <div style={{ color: C.red, fontSize: 12, marginTop: 4 }}>{backfillResult.errors.length} errors</div>
+                    )}
+                  </div>
+                )}
+                {backfillResult?.error && (
+                  <div style={{ marginTop: 10, padding: '10px 14px', background: '#fef2f2', border: `1px solid #fca5a5`, borderRadius: 8, fontSize: 13, color: C.red }}>
+                    ✗ {backfillResult.error}
+                  </div>
+                )}
+              </div>
             </Section>
 
             {/* Reconcile */}
