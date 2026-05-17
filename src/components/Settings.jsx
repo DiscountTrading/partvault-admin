@@ -110,6 +110,9 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const [backfilling, setBackfilling] = useState(false)
   const [backfillResult, setBackfillResult] = useState(null)
   const backfillCancelRef = useRef(false)
+  const [importingHistory, setImportingHistory] = useState(false)
+  const [historyResult, setHistoryResult] = useState(null)
+  const historyCancelRef = useRef(false)
   const [parsing, setParsing] = useState(false)
   const [parseProgress, setParseProgress] = useState(null) // { processed, total, failed }
   const parseCancelRef = useRef(false)
@@ -420,6 +423,61 @@ export default function Settings({ profile, storeId, onSignOut }) {
       setBackfillResult({ error: e.message, updated: totalUpdated })
     }
     setBackfilling(false)
+  }
+
+  const runSoldHistoryImport = async () => {
+    historyCancelRef.current = false
+    setImportingHistory(true)
+    setHistoryResult(null)
+
+    const WINDOW_DAYS = 30
+    const YEARS_BACK  = 5
+    const startDate   = new Date(Date.now() - YEARS_BACK * 365 * 24 * 60 * 60 * 1000)
+    let windowEnd     = new Date()
+    let totalCreated  = 0
+    let totalSkipped  = 0
+    let totalNoData   = 0
+    const allErrors   = []
+
+    try {
+      while (windowEnd > startDate && !historyCancelRef.current) {
+        const windowStart = new Date(Math.max(
+          windowEnd.getTime() - WINDOW_DAYS * 24 * 60 * 60 * 1000,
+          startDate.getTime()
+        ))
+
+        setHistoryResult({
+          progress: `Checking ${windowStart.toLocaleDateString('en-AU', { month: 'short', year: 'numeric' })}…`,
+          created: totalCreated,
+          skipped: totalSkipped,
+        })
+
+        const res = await fetch(EDGE_FN, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action:   'import_sold_history',
+            storeId,
+            fromDate: windowStart.toISOString(),
+            toDate:   windowEnd.toISOString(),
+          }),
+        })
+        const data = await res.json()
+        if (data.error) throw new Error(data.error)
+
+        totalCreated  += data.created    || 0
+        totalSkipped  += data.skipped    || 0
+        totalNoData   += data.noData     || 0
+        if (data.errors?.length) allErrors.push(...data.errors)
+
+        windowEnd = windowStart
+      }
+
+      setHistoryResult({ done: true, cancelled: historyCancelRef.current, created: totalCreated, skipped: totalSkipped, noData: totalNoData, errors: allErrors.slice(0, 20) })
+    } catch (e) {
+      setHistoryResult({ error: e.message, created: totalCreated })
+    }
+    setImportingHistory(false)
   }
 
   const cancelImport = async () => {
@@ -1354,6 +1412,47 @@ export default function Settings({ profile, storeId, onSignOut }) {
                 {backfillResult?.error && (
                   <div style={{ marginTop: 10, padding: '10px 14px', background: '#fef2f2', border: `1px solid #fca5a5`, borderRadius: 8, fontSize: 13, color: C.red }}>
                     ✗ {backfillResult.error}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>Import Full Sales History</div>
+                <div style={{ fontSize: 12, color: C.muted, marginBottom: 10, lineHeight: 1.6 }}>
+                  Creates part records for every sold item in your eBay history (up to 5 years) that isn't already in PartVault. Items with a recognised category are mapped automatically. Items too old for eBay to return details are placed in <em>Legacy Items</em>. Run once after the initial import and backfill.
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    style={{ ...S.btn('secondary'), opacity: (importingHistory || !ebayConnected) ? 0.6 : 1 }}
+                    onClick={runSoldHistoryImport}
+                    disabled={importingHistory || !ebayConnected}
+                  >
+                    {importingHistory ? '⏳ Importing...' : '📦 Import Full Sales History'}
+                  </button>
+                  {importingHistory && (
+                    <button style={{ ...S.btn('danger') }} onClick={() => { historyCancelRef.current = true }}>
+                      Cancel
+                    </button>
+                  )}
+                </div>
+                {historyResult && !historyResult.error && (
+                  <div style={{ marginTop: 10, padding: '10px 14px', background: historyResult.done ? '#f0fdf4' : '#fffbeb', border: `1px solid ${historyResult.done ? '#86efac' : '#fde68a'}`, borderRadius: 8, fontSize: 13 }}>
+                    {historyResult.progress && !historyResult.done && (
+                      <div style={{ color: '#78350f', marginBottom: 4 }}>⏳ {historyResult.progress}</div>
+                    )}
+                    {historyResult.done && <strong style={{ color: C.green }}>✓ Complete — </strong>}
+                    <span style={{ color: C.muted }}>
+                      {historyResult.created} created · {historyResult.skipped} already in PartVault · {historyResult.noData} no eBay data
+                    </span>
+                    {historyResult.cancelled && <span style={{ color: C.yellow, marginLeft: 8 }}>(cancelled)</span>}
+                    {historyResult.errors?.length > 0 && (
+                      <div style={{ color: C.red, fontSize: 12, marginTop: 4 }}>{historyResult.errors.length} errors</div>
+                    )}
+                  </div>
+                )}
+                {historyResult?.error && (
+                  <div style={{ marginTop: 10, padding: '10px 14px', background: '#fef2f2', border: `1px solid #fca5a5`, borderRadius: 8, fontSize: 13, color: C.red }}>
+                    ✗ {historyResult.error}
                   </div>
                 )}
               </div>

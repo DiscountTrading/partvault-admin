@@ -1,4 +1,4 @@
-export const APP_VERSION = '2.7.4'
+export const APP_VERSION = '2.7.5'
 
 export const C = {
   bg:'#f5f4f0', panel:'#edeae3', card:'#ffffff', border:'#ddd9d0',
@@ -29,6 +29,7 @@ export const EBAY_AU_CATEGORIES = {
   'Wheels, Tyres & Parts':['Tyres','Wheels -- Alloy','Wheels -- Steel','Wheel Nuts','Other'],
   'Towing Parts':['Tow Bars','Trailer Sockets','Other'],
   'Other Car & Truck Parts':['Other'],
+  'Legacy Items':['Other'],
 }
 export const CATEGORY_NAMES = Object.keys(EBAY_AU_CATEGORIES)
 export const EBAY_AU_CATEGORY_IDS = {
