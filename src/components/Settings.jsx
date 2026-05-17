@@ -109,6 +109,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const [importJob, setImportJob] = useState(null)
   const [backfilling, setBackfilling] = useState(false)
   const [backfillResult, setBackfillResult] = useState(null)
+  const backfillCancelRef = useRef(false)
   const [parsing, setParsing] = useState(false)
   const [parseProgress, setParseProgress] = useState(null) // { processed, total, failed }
   const parseCancelRef = useRef(false)
@@ -378,6 +379,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
   }
 
   const runBackfill = async () => {
+    backfillCancelRef.current = false
     setBackfilling(true)
     setBackfillResult(null)
 
@@ -391,7 +393,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
     const allErrors   = []
 
     try {
-      while (windowEnd > startDate) {
+      while (windowEnd > startDate && !backfillCancelRef.current) {
         const windowStart = new Date(Math.max(
           windowEnd.getTime() - WINDOW_DAYS * 24 * 60 * 60 * 1000,
           startDate.getTime()
@@ -424,7 +426,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
         windowEnd = windowStart
       }
 
-      setBackfillResult({ done: true, updated: totalUpdated, alreadySold: totalAlready, notFound: totalNotFound, errors: allErrors.slice(0, 20) })
+      setBackfillResult({ done: true, cancelled: backfillCancelRef.current, updated: totalUpdated, alreadySold: totalAlready, notFound: totalNotFound, errors: allErrors.slice(0, 20) })
     } catch (e) {
       setBackfillResult({ error: e.message, updated: totalUpdated })
     }
@@ -1678,13 +1680,20 @@ export default function Settings({ profile, storeId, onSignOut }) {
                 <div style={{ fontSize: 12, color: C.muted, marginBottom: 10, lineHeight: 1.6 }}>
                   Fetches your full eBay order history (up to 5 years) and marks matching parts as sold with the correct price and date. Run this once after the initial import.
                 </div>
-                <button
-                  style={{ ...S.btn('secondary'), opacity: (backfilling || !ebayConnected) ? 0.6 : 1 }}
-                  onClick={runBackfill}
-                  disabled={backfilling || !ebayConnected}
-                >
-                  {backfilling ? '⏳ Backfilling...' : '🕓 Backfill Historical Sales'}
-                </button>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    style={{ ...S.btn('secondary'), opacity: (backfilling || !ebayConnected) ? 0.6 : 1 }}
+                    onClick={runBackfill}
+                    disabled={backfilling || !ebayConnected}
+                  >
+                    {backfilling ? '⏳ Backfilling...' : '🕓 Backfill Historical Sales'}
+                  </button>
+                  {backfilling && (
+                    <button style={{ ...S.btn('danger') }} onClick={() => { backfillCancelRef.current = true }}>
+                      Cancel
+                    </button>
+                  )}
+                </div>
                 {backfillResult && !backfillResult.error && (
                   <div style={{ marginTop: 10, padding: '10px 14px', background: backfillResult.done ? '#f0fdf4' : '#fffbeb', border: `1px solid ${backfillResult.done ? '#86efac' : '#fde68a'}`, borderRadius: 8, fontSize: 13 }}>
                     {backfillResult.progress && !backfillResult.done && (
