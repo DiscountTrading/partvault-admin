@@ -431,8 +431,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
     setHistoryResult(null)
 
     const WINDOW_DAYS = 30
-    const YEARS_BACK  = 5
-    const startDate   = new Date(Date.now() - YEARS_BACK * 365 * 24 * 60 * 60 * 1000)
+    const startDate   = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000)
     let windowEnd     = new Date()
     let totalCreated  = 0
     let totalSkipped  = 0
