@@ -415,7 +415,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
   const [filterCat, setFilterCat] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
   const [filterCond, setFilterCond] = useState('')
-  const [showSold, setShowSold] = useState(false)
+  const [hideSold, setHideSold] = useState(false)
   const [showDeleted, setShowDeleted] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [editingPart, setEditingPart] = useState(null)
@@ -431,7 +431,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
   const models = useMemo(() => { const src=filterMake?parts.filter(p=>p.make===filterMake):parts; return [...new Set(src.filter(p=>p.model).map(p=>p.model))].sort() }, [parts, filterMake])
 
   const filtered = useMemo(() => parts.filter(p => {
-    if (!showSold&&p.status==='sold') return false
+    if (hideSold && p.status === 'sold') return false
     const q=search.toLowerCase()
     if (q&&![p.title,p.make,p.model,p.year,p.sku,p.partNumber,p.category,p.subcategory,p.condition,p.status].some(v=>(v||'').toLowerCase().includes(q))) return false
     if (filterMake&&p.make!==filterMake) return false
@@ -441,7 +441,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
     if (filterStatus&&p.status!==filterStatus) return false
     if (filterCond&&p.condition!==filterCond) return false
     return true
-  }), [parts,search,filterMake,filterModel,filterYear,filterCat,filterStatus,filterCond,showSold,showDeleted])
+  }), [parts,search,filterMake,filterModel,filterYear,filterCat,filterStatus,filterCond,hideSold,showDeleted])
 
   const carGroups = useMemo(() => {
     const g={}
@@ -520,7 +520,6 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
             <button onClick={() => setViewMode('parts')} style={{ padding:'5px 14px', fontSize:12, fontWeight:600, background:viewMode==='parts'?C.accent:'white', color:viewMode==='parts'?'white':C.muted, border:'none', cursor:'pointer' }}>📦 By Part</button>
             <button onClick={() => setViewMode('car')} style={{ padding:'5px 14px', fontSize:12, fontWeight:600, background:viewMode==='car'?C.accent:'white', color:viewMode==='car'?'white':C.muted, border:'none', cursor:'pointer', borderLeft:`1px solid ${C.border}` }}>🚗 By Car</button>
           </div>
-          <button onClick={() => setShowSold(s=>!s)} style={{ ...S.btn(showSold?'green':'secondary'), padding:'5px 12px', fontSize:12 }}>{showSold?'✓ Sold Shown':'Show Sold'}</button>
           <span style={{ fontSize:12, color:C.muted, background:C.panel, borderRadius:10, padding:'2px 10px', fontWeight:600 }}>{totals.count} parts</span>
         </div>
       </div>
@@ -552,11 +551,25 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
             <option value="">All Categories</option>{CATEGORY_NAMES.map(c=><option key={c}>{c}</option>)}
           </select>
           <select style={{ ...selSm, minWidth:110 }} value={filterStatus} onChange={e => { setFilterStatus(e.target.value); setPage(0) }}>
-            <option value="">All Statuses</option>{['in_stock','listed','sold','scrapped','deferred'].map(s=><option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
+            <option value="">All Statuses</option>
+            {['in_stock','listed','sold','scrapped','deferred'].map(s => (
+              <option key={s} value={s} disabled={hideSold && s === 'sold'} style={hideSold && s === 'sold' ? { color: C.muted } : {}}>
+                {STATUS_LABELS[s]}{hideSold && s === 'sold' ? ' (hidden)' : ''}
+              </option>
+            ))}
           </select>
           <select style={{ ...selSm, minWidth:130 }} value={filterCond} onChange={e => { setFilterCond(e.target.value); setPage(0) }}>
             <option value="">All Conditions</option>{PART_CONDITIONS.map(c=><option key={c}>{c}</option>)}
           </select>
+          <label style={{ display:'flex', alignItems:'center', gap:6, fontSize:12, color:C.muted, cursor:'pointer', userSelect:'none' }}>
+            <input
+              type="checkbox"
+              checked={hideSold}
+              onChange={e => { setHideSold(e.target.checked); if (e.target.checked && filterStatus === 'sold') setFilterStatus(''); setPage(0) }}
+              style={{ cursor:'pointer' }}
+            />
+            Hide Sold
+          </label>
         </div>
       </div>
 
