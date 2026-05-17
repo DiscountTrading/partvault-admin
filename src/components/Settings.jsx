@@ -161,12 +161,13 @@ export default function Settings({ profile, storeId, onSignOut }) {
       if (data?.settings) {
         if (data.settings.footer) setFooter(data.settings.footer)
         if (data.settings.aiDescription) setAiSettings(s => ({ ...s, ...data.settings.aiDescription }))
-        if (data.settings.ebayCreds) setEbayCreds(c => ({ ...c, ...data.settings.ebayCreds }))
         if (data.settings.anthropicKey) setAnthropicKey(data.settings.anthropicKey)
-        if (data.settings.ebayOAuth?.accessToken) {
-          setEbayConnected(true)
-          setEbayExpiry(data.settings.ebayOAuth.expiresAt)
-        }
+      }
+      // eBay credentials now stored in ebay_tokens (tokens in vault, non-sensitive fields in table)
+      const { data: tokenRow } = await sb.from('ebay_tokens').select('app_id, ru_name, expires_at').eq('store_id', storeId).maybeSingle()
+      if (tokenRow) {
+        setEbayCreds(c => ({ ...c, appId: tokenRow.app_id||c.appId, ruName: tokenRow.ru_name||c.ruName }))
+        if (tokenRow.expires_at) { setEbayConnected(true); setEbayExpiry(tokenRow.expires_at) }
       }
     } catch (e) {
       console.error('Failed to load settings', e)
@@ -193,9 +194,11 @@ export default function Settings({ profile, storeId, onSignOut }) {
     if (!storeId) return
     setCredsSaving(true)
     try {
-      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const merged = { ...(current?.settings || {}), ebayCreds }
-      await sb.from('stores').update({ settings: merged }).eq('id', storeId)
+      // Save non-sensitive fields (appId, ruName) to ebay_tokens. certId is already in Supabase Vault.
+      await sb.from('ebay_tokens').upsert(
+        { store_id: storeId, app_id: ebayCreds.appId, ru_name: ebayCreds.ruName },
+        { onConflict: 'store_id' }
+      )
       setCredsSaved(true)
       setTimeout(() => setCredsSaved(false), 2000)
     } catch (e) {
@@ -242,10 +245,13 @@ export default function Settings({ profile, storeId, onSignOut }) {
       const tokens = await res.json()
       if (!tokens.access_token) throw new Error(tokens.error_description || tokens.error || 'No token returned')
       const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString()
-      const ebayOAuth = { accessToken: tokens.access_token, refreshToken: tokens.refresh_token, expiresAt, expiresIn: tokens.expires_in }
-      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const merged = { ...(current?.settings || {}), ebayOAuth, ebayCreds: creds }
-      await sb.from('stores').update({ settings: merged }).eq('id', storeId)
+      // Store access token in Supabase Vault via the centralised RPC function
+      await sb.rpc('update_ebay_access_token', {
+        p_store_id: storeId,
+        p_access_token: tokens.access_token,
+        p_expires_at: expiresAt,
+        p_expires_in: tokens.expires_in,
+      })
       setEbayConnected(true)
       setEbayExpiry(expiresAt)
       setEbayTestResult({ ok: true, msg: 'Connected to eBay successfully!' })
@@ -265,9 +271,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
 
   const disconnectEbay = async () => {
     try {
-      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const merged = { ...(current?.settings || {}), ebayOAuth: null }
-      await sb.from('stores').update({ settings: merged }).eq('id', storeId)
+      await sb.from('ebay_tokens').update({ expires_at: new Date().toISOString() }).eq('store_id', storeId)
       setEbayConnected(false)
       setEbayExpiry(null)
       setEbayTestResult(null)
@@ -280,28 +284,18 @@ export default function Settings({ profile, storeId, onSignOut }) {
     setEbayTesting(true)
     setEbayTestResult(null)
     try {
-      const { data: store } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const token = store?.settings?.ebayOAuth?.accessToken
-      if (!token) throw new Error('No token — please reconnect')
-      const res = await fetch(`${CLOUDFLARE_PROXY}/ebay/trading`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'text/xml', 'Authorization': `Bearer ${token}`,
-          'X-EBAY-API-CALL-NAME': 'GetMyeBaySelling', 'X-EBAY-API-APP-NAME': ebayCreds.appId,
-          'X-EBAY-API-CERT-NAME': ebayCreds.certId, 'X-EBAY-API-COMPATIBILITY-LEVEL': '967', 'X-EBAY-API-SITEID': '15',
-        },
-        body: `<?xml version="1.0" encoding="utf-8"?><GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents"><ActiveList><Include>true</Include><Pagination><EntriesPerPage>1</EntriesPerPage><PageNumber>1</PageNumber></Pagination></ActiveList></GetMyeBaySellingRequest>`,
-      })
-      const text = await res.text()
-      if (text.includes('Success') || text.includes('TotalNumberOfEntries')) {
-        const match = text.match(/<TotalNumberOfEntries>(\d+)<\/TotalNumberOfEntries>/)
-        const count = match ? match[1] : '?'
-        setEbayTestResult({ ok: true, msg: `Connected — ${count} active listings found` })
-      } else if (text.includes('Invalid access token')) {
-        setEbayTestResult({ ok: false, msg: 'Token expired — please reconnect' })
-        setEbayConnected(false)
+      // Token is in Supabase Vault — check the metadata row for expiry status.
+      // The Edge Function auto-refreshes expired tokens on first API call.
+      const { data: tokenRow } = await sb.from('ebay_tokens').select('expires_at').eq('store_id', storeId).maybeSingle()
+      if (!tokenRow) throw new Error('No eBay credentials found — connect first')
+      const expiresAt = tokenRow.expires_at ? new Date(tokenRow.expires_at) : null
+      if (expiresAt && expiresAt < new Date()) {
+        setEbayTestResult({ ok: true, msg: 'Token expired but will auto-refresh on next import or reconcile' })
+      } else if (expiresAt) {
+        setEbayTestResult({ ok: true, msg: `Token valid until ${expiresAt.toLocaleDateString('en-AU', { day:'numeric', month:'short', year:'numeric' })}` })
       } else {
-        setEbayTestResult({ ok: false, msg: 'Unexpected response from eBay' })
+        setEbayTestResult({ ok: false, msg: 'No token expiry found — reconnect eBay' })
+        setEbayConnected(false)
       }
     } catch (e) {
       setEbayTestResult({ ok: false, msg: `Failed: ${e.message}` })
@@ -323,12 +317,12 @@ export default function Settings({ profile, storeId, onSignOut }) {
       if (data.error) throw new Error(data.error)
 
       const jobId = data.jobId
-      setImportJob({ status: 'running', current_item: 'Starting...', total_ids: data.totalIds, imported_count: 0, skipped_count: 0, failed_count: 0, id: jobId })
+      setImportJob({ status: 'running', current_item: 'Starting...', total_items: data.totalIds, imported: 0, skipped: 0, failed: 0, id: jobId })
 
       // Step 2: repeatedly call process_chunk until complete or cancelled
       const processNext = async () => {
         // Check for cancellation via Supabase
-        const { data: jobCheck } = await sb.from('import_jobs').select('status').eq('id', jobId).single()
+        const { data: jobCheck } = await sb.from('jobs').select('status').eq('id', jobId).single()
         if (jobCheck?.status === 'cancelled') {
           setImporting(false)
           setImportJob(j => ({ ...j, status: 'cancelled' }))
@@ -354,11 +348,11 @@ export default function Settings({ profile, storeId, onSignOut }) {
             ...j,
             id: jobId,
             status: chunk.status,
-            imported_count: chunk.imported,
-            skipped_count: chunk.skipped,
-            failed_count: chunk.failed,
+            imported: chunk.imported,
+            skipped: chunk.skipped,
+            failed: chunk.failed,
             batch_offset: chunk.offset,
-            total_ids: chunk.total,
+            total_items: chunk.total,
             current_item: chunk.isComplete
               ? `✓ Complete — ${chunk.imported} imported, ${chunk.skipped} skipped`
               : `Processing ${chunk.offset} of ${chunk.total}...`,
@@ -388,7 +382,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const cancelImport = async () => {
     if (!importJob?.id) return
     // Mark cancelled in Supabase — processNext loop checks this before each chunk
-    await sb.from('import_jobs').update({ status: 'cancelled' }).eq('id', importJob.id)
+    await sb.from('jobs').update({ status: 'cancelled', completed_at: new Date().toISOString() }).eq('id', importJob.id)
     setImporting(false)
     setImportJob(j => ({ ...j, status: 'cancelled' }))
   }
@@ -427,13 +421,13 @@ export default function Settings({ profile, storeId, onSignOut }) {
 
       const processNext = async () => {
         if (enrichCancelRef.current) {
-          await sb.from('import_jobs').update({ status: 'cancelled' }).eq('id', jobId)
+          await sb.from('jobs').update({ status: 'cancelled', completed_at: new Date().toISOString() }).eq('id', jobId)
           setEnrichJob(j => ({ ...j, status: 'cancelled' }))
           setEnriching(false)
           return
         }
 
-        const { data: jobCheck } = await sb.from('import_jobs').select('status').eq('id', jobId).single()
+        const { data: jobCheck } = await sb.from('jobs').select('status').eq('id', jobId).single()
         if (jobCheck?.status === 'cancelled') {
           setEnrichJob(j => ({ ...j, status: 'cancelled' }))
           setEnriching(false)
@@ -572,7 +566,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
     if (!storeId) return
     let cancelled = false
     ;(async () => {
-      const { data: jobs } = await sb.from('import_jobs')
+      const { data: jobs } = await sb.from('jobs')
         .select('*')
         .eq('store_id', storeId)
         .eq('status', 'running')
@@ -597,12 +591,12 @@ export default function Settings({ profile, storeId, onSignOut }) {
         const resumeJobId = enrichJobInProgress.id
         const processNext = async () => {
           if (enrichCancelRef.current) {
-            await sb.from('import_jobs').update({ status: 'cancelled' }).eq('id', resumeJobId)
+            await sb.from('jobs').update({ status: 'cancelled' }).eq('id', resumeJobId)
             setEnrichJob(j => ({ ...j, status: 'cancelled' }))
             setEnriching(false)
             return
           }
-          const { data: jobCheck } = await sb.from('import_jobs').select('status').eq('id', resumeJobId).single()
+          const { data: jobCheck } = await sb.from('jobs').select('status').eq('id', resumeJobId).single()
           if (jobCheck?.status !== 'running') {
             setEnrichJob(j => ({ ...j, status: jobCheck?.status || 'completed' }))
             setEnriching(false)
@@ -689,13 +683,13 @@ export default function Settings({ profile, storeId, onSignOut }) {
   }
 
   const enrichStaleParts = async () => {
-    if (!reconcileResult?.staleParts?.length) return
+    if (!reconcileResult?.staleListings?.length) return
     setEnrichingStale(true)
     setEnrichedData(null)
     setResolutionResult(null)
-    setEnrichmentProgress({ current: 0, total: reconcileResult.staleParts.length })
+    setEnrichmentProgress({ current: 0, total: reconcileResult.staleListings.length })
     try {
-      const itemIds = reconcileResult.staleParts.map(p => p.ebayItemId).filter(Boolean)
+      const itemIds = reconcileResult.staleListings.map(l => l.platformListingId).filter(Boolean)
       const res = await fetch(EDGE_FN, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -715,30 +709,30 @@ export default function Settings({ profile, storeId, onSignOut }) {
 
   // Action options available per row. The "suggested" one is pre-selected based on eBay status.
   const ACTION_OPTIONS = {
-    sold: { label: 'Mark Sold', newStatus: 'Sold', color: C.green },
-    archived: { label: 'Mark Archived', newStatus: 'Archived', color: C.yellow },
-    defer: { label: 'Defer for Review', newStatus: 'Listed', color: C.accent, deferReview: true },
-    clear: { label: 'Clear Flag', newStatus: 'Listed', color: C.muted, deferReview: false },
+    sold:        { label: 'Mark Sold',        resolution: 'sold',        color: C.green },
+    ended:       { label: 'Mark Ended',       resolution: 'ended',       color: C.yellow },
+    defer:       { label: 'Defer for Review', resolution: 'defer',       color: C.accent },
+    keep_active: { label: 'Keep Active',      resolution: 'keep_active', color: C.muted },
   }
 
   const suggestedActionKey = (enriched) => {
-    if (!enriched) return 'clear'
+    if (!enriched) return 'keep_active'
     if (enriched.ebayStatus === 'Sold') return 'sold'
     if (enriched.ebayStatus === 'Ended') return 'defer'
-    if (enriched.ebayStatus === 'NotFound') return 'archived'
-    if (enriched.ebayStatus === 'Active') return 'clear'
-    return 'clear'
+    if (enriched.ebayStatus === 'NotFound') return 'ended'
+    if (enriched.ebayStatus === 'Active') return 'keep_active'
+    return 'keep_active'
   }
 
-  const getRowAction = (partId, enriched) => {
-    const key = rowSelections[partId] || suggestedActionKey(enriched)
+  const getRowAction = (listingId, enriched) => {
+    const key = rowSelections[listingId] || suggestedActionKey(enriched)
     return { key, ...ACTION_OPTIONS[key] }
   }
 
-  const applyResolution = async (partId, ebayItemId) => {
-    const enriched = enrichedData?.[ebayItemId]
-    const action = getRowAction(partId, enriched)
-    setClearingFlag(partId)
+  const applyResolution = async (listingId, partId, platformListingId) => {
+    const enriched = enrichedData?.[platformListingId]
+    const action = getRowAction(listingId, enriched)
+    setClearingFlag(listingId)
     try {
       const res = await fetch(EDGE_FN, {
         method: 'POST',
@@ -747,9 +741,9 @@ export default function Settings({ profile, storeId, onSignOut }) {
           action: 'apply_stale_resolution',
           storeId,
           resolutions: [{
+            listingId,
             partId,
-            newStatus: action.newStatus,
-            deferReview: action.deferReview === true,
+            resolution: action.resolution,
             salePrice: action.key === 'sold' ? enriched?.salePrice : undefined,
             soldDate: action.key === 'sold' ? enriched?.soldDate : undefined,
           }],
@@ -759,7 +753,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
       if (data.error) throw new Error(data.error)
       setReconcileResult(r => ({
         ...r,
-        staleParts: r.staleParts.filter(p => p.id !== partId),
+        staleListings: r.staleListings.filter(l => l.id !== listingId),
         staleCount: r.staleCount - 1,
       }))
     } catch (e) {
@@ -769,18 +763,18 @@ export default function Settings({ profile, storeId, onSignOut }) {
   }
 
   const applyAllResolutions = async () => {
-    if (!enrichedData || !reconcileResult?.staleParts?.length) return
-    if (!confirm(`Apply suggested actions to all ${reconcileResult.staleParts.length} stale parts? This will update statuses in PartVault.`)) return
+    if (!enrichedData || !reconcileResult?.staleListings?.length) return
+    if (!confirm(`Apply suggested actions to all ${reconcileResult.staleListings.length} stale listings? This will update statuses in PartVault.`)) return
     setApplyingResolutions(true)
     setResolutionResult(null)
     try {
-      const resolutions = reconcileResult.staleParts.map(p => {
-        const enriched = enrichedData[p.ebayItemId]
-        const action = getRowAction(p.id, enriched)
+      const resolutions = reconcileResult.staleListings.map(l => {
+        const enriched = enrichedData[l.platformListingId]
+        const action = getRowAction(l.id, enriched)
         return {
-          partId: p.id,
-          newStatus: action.newStatus,
-          deferReview: action.deferReview === true,
+          listingId: l.id,
+          partId: l.partId,
+          resolution: action.resolution,
           salePrice: action.key === 'sold' ? enriched?.salePrice : undefined,
           soldDate: action.key === 'sold' ? enriched?.soldDate : undefined,
         }
@@ -792,8 +786,8 @@ export default function Settings({ profile, storeId, onSignOut }) {
       })
       const data = await res.json()
       if (data.error) throw new Error(data.error)
-      setResolutionResult({ ok: true, msg: `✓ Updated ${data.updated} parts` })
-      setReconcileResult(r => ({ ...r, staleParts: [], staleCount: 0 }))
+      setResolutionResult({ ok: true, msg: `✓ Updated ${data.updated} listings` })
+      setReconcileResult(r => ({ ...r, staleListings: [], staleCount: 0 }))
       setEnrichedData(null)
       setRowSelections({})
     } catch (e) {
@@ -802,13 +796,13 @@ export default function Settings({ profile, storeId, onSignOut }) {
     setApplyingResolutions(false)
   }
 
-  const clearStaleFlag = async (partId) => {
-    setClearingFlag(partId)
+  const clearStaleFlag = async (listingId) => {
+    setClearingFlag(listingId)
     try {
-      await sb.from('parts').update({ reconcile_flagged: false, reconcile_flagged_at: null }).eq('id', partId)
+      await sb.from('listings').update({ reconcile_flagged: false, reconcile_flagged_at: null }).eq('id', listingId)
       setReconcileResult(r => ({
         ...r,
-        staleParts: r.staleParts.filter(p => p.id !== partId),
+        staleListings: r.staleListings.filter(l => l.id !== listingId),
         staleCount: r.staleCount - 1,
       }))
     } catch (e) {
@@ -959,8 +953,8 @@ export default function Settings({ profile, storeId, onSignOut }) {
   ]
 
   const importProgress = importJob ? (() => {
-    const total = importJob.total_ids || 0
-    const done = (importJob.imported_count || 0) + (importJob.skipped_count || 0)
+    const total = importJob.total_items || 0
+    const done = (importJob.imported || 0) + (importJob.skipped || 0)
     return total > 0 ? Math.round((done / total) * 100) : 0
   })() : 0
 
@@ -983,7 +977,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
             {/* Count comparison */}
             <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
               <StatCard label="eBay Active" value={reconcileResult.ebayActiveCount} color={C.blue} />
-              <StatCard label="PartVault Listed" value={reconcileResult.pvListedCount} color={C.accent} />
+              <StatCard label="PartVault Active" value={reconcileResult.pvActiveCount} color={C.accent} />
               <StatCard label="Missing" value={reconcileResult.missingCount} color={reconcileResult.missingCount > 0 ? C.yellow : C.green} sub="in eBay, not imported" />
               <StatCard label="Stale" value={reconcileResult.staleCount} color={reconcileResult.staleCount > 0 ? C.red : C.green} sub="flagged for review" />
             </div>
@@ -1048,8 +1042,8 @@ export default function Settings({ profile, storeId, onSignOut }) {
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                     <thead>
                       <tr style={{ background: '#f5f4f0' }}>
-                        <th style={{ padding: '8px 12px', textAlign: 'left', color: C.muted, fontWeight: 600 }}>SKU / Item ID</th>
-                        <th style={{ padding: '8px 12px', textAlign: 'left', color: C.muted, fontWeight: 600 }}>Title</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'left', color: C.muted, fontWeight: 600 }}>eBay Item ID</th>
+                        <th style={{ padding: '8px 12px', textAlign: 'left', color: C.muted, fontWeight: 600 }}>SKU</th>
                         {enrichedData && (
                           <>
                             <th style={{ padding: '8px 12px', textAlign: 'left', color: C.muted, fontWeight: 600 }}>eBay Status</th>
@@ -1060,14 +1054,14 @@ export default function Settings({ profile, storeId, onSignOut }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {reconcileResult.staleParts.map((p, i) => {
-                        const enriched = enrichedData?.[p.ebayItemId]
-                        const action = enriched ? getRowAction(p.id, enriched) : null
+                      {(reconcileResult.staleListings || []).map((l, i) => {
+                        const enriched = enrichedData?.[l.platformListingId]
+                        const action = enriched ? getRowAction(l.id, enriched) : null
                         const suggestedKey = enriched ? suggestedActionKey(enriched) : null
                         return (
-                          <tr key={p.id} style={{ borderTop: i > 0 ? `1px solid ${C.border}` : 'none', background: '#fff' }}>
-                            <td style={{ padding: '8px 12px', color: C.muted, fontFamily: 'monospace', fontSize: 12 }}>{p.sku}</td>
-                            <td style={{ padding: '8px 12px', color: C.text }}>{p.title?.substring(0, 50)}{p.title?.length > 50 ? '…' : ''}</td>
+                          <tr key={l.id} style={{ borderTop: i > 0 ? `1px solid ${C.border}` : 'none', background: '#fff' }}>
+                            <td style={{ padding: '8px 12px', color: C.muted, fontFamily: 'monospace', fontSize: 12 }}>{l.platformListingId}</td>
+                            <td style={{ padding: '8px 12px', color: C.text, fontFamily: 'monospace', fontSize: 12 }}>{l.platformSku || '—'}</td>
                             {enrichedData && (
                               <>
                                 <td style={{ padding: '8px 12px', fontSize: 12 }}>
@@ -1098,9 +1092,9 @@ export default function Settings({ profile, storeId, onSignOut }) {
                               {enrichedData ? (
                                 <div style={{ display: 'flex', gap: 6, justifyContent: 'center', alignItems: 'center', flexWrap: 'nowrap' }}>
                                   <select
-                                    value={rowSelections[p.id] || suggestedKey}
-                                    onChange={e => setRowSelections(s => ({ ...s, [p.id]: e.target.value }))}
-                                    disabled={clearingFlag === p.id}
+                                    value={rowSelections[l.id] || suggestedKey}
+                                    onChange={e => setRowSelections(s => ({ ...s, [l.id]: e.target.value }))}
+                                    disabled={clearingFlag === l.id}
                                     style={{
                                       fontSize: 11,
                                       padding: '4px 6px',
@@ -1119,25 +1113,25 @@ export default function Settings({ profile, storeId, onSignOut }) {
                                     ))}
                                   </select>
                                   <button
-                                    onClick={() => applyResolution(p.id, p.ebayItemId)}
-                                    disabled={clearingFlag === p.id}
+                                    onClick={() => applyResolution(l.id, l.partId, l.platformListingId)}
+                                    disabled={clearingFlag === l.id}
                                     style={{
                                       ...S.btn('primary'),
                                       fontSize: 11,
                                       padding: '4px 10px',
-                                      opacity: clearingFlag === p.id ? 0.5 : 1,
+                                      opacity: clearingFlag === l.id ? 0.5 : 1,
                                     }}
                                   >
-                                    {clearingFlag === p.id ? '...' : 'Apply'}
+                                    {clearingFlag === l.id ? '...' : 'Apply'}
                                   </button>
                                 </div>
                               ) : (
                                 <button
-                                  onClick={() => clearStaleFlag(p.id)}
-                                  disabled={clearingFlag === p.id}
-                                  style={{ ...S.btn('secondary'), fontSize: 11, padding: '4px 10px', opacity: clearingFlag === p.id ? 0.5 : 1 }}
+                                  onClick={() => clearStaleFlag(l.id)}
+                                  disabled={clearingFlag === l.id}
+                                  style={{ ...S.btn('secondary'), fontSize: 11, padding: '4px 10px', opacity: clearingFlag === l.id ? 0.5 : 1 }}
                                 >
-                                  {clearingFlag === p.id ? '...' : 'Clear Flag'}
+                                  {clearingFlag === l.id ? '...' : 'Clear Flag'}
                                 </button>
                               )}
                             </td>
@@ -1595,14 +1589,14 @@ export default function Settings({ profile, storeId, onSignOut }) {
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6 }}>
                     <span style={{ color: C.text, fontWeight: 500 }}>{importJob.current_item || 'Processing...'}</span>
-                    <span style={{ color: C.muted }}>{(importJob.imported_count || 0) + (importJob.skipped_count || 0) + (importJob.failed_count || 0)}/{importJob.total_ids || '?'}</span>
+                    <span style={{ color: C.muted }}>{(importJob.imported || 0) + (importJob.skipped || 0) + (importJob.failed || 0)}/{importJob.total_items || '?'}</span>
                   </div>
                   <div style={{ height: 8, background: C.border, borderRadius: 4, overflow: 'hidden' }}>
                     <div style={{ height: '100%', width: `${importProgress}%`, background: importJob.status === 'completed' ? C.green : C.accent, borderRadius: 4, transition: 'width 0.5s' }} />
                   </div>
-                  {importJob.skipped_count > 0 && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{importJob.skipped_count} already imported — skipped</div>}
+                  {importJob.skipped > 0 && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{importJob.skipped} already imported — skipped</div>}
                   {importJob.status === 'failed' && <div style={{ fontSize: 12, color: C.red, marginTop: 4 }}>Error: {importJob.error_message}</div>}
-                  {importJob.status === 'completed' && <div style={{ fontSize: 12, color: C.green, marginTop: 4 }}>✓ Import complete — {importJob.imported_count} parts imported</div>}
+                  {importJob.status === 'completed' && <div style={{ fontSize: 12, color: C.green, marginTop: 4 }}>✓ Import complete — {importJob.imported} parts imported</div>}
                 </div>
               )}
 
