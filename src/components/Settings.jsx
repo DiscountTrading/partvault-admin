@@ -857,9 +857,6 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const ReconcileSection = () => (
     <>
       <Section title="🔄 Reconcile with eBay">
-        <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
-          Compares your live eBay listings against PartVault. Stale parts (listed in PartVault but gone from eBay) are automatically checked against eBay to determine their current status — sold, ended, or still active — so you can apply the right action with one click.
-        </p>
 
         {reconcileError && (
           <div style={{ padding: 12, borderRadius: 8, marginBottom: 12, background: '#fef2f2', border: `1px solid #fca5a5`, fontSize: 13, color: C.red }}>
@@ -1388,159 +1385,77 @@ export default function Settings({ profile, storeId, onSignOut }) {
           {/* RIGHT COLUMN */}
           <div>
             {/* Import */}
-            <Section title="📥 eBay Import">
-              <p style={{ fontSize: 13, color: C.muted, marginBottom: 12, lineHeight: 1.6 }}>
-                Pulls all listings — active, sold and withdrawn. Already-imported listings are skipped automatically. Runs in the background.
-              </p>
-
+            <Section title="📥 eBay Sync">
               {importJob && (
-                <div style={{ marginBottom: 16 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 6 }}>
-                    <span style={{ color: C.text, fontWeight: 500 }}>{importJob.current_item || 'Processing...'}</span>
-                    <span style={{ color: C.muted }}>{(importJob.imported || 0) + (importJob.skipped || 0) + (importJob.failed || 0)}/{importJob.total_items || '?'}</span>
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                    <span style={{ color: C.text }}>{importJob.current_item || 'Processing...'}</span>
+                    <span style={{ color: C.muted }}>{importProgress}%</span>
                   </div>
-                  <div style={{ height: 8, background: C.border, borderRadius: 4, overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${importProgress}%`, background: importJob.status === 'completed' ? C.green : C.accent, borderRadius: 4, transition: 'width 0.5s' }} />
+                  <div style={{ height: 6, background: C.border, borderRadius: 3, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${importProgress}%`, background: importJob.status === 'completed' ? C.green : C.accent, transition: 'width 0.5s' }} />
                   </div>
-                  {importJob.skipped > 0 && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{importJob.skipped} already imported — skipped</div>}
-                  {importJob.status === 'failed' && <div style={{ fontSize: 12, color: C.red, marginTop: 4 }}>Error: {importJob.error_message}</div>}
-                  {importJob.status === 'completed' && <div style={{ fontSize: 12, color: C.green, marginTop: 4 }}>✓ Import complete — {importJob.imported} parts imported</div>}
                 </div>
               )}
-
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
                 <button style={{ ...S.btn('primary'), flex: 1, opacity: (importing || !ebayConnected) ? 0.6 : 1 }} onClick={importAllListings} disabled={importing || !ebayConnected}>
                   {importing ? '⏳ Importing...' : '📥 Import All eBay Listings'}
                 </button>
-                {importing && <button style={{ ...S.btn('danger') }} onClick={cancelImport}>Cancel</button>}
-              </div>
-              {!ebayConnected && <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>Connect eBay above to enable import.</div>}
-
-              <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>Backfill Historical Sales</div>
-                <div style={{ fontSize: 12, color: C.muted, marginBottom: 10, lineHeight: 1.6 }}>
-                  Fetches your full eBay order history (up to 5 years) and marks matching parts as sold with the correct price and date. Run this once after the initial import.
-                </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button
-                    style={{ ...S.btn('secondary'), opacity: (backfilling || !ebayConnected) ? 0.6 : 1 }}
-                    onClick={runBackfill}
-                    disabled={backfilling || !ebayConnected}
-                  >
-                    {backfilling ? '⏳ Backfilling...' : '🕓 Backfill Historical Sales'}
-                  </button>
-                  {backfilling && (
-                    <button style={{ ...S.btn('danger') }} onClick={() => { backfillCancelRef.current = true }}>
-                      Cancel
-                    </button>
-                  )}
-                </div>
-                {backfillResult && !backfillResult.error && (
-                  <div style={{ marginTop: 10, padding: '10px 14px', background: backfillResult.done ? '#f0fdf4' : '#fffbeb', border: `1px solid ${backfillResult.done ? '#86efac' : '#fde68a'}`, borderRadius: 8, fontSize: 13 }}>
-                    {backfillResult.progress && !backfillResult.done && (
-                      <div style={{ color: '#78350f', marginBottom: 4 }}>⏳ {backfillResult.progress}</div>
-                    )}
-                    {backfillResult.done && <strong style={{ color: C.green }}>✓ Complete — </strong>}
-                    <span style={{ color: C.muted }}>
-                      {backfillResult.updated} marked sold · {backfillResult.alreadySold} already sold · {backfillResult.notFound} not in PartVault
-                    </span>
-                    {backfillResult.errors?.length > 0 && (
-                      <div style={{ color: C.red, fontSize: 12, marginTop: 4 }}>{backfillResult.errors.length} errors</div>
-                    )}
-                  </div>
-                )}
-                {backfillResult?.error && (
-                  <div style={{ marginTop: 10, padding: '10px 14px', background: '#fef2f2', border: `1px solid #fca5a5`, borderRadius: 8, fontSize: 13, color: C.red }}>
-                    ✗ {backfillResult.error}
-                  </div>
-                )}
+                {importing && <button style={S.btn('danger')} onClick={cancelImport}>Cancel</button>}
               </div>
 
-              <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>Import Full Sales History</div>
-                <div style={{ fontSize: 12, color: C.muted, marginBottom: 10, lineHeight: 1.6 }}>
-                  Creates part records for sold items in your eBay history (last 90 days) that aren't already in PartVault. Items with a recognised category are mapped automatically; items with no eBay data are placed in <em>Legacy Items</em>.
-                </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button
-                    style={{ ...S.btn('secondary'), opacity: (importingHistory || !ebayConnected) ? 0.6 : 1 }}
-                    onClick={runSoldHistoryImport}
-                    disabled={importingHistory || !ebayConnected}
-                  >
-                    {importingHistory ? '⏳ Importing...' : '📦 Import Full Sales History'}
-                  </button>
-                  {importingHistory && (
-                    <button style={{ ...S.btn('danger') }} onClick={() => { historyCancelRef.current = true }}>
-                      Cancel
-                    </button>
-                  )}
-                </div>
-                {historyResult && !historyResult.error && (
-                  <div style={{ marginTop: 10, padding: '10px 14px', background: historyResult.done ? '#f0fdf4' : '#fffbeb', border: `1px solid ${historyResult.done ? '#86efac' : '#fde68a'}`, borderRadius: 8, fontSize: 13 }}>
-                    {historyResult.progress && !historyResult.done && (
-                      <div style={{ color: '#78350f', marginBottom: 4 }}>⏳ {historyResult.progress}</div>
-                    )}
-                    {historyResult.done && <strong style={{ color: C.green }}>✓ Complete — </strong>}
-                    <span style={{ color: C.muted }}>
-                      {historyResult.created} created · {historyResult.skipped} already in PartVault · {historyResult.noData} no eBay data
-                    </span>
-                    {historyResult.cancelled && <span style={{ color: C.yellow, marginLeft: 8 }}>(cancelled)</span>}
-                    {historyResult.errors?.length > 0 && (
-                      <div style={{ marginTop: 8 }}>
-                        <div style={{ color: C.red, fontSize: 12, marginBottom: 4, fontWeight: 600 }}>{historyResult.errors.length} errors (first 20):</div>
-                        {historyResult.errors.slice(0, 5).map((e, i) => (
-                          <div key={i} style={{ fontSize: 11, color: C.red, fontFamily: 'monospace', marginBottom: 2 }}>
-                            {e.itemId}: {e.error}
-                          </div>
-                        ))}
-                      </div>
-                    )}
+              {/* Maintenance tools — compact rows */}
+              <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
+                {[
+                  {
+                    label: 'Backfill Historical Sales',
+                    running: backfilling,
+                    onRun: runBackfill,
+                    onCancel: () => { backfillCancelRef.current = true },
+                    result: backfillResult,
+                    resultText: r => r.done
+                      ? `${r.updated} marked sold · ${r.alreadySold} already · ${r.notFound} not found${r.cancelled ? ' (cancelled)' : ''}`
+                      : r.progress || 'Running…',
+                  },
+                  {
+                    label: 'Import Sales History',
+                    running: importingHistory,
+                    onRun: runSoldHistoryImport,
+                    onCancel: () => { historyCancelRef.current = true },
+                    result: historyResult,
+                    resultText: r => r.done
+                      ? `${r.created} created · ${r.skipped} already in PartVault${r.cancelled ? ' (cancelled)' : ''}`
+                      : r.progress || 'Running…',
+                  },
+                  {
+                    label: 'Backfill Categories',
+                    running: backfillingCats,
+                    onRun: runCategoryBackfill,
+                    onCancel: () => { backfillCatCancelRef.current = true },
+                    result: backfillCatResult,
+                    resultText: r => r.done
+                      ? `${r.updated} updated · ${r.noData} no data${r.cancelled ? ' (cancelled)' : ''}`
+                      : 'Running…',
+                  },
+                ].map(({ label, running, onRun, onCancel, result, resultText }, idx, arr) => (
+                  <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 10, paddingBottom: idx < arr.length - 1 ? 10 : 0, marginBottom: idx < arr.length - 1 ? 10 : 0, borderBottom: idx < arr.length - 1 ? `1px solid ${C.border}` : 'none' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{label}</div>
+                      {result && !result.error && (
+                        <div style={{ fontSize: 11, color: result.done ? C.green : C.muted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {result.done ? '✓ ' : '⏳ '}{resultText(result)}
+                        </div>
+                      )}
+                      {result?.error && <div style={{ fontSize: 11, color: C.red, marginTop: 2 }}>✗ {result.error}</div>}
+                    </div>
+                    {running
+                      ? <button style={{ ...S.btn('danger'), padding: '6px 14px', fontSize: 12 }} onClick={onCancel}>Cancel</button>
+                      : <button style={{ ...S.btn('secondary'), padding: '6px 14px', fontSize: 12, opacity: !ebayConnected ? 0.6 : 1 }} onClick={onRun} disabled={!ebayConnected}>Run</button>
+                    }
                   </div>
-                )}
-                {historyResult?.error && (
-                  <div style={{ marginTop: 10, padding: '10px 14px', background: '#fef2f2', border: `1px solid #fca5a5`, borderRadius: 8, fontSize: 13, color: C.red }}>
-                    ✗ {historyResult.error}
-                  </div>
-                )}
+                ))}
               </div>
-
-              <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>Backfill Categories</div>
-                <div style={{ fontSize: 12, color: C.muted, marginBottom: 10, lineHeight: 1.6 }}>
-                  Looks up the eBay category for every part that has no category set, using the Shopping API. Parts with no eBay data are left uncategorised. Safe to run multiple times.
-                </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button
-                    style={{ ...S.btn('secondary'), opacity: (backfillingCats || !ebayConnected) ? 0.6 : 1 }}
-                    onClick={runCategoryBackfill}
-                    disabled={backfillingCats || !ebayConnected}
-                  >
-                    {backfillingCats ? '⏳ Backfilling...' : '🏷️ Backfill Categories'}
-                  </button>
-                  {backfillingCats && (
-                    <button style={{ ...S.btn('danger') }} onClick={() => { backfillCatCancelRef.current = true }}>
-                      Cancel
-                    </button>
-                  )}
-                </div>
-                {backfillCatResult && !backfillCatResult.error && (
-                  <div style={{ marginTop: 10, padding: '10px 14px', background: backfillCatResult.done ? '#f0fdf4' : '#fffbeb', border: `1px solid ${backfillCatResult.done ? '#86efac' : '#fde68a'}`, borderRadius: 8, fontSize: 13 }}>
-                    {backfillCatResult.progress && !backfillCatResult.done && (
-                      <div style={{ color: '#78350f', marginBottom: 4 }}>⏳ Running…</div>
-                    )}
-                    {backfillCatResult.done && <strong style={{ color: C.green }}>✓ Complete — </strong>}
-                    <span style={{ color: C.muted }}>
-                      {backfillCatResult.updated} updated · {backfillCatResult.noData} no eBay data
-                    </span>
-                    {backfillCatResult.cancelled && <span style={{ color: C.yellow, marginLeft: 8 }}>(cancelled)</span>}
-                  </div>
-                )}
-                {backfillCatResult?.error && (
-                  <div style={{ marginTop: 10, padding: '10px 14px', background: '#fef2f2', border: `1px solid #fca5a5`, borderRadius: 8, fontSize: 13, color: C.red }}>
-                    ✗ {backfillCatResult.error}
-                  </div>
-                )}
-              </div>
+              {!ebayConnected && <div style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>Connect eBay above to enable.</div>}
             </Section>
 
             {/* Reconcile */}
