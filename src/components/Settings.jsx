@@ -113,6 +113,9 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const [importingHistory, setImportingHistory] = useState(false)
   const [historyResult, setHistoryResult] = useState(null)
   const historyCancelRef = useRef(false)
+  const [backfillingCats, setBackfillingCats] = useState(false)
+  const [backfillCatResult, setBackfillCatResult] = useState(null)
+  const backfillCatCancelRef = useRef(false)
   const [parsing, setParsing] = useState(false)
   const [parseProgress, setParseProgress] = useState(null) // { processed, total, failed }
   const parseCancelRef = useRef(false)
@@ -487,6 +490,34 @@ export default function Settings({ profile, storeId, onSignOut }) {
       setHistoryResult({ error: e.message, created: totalCreated })
     }
     setImportingHistory(false)
+  }
+
+  const runCategoryBackfill = async () => {
+    backfillCatCancelRef.current = false
+    setBackfillingCats(true)
+    setBackfillCatResult(null)
+    let totalUpdated = 0
+    let totalNoData  = 0
+    try {
+      let hasMore = true
+      while (hasMore && !backfillCatCancelRef.current) {
+        setBackfillCatResult({ progress: true, updated: totalUpdated, noData: totalNoData })
+        const res = await fetch(EDGE_FN, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'backfill_categories', storeId }),
+        })
+        const data = await res.json()
+        if (data.error) throw new Error(data.error)
+        totalUpdated += data.updated || 0
+        totalNoData  += data.noData  || 0
+        hasMore = data.hasMore || false
+      }
+      setBackfillCatResult({ done: true, cancelled: backfillCatCancelRef.current, updated: totalUpdated, noData: totalNoData })
+    } catch (e) {
+      setBackfillCatResult({ error: e.message, updated: totalUpdated })
+    }
+    setBackfillingCats(false)
   }
 
   const cancelImport = async () => {
@@ -1428,7 +1459,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
               <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>Import Full Sales History</div>
                 <div style={{ fontSize: 12, color: C.muted, marginBottom: 10, lineHeight: 1.6 }}>
-                  Creates part records for every sold item in your eBay history (up to 5 years) that isn't already in PartVault. Items with a recognised category are mapped automatically. Items too old for eBay to return details are placed in <em>Legacy Items</em>. Run once after the initial import and backfill.
+                  Creates part records for sold items in your eBay history (last 90 days) that aren't already in PartVault. Items with a recognised category are mapped automatically; items with no eBay data are placed in <em>Legacy Items</em>.
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button
@@ -1469,6 +1500,44 @@ export default function Settings({ profile, storeId, onSignOut }) {
                 {historyResult?.error && (
                   <div style={{ marginTop: 10, padding: '10px 14px', background: '#fef2f2', border: `1px solid #fca5a5`, borderRadius: 8, fontSize: 13, color: C.red }}>
                     ✗ {historyResult.error}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>Backfill Categories</div>
+                <div style={{ fontSize: 12, color: C.muted, marginBottom: 10, lineHeight: 1.6 }}>
+                  Looks up the eBay category for every part that has no category set, using the Shopping API. Parts with no eBay data are left uncategorised. Safe to run multiple times.
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    style={{ ...S.btn('secondary'), opacity: (backfillingCats || !ebayConnected) ? 0.6 : 1 }}
+                    onClick={runCategoryBackfill}
+                    disabled={backfillingCats || !ebayConnected}
+                  >
+                    {backfillingCats ? '⏳ Backfilling...' : '🏷️ Backfill Categories'}
+                  </button>
+                  {backfillingCats && (
+                    <button style={{ ...S.btn('danger') }} onClick={() => { backfillCatCancelRef.current = true }}>
+                      Cancel
+                    </button>
+                  )}
+                </div>
+                {backfillCatResult && !backfillCatResult.error && (
+                  <div style={{ marginTop: 10, padding: '10px 14px', background: backfillCatResult.done ? '#f0fdf4' : '#fffbeb', border: `1px solid ${backfillCatResult.done ? '#86efac' : '#fde68a'}`, borderRadius: 8, fontSize: 13 }}>
+                    {backfillCatResult.progress && !backfillCatResult.done && (
+                      <div style={{ color: '#78350f', marginBottom: 4 }}>⏳ Running…</div>
+                    )}
+                    {backfillCatResult.done && <strong style={{ color: C.green }}>✓ Complete — </strong>}
+                    <span style={{ color: C.muted }}>
+                      {backfillCatResult.updated} updated · {backfillCatResult.noData} no eBay data
+                    </span>
+                    {backfillCatResult.cancelled && <span style={{ color: C.yellow, marginLeft: 8 }}>(cancelled)</span>}
+                  </div>
+                )}
+                {backfillCatResult?.error && (
+                  <div style={{ marginTop: 10, padding: '10px 14px', background: '#fef2f2', border: `1px solid #fca5a5`, borderRadius: 8, fontSize: 13, color: C.red }}>
+                    ✗ {backfillCatResult.error}
                   </div>
                 )}
               </div>
