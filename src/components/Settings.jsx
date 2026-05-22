@@ -101,6 +101,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const [certUpdating, setCertUpdating] = useState(false)
   const [ebayConnected, setEbayConnected] = useState(false)
   const [ebayExpiry, setEbayExpiry] = useState(null)
+  const [ebayUsername, setEbayUsername] = useState(null)
   const [ebayTesting, setEbayTesting] = useState(false)
   const [ebayTestResult, setEbayTestResult] = useState(null)
   const [credsSaving, setCredsSaving] = useState(false)
@@ -167,7 +168,12 @@ export default function Settings({ profile, storeId, onSignOut }) {
       const { data: tokenRow } = await sb.from('ebay_tokens').select('app_id, ru_name, expires_at').eq('store_id', storeId).maybeSingle()
       if (tokenRow) {
         setEbayCreds(c => ({ ...c, appId: tokenRow.app_id||c.appId, ruName: tokenRow.ru_name||c.ruName }))
-        if (tokenRow.expires_at) { setEbayConnected(true); setEbayExpiry(tokenRow.expires_at) }
+        if (tokenRow.expires_at) {
+          setEbayConnected(true)
+          setEbayExpiry(tokenRow.expires_at)
+          fetch(EDGE_FN, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'get_ebay_username', storeId }) })
+            .then(r => r.json()).then(d => { if (d.username) setEbayUsername(d.username) }).catch(() => {})
+        }
       }
       const { data: hasCert } = await sb.rpc('has_ebay_cert_id', { p_store_id: storeId })
       setCertIsSet(!!hasCert)
@@ -268,6 +274,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
       await sb.from('ebay_tokens').update({ expires_at: new Date().toISOString() }).eq('store_id', storeId)
       setEbayConnected(false)
       setEbayExpiry(null)
+      setEbayUsername(null)
       setEbayTestResult(null)
     } catch (e) {
       console.error('Disconnect failed', e)
@@ -1308,7 +1315,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
               <div style={{ width: 12, height: 12, borderRadius: '50%', background: ebayConnected ? C.green : C.muted, flexShrink: 0 }} />
               <div>
                 <div style={{ fontWeight: 600, fontSize: 14, color: ebayConnected ? C.green : C.muted }}>
-                  {ebayConnected ? 'Connected to eBay' : 'Not connected'}
+                  {ebayConnected ? `Connected to eBay${ebayUsername ? ` — ${ebayUsername}` : ''}` : 'Not connected'}
                 </div>
                 {ebayConnected && ebayExpiry && (
                   <div style={{ fontSize: 12, color: C.muted }}>
