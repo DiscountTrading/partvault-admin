@@ -1338,7 +1338,14 @@ export default function Settings({ profile, storeId, onSignOut }) {
               {ebayConnected ? (
                 <button style={{ ...S.btn('danger'), flex: 1 }} onClick={disconnectEbay}>Disconnect</button>
               ) : (
-                <button style={{ ...S.btn('primary'), flex: 1 }} onClick={connectEbay}>Connect eBay</button>
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <button style={{ ...S.btn('primary'), width: '100%' }} onClick={connectEbay}>Connect eBay</button>
+                  <div style={{ fontSize: 11, color: C.muted, textAlign: 'center' }}>
+                    Wrong account?{' '}
+                    <a href="https://www.ebay.com.au/signin/out" target="_blank" rel="noreferrer" style={{ color: C.accent }}>Sign out of eBay</a>
+                    {' '}first, then log in as the correct account before connecting.
+                  </div>
+                </div>
               )}
             </div>
           </Section>
