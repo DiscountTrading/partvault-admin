@@ -172,7 +172,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
           setEbayConnected(true)
           setEbayExpiry(tokenRow.expires_at)
           fetch(EDGE_FN, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'get_ebay_username', storeId }) })
-            .then(r => r.json()).then(d => { if (d.username) setEbayUsername(d.username) }).catch(() => {})
+            .then(r => r.json()).then(d => { if (d.username) setEbayUsername(d.username); else console.warn('get_ebay_username:', d) }).catch(e => console.warn('get_ebay_username fetch failed:', e))
         }
       }
       const { data: hasCert } = await sb.rpc('has_ebay_cert_id', { p_store_id: storeId })
