@@ -261,6 +261,8 @@ export default function Settings({ profile, storeId, onSignOut }) {
       setEbayConnected(true)
       setEbayExpiry(result.expires_at)
       setEbayTestResult({ ok: true, msg: 'Connected to eBay successfully!' })
+      fetch(EDGE_FN, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'get_ebay_username', storeId }) })
+        .then(r => r.json()).then(d => { if (d.username) setEbayUsername(d.username) }).catch(() => {})
     } catch (e) {
       console.error('OAuth callback failed', e)
       setEbayTestResult({ ok: false, msg: `Connection failed: ${e.message}` })
