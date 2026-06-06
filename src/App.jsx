@@ -36,8 +36,75 @@ function SyncBadge({ status }) {
   return <span style={{ fontSize: 12, color, marginLeft: 8, fontWeight: 500 }}>{icon} {label}</span>
 }
 
+function StoreSwitcher({ stores, activeStoreId, setActiveStore, refreshStores }) {
+  const [open, setOpen] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const active = stores.find(s => s.store_id === activeStoreId)
+
+  const createStore = async () => {
+    if (!newName.trim()) return
+    setBusy(true); setErr('')
+    try {
+      const { data, error } = await sb.rpc('create_store', { p_name: newName.trim() })
+      if (error) throw error
+      await refreshStores(data) // data = new store id -> switch to it
+      setNewName(''); setCreating(false); setOpen(false)
+    } catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
+
+  if (!stores || stores.length === 0) return null
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <button onClick={() => setOpen(o => !o)}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.18)', color: '#fff', borderRadius: 8, padding: '7px 12px', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+        🏪 {active?.store_name || 'Select store'} <span style={{ opacity: 0.6 }}>▾</span>
+      </button>
+      {open && (
+        <>
+          <div onClick={() => { setOpen(false); setCreating(false) }} style={{ position: 'fixed', inset: 0, zIndex: 50 }} />
+          <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 6, minWidth: 270, background: '#fff', border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: '0 10px 40px rgba(0,0,0,0.18)', zIndex: 51, overflow: 'hidden' }}>
+            <div style={{ padding: '8px 12px', fontSize: 11, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Your stores</div>
+            {stores.map(s => {
+              const isActive = s.store_id === activeStoreId
+              return (
+                <button key={s.store_id} onClick={() => { setActiveStore(s.store_id); setOpen(false) }}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, width: '100%', textAlign: 'left', background: isActive ? '#fff4ef' : '#fff', border: 'none', borderTop: `1px solid ${C.border}`, padding: '10px 12px', cursor: 'pointer' }}>
+                  <span style={{ minWidth: 0 }}>
+                    <span style={{ display: 'block', fontSize: 13, fontWeight: 700, color: C.text }}>{s.store_name}</span>
+                    <span style={{ display: 'block', fontSize: 11, color: C.muted }}>{s.ebay_user ? `eBay: ${s.ebay_user}` : 'eBay not connected'} · {s.role}</span>
+                  </span>
+                  {isActive && <span style={{ color: C.accent, fontWeight: 800 }}>✓</span>}
+                </button>
+              )
+            })}
+            {creating ? (
+              <div style={{ borderTop: `1px solid ${C.border}`, padding: 10 }}>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input autoFocus value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => e.key === 'Enter' && createStore()}
+                    placeholder="New store name" style={{ flex: 1, border: `1.5px solid ${C.border}`, borderRadius: 6, padding: '7px 10px', fontSize: 13, outline: 'none' }} />
+                  <button onClick={createStore} disabled={busy || !newName.trim()}
+                    style={{ background: C.accent, color: '#fff', border: 'none', borderRadius: 6, padding: '7px 12px', fontSize: 13, fontWeight: 700, cursor: 'pointer', opacity: (busy || !newName.trim()) ? 0.6 : 1 }}>{busy ? '…' : 'Create'}</button>
+                </div>
+                {err && <div style={{ fontSize: 11, color: C.red, marginTop: 6 }}>{err}</div>}
+              </div>
+            ) : (
+              <button onClick={() => setCreating(true)}
+                style={{ width: '100%', textAlign: 'left', background: '#fafaf9', border: 'none', borderTop: `1px solid ${C.border}`, padding: '10px 12px', cursor: 'pointer', fontSize: 13, fontWeight: 600, color: C.accent }}>＋ New store</button>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 export default function App() {
-  const { session, profile, storeId, authReady, signOut } = useAuth()
+  const { session, profile, storeId, stores, activeStoreId, setActiveStore, refreshStores, authReady, signOut } = useAuth()
   const { parts, loading, syncStatus, totalCount, addPart, editPart, softDelete, softDeleteCar, refetch } = useParts(storeId)
   const [tab, setTab] = useState('dashboard')
   const [toast, setToast] = useState(null)
@@ -45,9 +112,13 @@ export default function App() {
   const [footer, setFooter] = useState(DEFAULT_FOOTER)
   const [cars, setCars] = useState([])
 
-  // Load store settings and cars on mount
+  // Load store settings and cars on mount / when the active store changes
   useEffect(() => {
     if (!storeId) return
+    // Reset to defaults so a previous store's settings don't bleed into this one
+    setAiSettings(DEFAULT_AI_SETTINGS)
+    setFooter(DEFAULT_FOOTER)
+    setCars([])
     // Load AI settings + footer
     sb.from('stores').select('settings').eq('id', storeId).single().then(({ data }) => {
       if (data?.settings?.aiDescription) setAiSettings(s => ({ ...s, ...data.settings.aiDescription }))
@@ -75,6 +146,7 @@ export default function App() {
     <div style={S.app}>
       <nav style={S.nav}>
         <div style={S.logo}>⚙ PartVault Admin</div>
+        <StoreSwitcher stores={stores} activeStoreId={activeStoreId} setActiveStore={setActiveStore} refreshStores={refreshStores} />
         {TABS.map(t => (
           <button key={t.id} style={S.navBtn(tab === t.id)} onClick={() => setTab(t.id)}>
             {t.icon} {t.label}
