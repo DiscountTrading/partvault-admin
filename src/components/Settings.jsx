@@ -102,6 +102,8 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const [ebayConnected, setEbayConnected] = useState(false)
   const [ebayExpiry, setEbayExpiry] = useState(null)
   const [ebayUsername, setEbayUsername] = useState(null)
+  const [ebayUsernameStatus, setEbayUsernameStatus] = useState(null) // 'loading' | 'error' | null
+  const [ebayUsernameError, setEbayUsernameError] = useState(null)
   const [shipAddress, setShipAddress] = useState({ addressLine1: '', city: '', stateOrProvince: '', postalCode: '', country: 'AU' })
   const [ebayLocationKey, setEbayLocationKey] = useState(null)
   const [savingLocation, setSavingLocation] = useState(false)
@@ -169,6 +171,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
         if (data.settings.anthropicKey) setAnthropicKey(data.settings.anthropicKey)
         if (data.settings.shipAddress) setShipAddress(a => ({ ...a, ...data.settings.shipAddress }))
         if (data.settings.ebayLocationKey) setEbayLocationKey(data.settings.ebayLocationKey)
+        if (data.settings.ebayUsername) setEbayUsername(data.settings.ebayUsername) // persisted — shows immediately
       }
       // eBay credentials — non-sensitive fields from ebay_tokens; cert_id status via RPC (never exposed)
       const { data: tokenRow } = await sb.from('ebay_tokens').select('app_id, ru_name, expires_at').eq('store_id', storeId).maybeSingle()
@@ -177,8 +180,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
         if (tokenRow.expires_at) {
           setEbayConnected(true)
           setEbayExpiry(tokenRow.expires_at)
-          fetch(EDGE_FN, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'get_ebay_username', storeId }) })
-            .then(r => r.json()).then(d => { if (d.username) setEbayUsername(d.username); else console.warn('get_ebay_username:', d) }).catch(e => console.warn('get_ebay_username fetch failed:', e))
+          refreshEbayUsername()
         }
       }
       const { data: hasCert } = await sb.rpc('has_ebay_cert_id', { p_store_id: storeId })
@@ -261,8 +263,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
       setEbayConnected(true)
       setEbayExpiry(result.expires_at)
       setEbayTestResult({ ok: true, msg: 'Connected to eBay successfully!' })
-      fetch(EDGE_FN, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'get_ebay_username', storeId }) })
-        .then(r => r.json()).then(d => { if (d.username) setEbayUsername(d.username) }).catch(() => {})
+      refreshEbayUsername()
     } catch (e) {
       console.error('OAuth callback failed', e)
       setEbayTestResult({ ok: false, msg: `Connection failed: ${e.message}` })
@@ -306,13 +307,56 @@ export default function Settings({ profile, storeId, onSignOut }) {
     window.location.href = EBAY_OAUTH_URL
   }
 
+  // Fetch the connected eBay account's UserID and persist it so it remains visible
+  // even if a later GetUser call fails (rate limit, scope, etc.).
+  const refreshEbayUsername = async () => {
+    if (!storeId) return
+    setEbayUsernameStatus('loading')
+    setEbayUsernameError(null)
+    try {
+      const res = await fetch(EDGE_FN, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'get_ebay_username', storeId }) })
+      const d = await res.json()
+      if (d.username) {
+        setEbayUsername(d.username)
+        setEbayUsernameStatus(null)
+        setEbayUsernameError(null)
+        // Persist into stores.settings so it survives reloads and transient fetch failures
+        try {
+          const { data: cur } = await sb.from('stores').select('settings').eq('id', storeId).single()
+          const merged = { ...(cur?.settings || {}), ebayUsername: d.username }
+          await sb.from('stores').update({ settings: merged }).eq('id', storeId)
+        } catch (persistErr) {
+          console.warn('Failed to persist eBay username', persistErr)
+        }
+      } else {
+        setEbayUsernameStatus('error')
+        setEbayUsernameError(d.error || 'eBay did not return a username')
+      }
+    } catch (e) {
+      setEbayUsernameStatus('error')
+      setEbayUsernameError(e.message)
+    }
+  }
+
   const disconnectEbay = async () => {
     try {
       await sb.from('ebay_tokens').update({ expires_at: new Date().toISOString() }).eq('store_id', storeId)
       setEbayConnected(false)
       setEbayExpiry(null)
       setEbayUsername(null)
+      setEbayUsernameStatus(null)
+      setEbayUsernameError(null)
       setEbayTestResult(null)
+      // Clear the persisted username so a future connection can't show a stale account
+      try {
+        const { data: cur } = await sb.from('stores').select('settings').eq('id', storeId).single()
+        if (cur?.settings?.ebayUsername) {
+          const { ebayUsername: _drop, ...rest } = cur.settings
+          await sb.from('stores').update({ settings: rest }).eq('id', storeId)
+        }
+      } catch (clearErr) {
+        console.warn('Failed to clear persisted eBay username', clearErr)
+      }
     } catch (e) {
       console.error('Disconnect failed', e)
     }
@@ -1350,12 +1394,32 @@ export default function Settings({ profile, storeId, onSignOut }) {
           <Section title="🔗 eBay Connection">
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, padding: 16, background: ebayConnected ? '#f0fdf4' : '#fafaf9', border: `1px solid ${ebayConnected ? '#86efac' : C.border}`, borderRadius: 8 }}>
               <div style={{ width: 12, height: 12, borderRadius: '50%', background: ebayConnected ? C.green : C.muted, flexShrink: 0 }} />
-              <div>
+              <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 600, fontSize: 14, color: ebayConnected ? C.green : C.muted }}>
-                  {ebayConnected ? `Connected to eBay${ebayUsername ? ` — ${ebayUsername}` : ''}` : 'Not connected'}
+                  {ebayConnected ? 'Connected to eBay' : 'Not connected'}
                 </div>
+                {ebayConnected && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3, flexWrap: 'wrap' }}>
+                    {ebayUsername ? (
+                      <span style={{ fontSize: 13, fontWeight: 700, color: C.text, background: '#fff', border: `1px solid ${C.border}`, borderRadius: 6, padding: '2px 8px' }}>
+                        👤 {ebayUsername}
+                      </span>
+                    ) : ebayUsernameStatus === 'loading' ? (
+                      <span style={{ fontSize: 12, color: C.muted }}>Checking account…</span>
+                    ) : (
+                      <span style={{ fontSize: 12, color: C.red }}>Account unknown — couldn't read username</span>
+                    )}
+                    <button onClick={refreshEbayUsername} disabled={ebayUsernameStatus === 'loading'}
+                      style={{ background: 'none', border: 'none', color: C.blue, cursor: 'pointer', fontSize: 12, padding: 0, opacity: ebayUsernameStatus === 'loading' ? 0.5 : 1 }}>
+                      ⟳ {ebayUsernameStatus === 'loading' ? 'Refreshing…' : 'Refresh'}
+                    </button>
+                  </div>
+                )}
+                {ebayConnected && ebayUsernameStatus === 'error' && ebayUsernameError && (
+                  <div style={{ fontSize: 11, color: C.red, marginTop: 3 }}>{ebayUsernameError}</div>
+                )}
                 {ebayConnected && ebayExpiry && (
-                  <div style={{ fontSize: 12, color: C.muted }}>
+                  <div style={{ fontSize: 12, color: C.muted, marginTop: 3 }}>
                     Expires: {new Date(ebayExpiry).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}
                   </div>
                 )}
