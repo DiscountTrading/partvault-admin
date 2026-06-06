@@ -5,394 +5,920 @@ const CORS = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const PROXY = 'https://partvault-proxy.leap00.workers.dev'
-const APP_ID = 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
-const CHUNK_SIZE = 20 // items per invocation — well within Supabase CPU limit
-const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000 // refresh if expires within 5 min
-const FUNCTION_TIMEOUT_MS = 25 * 1000 // return early at 25s before Supabase kills at ~30s
+const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
+const APP_ID                  = 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
+const EDGE_FN_VERSION         = '3.7.0-edge'
+const CHUNK_SIZE              = 20
+const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
+const FUNCTION_TIMEOUT_MS     = 25 * 1000
+const EBAY_TOKEN_URL          = 'https://api.ebay.com/identity/v1/oauth2/token'
+const EBAY_SCOPES = 'https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.inventory.readonly https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly https://api.ebay.com/oauth/api_scope/sell.finances https://api.ebay.com/oauth/api_scope/sell.account.readonly'
+
+const CATEGORY_ID_MAP: Record<string, string> = {
+  '33549':'Air & Fuel Delivery','33542':'Air Conditioning & Heating',
+  '33559':'Brakes & Brake Parts','33612':'Engines & Engine Parts',
+  '33599':'Engine Cooling','33605':'Exhaust & Emission',
+  '33637':'Exterior Parts','33687':'Ignition Systems',
+  '33694':'Interior Parts','33707':'Lighting & Bulbs',
+  '33572':'Starters, Alternators & Wiring','33579':'Steering & Suspension',
+  '33726':'Transmission & Drivetrain','33743':'Wheels, Tyres & Parts',
+  '180143':'Towing Parts','9886':'Other Car & Truck Parts',
+  // Subcategories mapped to parent
+  '50459':'Interior Parts','33705':'Interior Parts','33716':'Lighting & Bulbs',
+  '33596':'Transmission & Drivetrain','262161':'Exterior Parts',
+  '9887':'Other Car & Truck Parts','33712':'Lighting & Bulbs',
+  '33648':'Exterior Parts','46102':'Interior Parts','61941':'Exterior Parts',
+  '33706':'Interior Parts','33700':'Interior Parts','33545':'Interior Parts',
+  '262085':'Brakes & Brake Parts','33557':'Air & Fuel Delivery',
+  '33709':'Lighting & Bulbs','33566':'Brakes & Brake Parts',
+  '262188':'Interior Parts','262221':'Starters, Alternators & Wiring',
+  '33675':'Interior Parts','33558':'Air & Fuel Delivery',
+  '262200':'Interior Parts','61304':'Engines & Engine Parts',
+  '262183':'Ignition Systems','33546':'Air Conditioning & Heating',
+  '173950':'Air & Fuel Delivery','183718':'Other Car & Truck Parts',
+  '33704':'Interior Parts','39754':'Interior Parts',
+}
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
-
-  // Timeout guard — return a controlled 408 response before Supabase's
-  // ~30 second CPU/wall-clock limit kills the function with no response,
-  // which would cause the frontend to see a CORS-shaped network failure.
-  // The frontend sees { error: 'timeout', retry: true } and retries the
-  // same chunk after a short pause.
-  let timeoutId: ReturnType<typeof setTimeout> | undefined
-  const timeoutPromise = new Promise<Response>((resolve) => {
-    timeoutId = setTimeout(() => {
-      console.warn(`Function approaching timeout at ${FUNCTION_TIMEOUT_MS}ms — returning early for retry`)
-      resolve(new Response(JSON.stringify({ error: 'timeout', retry: true }), {
-        status: 408,
-        headers: { ...CORS, 'Content-Type': 'application/json' }
-      }))
-    }, FUNCTION_TIMEOUT_MS)
-  })
-
+  console.log(`[${EDGE_FN_VERSION}] ${req.method} request received`)
   try {
-    const response = await Promise.race([handleRequest(req), timeoutPromise])
-    if (timeoutId) clearTimeout(timeoutId)
-    return response
+    return await handleRequest(req)
   } catch (e: any) {
-    if (timeoutId) clearTimeout(timeoutId)
     console.error('Unhandled error:', e.message)
     return new Response(JSON.stringify({ error: e.message }), {
       status: 500,
-      headers: { ...CORS, 'Content-Type': 'application/json' }
+      headers: { ...CORS, 'Content-Type': 'application/json' },
     })
   }
 })
 
 async function handleRequest(req: Request): Promise<Response> {
-
   const sb = createClient(
     Deno.env.get('SUPABASE_URL')!,
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
   )
 
-  try {
-    const body = await req.json()
-    const { action, storeId, jobId, retryIds } = body
+  const body = await req.json()
+  const { action, storeId, jobId } = body
 
-    // ── HELPERS ────────────────────────────────────────────────────────────
+  // ── XML HELPERS ─────────────────────────────────────────────────────────────
 
-    /**
-     * getToken — returns a valid access token, refreshing if needed.
-     * Reads from stores.settings.ebayOAuth: { accessToken, refreshToken, expiresAt }
-     * If access token has expired (or expires within 5 min), uses refresh token
-     * to get a fresh one via the Cloudflare proxy /ebay/refresh route, then
-     * persists the new token + expiry back to Supabase.
-     */
-    const getToken = async () => {
-      const { data: store, error } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      if (error) throw new Error('Store not found')
+  const getTag = (xml: string, tag: string): string =>
+    xml.match(new RegExp(`<${tag}[^>]*>(.*?)</${tag}>`, 's'))?.[1]?.trim() ?? ''
 
-      const oauth = store?.settings?.ebayOAuth
-      const certId = store?.settings?.ebayCreds?.certId || ''
-      const appId = store?.settings?.ebayCreds?.appId || APP_ID
+  const getTotalPages = (xml: string): number =>
+    parseInt(xml.match(/<TotalNumberOfPages>(\d+)<\/TotalNumberOfPages>/)?.[1] ?? '1')
 
-      if (!oauth?.accessToken) {
-        throw new Error('No eBay token — please reconnect in Settings')
+  const getItemIds = (xml: string): string[] =>
+    [...xml.matchAll(/<ItemID>(\d+)<\/ItemID>/g)].map(m => m[1])
+
+  const parseEbayWeight = (xml: string): number | null => {
+    const majorMatch = xml.match(/<WeightMajor[^>]*\bunit="([^"]*)"[^>]*>([^<]*)<\/WeightMajor>/i)
+      ?? xml.match(/<WeightMajor[^>]*>([^<]*)<\/WeightMajor>/i)
+    const minorMatch = xml.match(/<WeightMinor[^>]*\bunit="([^"]*)"[^>]*>([^<]*)<\/WeightMinor>/i)
+      ?? xml.match(/<WeightMinor[^>]*>([^<]*)<\/WeightMinor>/i)
+
+    const majorUnit = majorMatch?.length === 3 ? majorMatch[1].toLowerCase() : ''
+    const majorVal  = parseFloat(majorMatch?.length === 3 ? majorMatch[2] : (majorMatch?.[1] ?? '')) || 0
+    const minorUnit = minorMatch?.length === 3 ? minorMatch[1].toLowerCase() : ''
+    const minorVal  = parseFloat(minorMatch?.length === 3 ? minorMatch[2] : (minorMatch?.[1] ?? '')) || 0
+
+    if (majorVal === 0 && minorVal === 0) return null
+
+    const toGrams = (v: number, u: string): number => {
+      switch (u) {
+        case 'lbs': return v * 453.592
+        case 'oz':  return v * 28.3495
+        case 'kg':  return v * 1000
+        case 'gm': case 'g': return v
+        default: console.warn(`Unknown weight unit: "${u}"`); return 0
       }
-
-      // Check if token is still valid (with buffer)
-      const expiresAt = oauth.expiresAt ? new Date(oauth.expiresAt).getTime() : 0
-      const needsRefresh = !expiresAt || (expiresAt - Date.now() < TOKEN_REFRESH_BUFFER_MS)
-
-      if (!needsRefresh) {
-        return { token: oauth.accessToken, certId }
-      }
-
-      // Refresh required
-      if (!oauth.refreshToken) {
-        throw new Error('Access token expired and no refresh token available — please reconnect in Settings')
-      }
-
-      console.log(`Token expires at ${oauth.expiresAt}, refreshing...`)
-
-      const refreshRes = await fetch(`${PROXY}/ebay/refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          refreshToken: oauth.refreshToken,
-          appId,
-          certId,
-        }),
-      })
-      const refreshData = await refreshRes.json()
-
-      if (!refreshData.access_token) {
-        throw new Error(`Token refresh failed: ${refreshData.error_description || refreshData.error || 'unknown error'} — please reconnect in Settings`)
-      }
-
-      const newExpiresAt = new Date(Date.now() + (refreshData.expires_in * 1000)).toISOString()
-      const newOAuth = {
-        ...oauth,
-        accessToken: refreshData.access_token,
-        expiresAt: newExpiresAt,
-        expiresIn: refreshData.expires_in,
-      }
-
-      const merged = { ...store.settings, ebayOAuth: newOAuth }
-      const { error: updateErr } = await sb.from('stores').update({ settings: merged }).eq('id', storeId)
-      if (updateErr) {
-        console.error('Failed to persist refreshed token:', updateErr.message)
-      } else {
-        console.log(`Token refreshed successfully, new expiry: ${newExpiresAt}`)
-      }
-
-      return { token: refreshData.access_token, certId }
     }
 
-    const trading = async (token: string, certId: string, callName: string, xmlBody: string) => {
-      const res = await fetch(`${PROXY}/ebay/trading`, {
+    const grams = Math.round(toGrams(majorVal, majorUnit) + toGrams(minorVal, minorUnit))
+    return grams < 2 ? null : grams
+  }
+
+  const parseEbayStartDate = (xml: string): string | null =>
+    getTag(xml, 'StartTime').match(/^(\d{4}-\d{2}-\d{2})/)?.[1] ?? null
+
+  const extractItemSpecifics = (xml: string): Record<string, string> => {
+    const result: Record<string, string> = {}
+    for (const m of xml.matchAll(/<NameValueList>(.*?)<\/NameValueList>/gs)) {
+      const name = getTag(m[1], 'Name')
+      const value = getTag(m[1], 'Value')
+      if (name) result[name] = value
+    }
+    return result
+  }
+
+  const parseTransactions = (xml: string): Array<{ itemId: string; title: string; salePrice: number; soldAt: string | null }> => {
+    const results: Array<{ itemId: string; title: string; salePrice: number; soldAt: string | null }> = []
+    for (const txMatch of xml.matchAll(/<Transaction>([\s\S]*?)<\/Transaction>/g)) {
+      const txXml = txMatch[1]
+      const itemSection = txXml.match(/<Item>([\s\S]*?)<\/Item>/)?.[1] ?? ''
+      const itemId = getTag(itemSection, 'ItemID')
+      if (!itemId) continue
+      const title     = getTag(itemSection, 'Title')
+      const salePrice = parseFloat(getTag(txXml, 'TransactionPrice')) || 0
+      const soldAt    = getTag(txXml, 'PaidTime') || getTag(txXml, 'CreatedDate') || null
+      results.push({ itemId, title, salePrice, soldAt })
+    }
+    return results
+  }
+
+  const fetchItemDetails = async (itemIds: string[]): Promise<Record<string, any>> => {
+    const url = `https://open.api.ebay.com/shopping?callname=GetMultipleItems&responseencoding=JSON&appid=${APP_ID}&ItemID=${itemIds.join(',')}&IncludeSelector=Details,ItemSpecifics&version=967&siteid=15`
+    try {
+      const res = await fetch(url)
+      if (!res.ok) return {}
+      const data = await res.json()
+      const map: Record<string, any> = {}
+      for (const item of (data?.Item || [])) {
+        if (item?.ItemID) map[item.ItemID] = item
+      }
+      return map
+    } catch { return {} }
+  }
+
+  // ── eBay TRADING API ────────────────────────────────────────────────────────
+
+  const trading = async (token: string, certId: string, callName: string, xmlBody: string): Promise<string> => {
+    const res = await fetch(`${PROXY}/ebay/trading`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/xml',
+        'Authorization': `Bearer ${token}`,
+        'X-EBAY-API-CALL-NAME': callName,
+        'X-EBAY-API-APP-NAME': APP_ID,
+        'X-EBAY-API-CERT-NAME': certId,
+        'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
+        'X-EBAY-API-SITEID': '15',
+      },
+      body: xmlBody,
+    })
+    return res.text()
+  }
+
+  // ── TOKEN MANAGEMENT ────────────────────────────────────────────────────────
+
+  const getToken = async (): Promise<{ token: string; certId: string }> => {
+    const { data: rows, error } = await sb.rpc('get_ebay_tokens', { p_store_id: storeId })
+    if (error || !rows?.length) throw new Error('eBay token not found — please reconnect in Settings')
+    const t = rows[0]
+    if (!t.access_token) throw new Error('No eBay access token — please reconnect in Settings')
+
+    const expiresAt = t.expires_at ? new Date(t.expires_at).getTime() : 0
+    if (expiresAt && expiresAt - Date.now() >= TOKEN_REFRESH_BUFFER_MS) {
+      return { token: t.access_token, certId: t.cert_id }
+    }
+
+    if (!t.refresh_token) throw new Error('Access token expired — please reconnect in Settings')
+
+    console.log(`Refreshing token (expires ${t.expires_at})...`)
+    const credentials = btoa(`${t.app_id || APP_ID}:${t.cert_id}`)
+    const refreshRes = await fetch(EBAY_TOKEN_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': `Basic ${credentials}`,
+      },
+      body: new URLSearchParams({
+        grant_type:    'refresh_token',
+        refresh_token: t.refresh_token,
+        scope:         EBAY_SCOPES,
+      }),
+    })
+    const refreshData = await refreshRes.json()
+    if (!refreshData.access_token) {
+      throw new Error(`Token refresh failed: ${refreshData.error_description || 'unknown'} — please reconnect in Settings`)
+    }
+
+    const newExpiresAt = new Date(Date.now() + refreshData.expires_in * 1000).toISOString()
+    const { error: updateErr } = await sb.rpc('update_ebay_access_token', {
+      p_store_id:     storeId,
+      p_access_token: refreshData.access_token,
+      p_expires_at:   newExpiresAt,
+      p_expires_in:   refreshData.expires_in,
+    })
+    if (updateErr) console.error('Failed to persist refreshed token:', updateErr.message)
+    else console.log(`Token refreshed, new expiry: ${newExpiresAt}`)
+
+    return { token: refreshData.access_token, certId: t.cert_id }
+  }
+
+  const fetchAllIds = async (token: string, certId: string, listType: string): Promise<string[]> => {
+    const durationParam = listType === 'SoldList' ? '<DurationInDays>90</DurationInDays>' : ''
+    const xml1 = await trading(token, certId, 'GetMyeBaySelling', `<?xml version="1.0" encoding="utf-8"?>
+<GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <${listType}><Include>true</Include>${durationParam}<Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>1</PageNumber></Pagination></${listType}>
+</GetMyeBaySellingRequest>`)
+    if (getTag(xml1, 'Ack') === 'Failure') throw new Error(getTag(xml1, 'LongMessage') || 'eBay API error')
+
+    const totalPages = getTotalPages(xml1)
+    const ids: string[] = getItemIds(xml1)
+    for (let p = 2; p <= Math.min(totalPages, 50); p++) {
+      const xml = await trading(token, certId, 'GetMyeBaySelling', `<?xml version="1.0" encoding="utf-8"?>
+<GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <${listType}><Include>true</Include>${durationParam}<Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>${p}</PageNumber></Pagination></${listType}>
+</GetMyeBaySellingRequest>`)
+      getItemIds(xml).forEach(id => ids.push(id))
+    }
+    return [...new Set(ids)]
+  }
+
+  // ── ROW BUILDERS ────────────────────────────────────────────────────────────
+
+  const buildPartRow = (xml: string, sku: string) => {
+    const listingStatus = getTag(xml, 'ListingStatus')
+    const sellingState  = getTag(xml, 'SellingState')
+    const priceStr      = getTag(xml, 'ConvertedCurrentPrice') || getTag(xml, 'BuyItNowPrice') || getTag(xml, 'CurrentPrice')
+    const descRaw       = getTag(xml, 'Description')
+    const weight        = parseEbayWeight(xml)
+
+    let status    = 'in_stock'
+    let soldPrice = null
+    let soldDate  = null
+    if (sellingState === 'EndedWithSales' || sellingState === 'Sold') {
+      status    = 'sold'
+      soldPrice = parseFloat(getTag(xml, 'ConvertedCurrentPrice') || getTag(xml, 'CurrentPrice')) || null
+      soldDate  = getTag(xml, 'PaidTime') || null
+    } else if (listingStatus === 'Active') {
+      status = 'listed'
+    }
+
+    return {
+      store_id:      storeId,
+      sku,
+      title:         getTag(xml, 'Title'),
+      status,
+      condition:     getTag(xml, 'ConditionDisplayName') || 'Used',
+      description:   descRaw.replace(/<[^>]*>/g, '').trim().substring(0, 2000),
+      list_price:    parseFloat(priceStr) || 0,
+      sold_price:    soldPrice,
+      sold_date:     soldDate,
+      weight,
+      weight_source: weight !== null ? 'ebay' : null,
+      part_number:   extractItemSpecifics(xml)['Manufacturer Part Number'] ?? null,
+      source:        'ebay_import',
+      acquired_date: parseEbayStartDate(xml),
+      costs:         { acquisition:0, labour:0, storage:0, packaging:0, postage:0, holding:0 },
+      ai_assessed:   false,
+    }
+  }
+
+  const buildListingRow = (xml: string, partId: string) => {
+    const itemId        = getTag(xml, 'ItemID')
+    const ebaySkuRaw    = getTag(xml, 'SKU')
+    const listingStatus = getTag(xml, 'ListingStatus')
+    const sellingState  = getTag(xml, 'SellingState')
+    const priceStr      = getTag(xml, 'ConvertedCurrentPrice') || getTag(xml, 'BuyItNowPrice') || getTag(xml, 'CurrentPrice')
+    const startTime     = getTag(xml, 'StartTime')
+    const endTime       = getTag(xml, 'EndTime')
+
+    let status    = 'active'
+    let soldPrice = null
+    let soldAt    = null
+    if (sellingState === 'EndedWithSales' || sellingState === 'Sold') {
+      status    = 'sold'
+      soldPrice = parseFloat(getTag(xml, 'ConvertedCurrentPrice') || getTag(xml, 'CurrentPrice')) || null
+      soldAt    = getTag(xml, 'PaidTime') || null
+    } else if (listingStatus !== 'Active') {
+      status = 'ended'
+    }
+
+    const photos = [...xml.matchAll(/<PictureURL>(.*?)<\/PictureURL>/g)]
+      .map(m => m[1])
+      .slice(0, 12)
+      .map(url => ({ ebay_url: url }))
+
+    const platform_data = {
+      ItemID:                itemId,
+      Title:                 getTag(xml, 'Title'),
+      SKU:                   ebaySkuRaw,
+      ListingStatus:         listingStatus,
+      SellingState:          sellingState,
+      ConditionDisplayName:  getTag(xml, 'ConditionDisplayName'),
+      CategoryID:            getTag(xml, 'CategoryID'),
+      ConvertedCurrentPrice: getTag(xml, 'ConvertedCurrentPrice'),
+      BuyItNowPrice:         getTag(xml, 'BuyItNowPrice'),
+      StartTime:             startTime,
+      EndTime:               endTime,
+      ItemSpecifics:         extractItemSpecifics(xml),
+    }
+
+    return {
+      part_id:             partId,
+      store_id:            storeId,
+      platform:            'ebay',
+      platform_listing_id: itemId,
+      platform_sku:        ebaySkuRaw || null,
+      status,
+      list_price:          parseFloat(priceStr) || 0,
+      sold_price:          soldPrice,
+      listed_at:           startTime || null,
+      ended_at:            endTime || null,
+      sold_at:             soldAt,
+      platform_data,
+      photos,
+      photos_archived:     false,
+    }
+  }
+
+  // ── PHOTOS TABLE DUAL-WRITE ─────────────────────────────────────────────────
+  // Mirrors eBay listing photos into the normalised `photos` table, keyed to the
+  // part. Delete-then-insert keeps it idempotent: re-imports refresh, never duplicate.
+  // Only touches source='ebay_import' rows, so manually uploaded photos are never removed.
+  const syncPhotosForPart = async (xml: string, partId: string) => {
+    const urls = [...xml.matchAll(/<PictureURL>(.*?)<\/PictureURL>/g)]
+      .map(m => m[1])
+      .slice(0, 12)
+    await sb.from('photos').delete()
+      .eq('parent_type', 'part')
+      .eq('parent_id', partId)
+      .eq('source', 'ebay_import')
+    if (urls.length) {
+      const { error } = await sb.from('photos').insert(
+        urls.map((url, i) => ({
+          parent_type: 'part', parent_id: partId, ebay_url: url,
+          display_order: i, is_primary: i === 0, source: 'ebay_import',
+        }))
+      )
+      if (error) console.warn('photos table sync failed', partId, error.message)
+    }
+  }
+
+  // ── RESPONSE HELPER ─────────────────────────────────────────────────────────
+
+  const json = (data: unknown, status = 200): Response =>
+    new Response(JSON.stringify(data), {
+      status,
+      headers: { ...CORS, 'Content-Type': 'application/json' },
+    })
+
+  // ── ACTIONS ─────────────────────────────────────────────────────────────────
+
+  try {
+
+    if (action === 'status') {
+      const { data: job } = await sb.from('jobs').select('*').eq('id', jobId).single()
+      return json(job ?? { error: 'Job not found' })
+    }
+
+    if (action === 'cancel') {
+      await sb.from('jobs')
+        .update({ status: 'cancelled', completed_at: new Date().toISOString() })
+        .eq('id', jobId)
+      return json({ ok: true })
+    }
+
+    if (action === 'exchange_oauth_code') {
+      const { code } = body
+      if (!code) throw new Error('Missing authorisation code')
+
+      const { data: rows, error: tokenErr } = await sb.rpc('get_ebay_tokens', { p_store_id: storeId })
+      if (tokenErr) throw new Error(`Failed to read credentials: ${tokenErr.message}`)
+
+      const t      = rows?.[0]
+      const certId = t?.cert_id
+      const appId  = t?.app_id || APP_ID
+      const ruName = t?.ru_name
+
+      if (!certId) return json({ error: 'Cert ID not configured — enter and save your Cert ID in Settings first' }, 400)
+      if (!ruName) return json({ error: 'RuName not configured — save your eBay credentials in Settings first' }, 400)
+
+      const credentials = btoa(`${appId}:${certId}`)
+      const tokenRes = await fetch(EBAY_TOKEN_URL, {
         method: 'POST',
         headers: {
-          'Content-Type': 'text/xml',
-          'Authorization': `Bearer ${token}`,
-          'X-EBAY-API-CALL-NAME': callName,
-          'X-EBAY-API-APP-NAME': APP_ID,
-          'X-EBAY-API-CERT-NAME': certId,
-          'X-EBAY-API-COMPATIBILITY-LEVEL': '967',
-          'X-EBAY-API-SITEID': '15',
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Authorization': `Basic ${credentials}`,
         },
-        body: xmlBody,
+        body: new URLSearchParams({
+          grant_type:   'authorization_code',
+          code,
+          redirect_uri: ruName,
+        }),
       })
-      return res.text()
-    }
 
-    const getTag = (xml: string, tag: string) =>
-      xml.match(new RegExp(`<${tag}[^>]*>(.*?)</${tag}>`, 's'))?.[1]?.trim() ?? ''
-
-    const getTotalPages = (xml: string) =>
-      parseInt(xml.match(/<TotalNumberOfPages>(\d+)<\/TotalNumberOfPages>/)?.[1] ?? '1')
-
-    const getItemIds = (xml: string): string[] =>
-      [...xml.matchAll(/<ItemID>(\d+)<\/ItemID>/g)].map(m => m[1])
-
-    const fetchAllIds = async (token: string, certId: string, listType: string): Promise<string[]> => {
-      const xml1 = await trading(token, certId, 'GetMyeBaySelling', `<?xml version="1.0" encoding="utf-8"?>
-<GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
-  <${listType}><Include>true</Include><Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>1</PageNumber></Pagination></${listType}>
-</GetMyeBaySellingRequest>`)
-      // Detect auth failure: eBay returns Success with empty list when token is bad
-      const ack = getTag(xml1, 'Ack')
-      const errCode = getTag(xml1, 'ErrorCode')
-      if (ack === 'Failure' || errCode) {
-        const longMsg = getTag(xml1, 'LongMessage') || 'eBay API error'
-        throw new Error(`eBay API: ${longMsg}`)
+      const tokens = await tokenRes.json()
+      if (!tokens.access_token) {
+        throw new Error(tokens.error_description || tokens.error || 'eBay token exchange failed')
       }
-      const totalPages = getTotalPages(xml1)
-      const ids: string[] = getItemIds(xml1)
-      for (let p = 2; p <= Math.min(totalPages, 50); p++) {
-        const xml = await trading(token, certId, 'GetMyeBaySelling', `<?xml version="1.0" encoding="utf-8"?>
-<GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
-  <${listType}><Include>true</Include><Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>${p}</PageNumber></Pagination></${listType}>
-</GetMyeBaySellingRequest>`)
-        getItemIds(xml).forEach(id => ids.push(id))
-      }
-      return [...new Set(ids)]
-    }
 
-    const buildPart = (xml: string, storeId: string) => {
-      const itemId = getTag(xml, 'ItemID')
-      const listingStatus = getTag(xml, 'ListingStatus')
-      const sellingState = getTag(xml, 'SellingState')
-      const status = (sellingState === 'EndedWithSales' || sellingState === 'Sold')
-        ? 'Sold' : listingStatus === 'Active' ? 'Listed' : 'Archived'
-      const priceStr = getTag(xml, 'ConvertedCurrentPrice') || getTag(xml, 'BuyItNowPrice') || getTag(xml, 'CurrentPrice')
-      const descRaw = getTag(xml, 'Description')
-      const photos = [...xml.matchAll(/<PictureURL>(.*?)<\/PictureURL>/g)].map(m => m[1]).slice(0, 8)
-      return {
-        store_id: storeId,
-        sku: itemId,
-        ebay_item_id: itemId,
-        title: getTag(xml, 'Title'),
-        status,
-        list_price: parseFloat(priceStr) || 0,
-        description: descRaw.replace(/<[^>]*>/g, '').trim().substring(0, 2000),
-        condition: getTag(xml, 'ConditionDisplayName') || 'Used – Good',
-        photos,
-        ebay_category_id: getTag(xml, 'CategoryID'),
-        costs: {},
-      }
-    }
-
-    // ── STATUS ─────────────────────────────────────────────────────────────
-    if (action === 'status') {
-      const { data: job } = await sb.from('import_jobs').select('*').eq('id', jobId).single()
-      return new Response(JSON.stringify(job ?? { error: 'Job not found' }), {
-        headers: { ...CORS, 'Content-Type': 'application/json' }
+      const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString()
+      const { error: updateErr } = await sb.rpc('update_ebay_access_token', {
+        p_store_id:     storeId,
+        p_access_token: tokens.access_token,
+        p_expires_at:   expiresAt,
+        p_expires_in:   tokens.expires_in,
       })
+      if (updateErr) throw new Error(`Failed to store token: ${updateErr.message}`)
+
+      console.log(`[exchange_oauth_code] Token stored, expires ${expiresAt}`)
+      return json({ success: true, expires_at: expiresAt })
     }
 
-    // ── CANCEL ─────────────────────────────────────────────────────────────
-    if (action === 'cancel') {
-      await sb.from('import_jobs').update({ status: 'cancelled' }).eq('id', jobId)
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: { ...CORS, 'Content-Type': 'application/json' }
-      })
-    }
-
-    // ── START — fetch all IDs, create job, return immediately ──────────────
     if (action === 'start') {
       const { token, certId } = await getToken()
 
       const activeIds = await fetchAllIds(token, certId, 'ActiveList')
-      const soldIds = await fetchAllIds(token, certId, 'SoldList')
-      const allIds = [...new Set([...activeIds, ...soldIds])]
+      const soldIds   = await fetchAllIds(token, certId, 'SoldList')
+      const allIds    = [...new Set([...activeIds, ...soldIds])]
 
-      const { data: job, error: jobErr } = await sb.from('import_jobs').insert({
-        store_id: storeId,
-        status: 'running',
-        total_ids: allIds.length,
-        imported_count: 0,
-        skipped_count: 0,
-        failed_count: 0,
-        all_item_ids: allIds,
-        all_item_statuses: {},
-        failed_reasons: {},
-        batch_offset: 0,
+      const { data: job, error: jobErr } = await sb.from('jobs').insert({
+        store_id:     storeId,
+        type:         'ebay_import',
+        status:       'running',
+        total_items:  allIds.length,
         current_item: 'Ready to process...',
+        started_at:   new Date().toISOString(),
+        meta: { all_item_ids: allIds, batch_offset: 0, failed_reasons: {} },
       }).select().single()
 
       if (jobErr) throw new Error(`Failed to create job: ${jobErr.message}`)
-
-      return new Response(JSON.stringify({ jobId: job.id, totalIds: allIds.length, needsProcessing: true }), {
-        headers: { ...CORS, 'Content-Type': 'application/json' }
-      })
+      return json({ jobId: job.id, totalIds: allIds.length, needsProcessing: true })
     }
 
-    // ── PROCESS CHUNK — called repeatedly by frontend until done ───────────
     if (action === 'process_chunk') {
-      const { data: job, error: jobErr } = await sb.from('import_jobs')
-        .select('*').eq('id', jobId).single()
+      const processChunk = async (): Promise<Response> => {
+        const { data: job, error: jobErr } = await sb.from('jobs').select('*').eq('id', jobId).single()
+        if (jobErr || !job) throw new Error('Job not found')
+        if (job.status === 'cancelled') return json({ status: 'cancelled' })
 
-      if (jobErr || !job) throw new Error('Job not found')
-      if (job.status === 'cancelled') {
-        return new Response(JSON.stringify({ status: 'cancelled' }), {
-          headers: { ...CORS, 'Content-Type': 'application/json' }
-        })
-      }
+        const { token, certId } = await getToken()
 
-      const { token, certId } = await getToken()
+        const allIds: string[]                      = job.meta?.all_item_ids  ?? []
+        const offset: number                        = job.meta?.batch_offset  ?? 0
+        const failedReasons: Record<string, string> = job.meta?.failed_reasons ?? {}
+        const chunk = allIds.slice(offset, offset + CHUNK_SIZE)
 
-      const allIds: string[] = Array.isArray(job.all_item_ids) ? job.all_item_ids : []
-      const offset: number = job.batch_offset || 0
-      const chunk = allIds.slice(offset, offset + CHUNK_SIZE)
+        if (chunk.length === 0) {
+          const summary = job.result_summary ?? {}
+          await sb.from('jobs').update({
+            status:       'completed',
+            completed_at: new Date().toISOString(),
+            current_item: `✓ Complete — ${summary.imported ?? 0} imported, ${summary.skipped ?? 0} skipped, ${job.failed_items ?? 0} failed`,
+          }).eq('id', jobId)
+          return json({ status: 'completed', job })
+        }
 
-      if (chunk.length === 0) {
-        await sb.from('import_jobs').update({
-          status: 'completed',
-          current_item: `✓ Complete — ${job.imported_count} imported, ${job.skipped_count} skipped, ${job.failed_count} failed`,
-        }).eq('id', jobId)
-        return new Response(JSON.stringify({ status: 'completed', job }), {
-          headers: { ...CORS, 'Content-Type': 'application/json' }
-        })
-      }
+        let imported  = job.result_summary?.imported ?? 0
+        let skipped   = job.result_summary?.skipped  ?? 0
+        let failed    = job.failed_items    ?? 0
+        let processed = job.processed_items ?? 0
 
-      let imported = job.imported_count || 0
-      let skipped = job.skipped_count || 0
-      let failed = job.failed_count || 0
-      const failedReasons: Record<string, string> = job.failed_reasons || {}
-      const allStatuses: Record<string, string> = job.all_item_statuses || {}
+        const { data: existingInChunk } = await sb.from('listings')
+          .select('platform_listing_id')
+          .eq('store_id', storeId)
+          .eq('platform', 'ebay')
+          .in('platform_listing_id', chunk)
+        const existingSet = new Set((existingInChunk ?? []).map((l: any) => l.platform_listing_id))
 
-      for (const itemId of chunk) {
-        try {
-          const { data: existing } = await sb.from('parts')
-            .select('id').eq('store_id', storeId).eq('sku', itemId).maybeSingle()
-
-          if (existing) {
-            skipped++
-            allStatuses[itemId] = 'skipped'
-            continue
-          }
-
-          const xml = await trading(token, certId, 'GetItem', `<?xml version="1.0" encoding="utf-8"?>
+        for (const itemId of chunk) {
+          if (existingSet.has(itemId)) { skipped++; processed++; continue }
+          try {
+            const xml = await trading(token, certId, 'GetItem', `<?xml version="1.0" encoding="utf-8"?>
 <GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
   <ItemID>${itemId}</ItemID><DetailLevel>ReturnAll</DetailLevel>
 </GetItemRequest>`)
 
-          if (!xml.includes('<Ack>Success</Ack>') && !xml.includes('<Ack>Warning</Ack>')) {
-            throw new Error(getTag(xml, 'LongMessage') || 'eBay API error')
-          }
+            if (!xml.includes('<Ack>Success</Ack>') && !xml.includes('<Ack>Warning</Ack>')) {
+              throw new Error(getTag(xml, 'LongMessage') || 'eBay API error')
+            }
 
-          const part = buildPart(xml, storeId)
-          const { error } = await sb.from('parts').insert(part)
+            const ebaySkuRaw = getTag(xml, 'SKU')
+            let partId: string
 
-          if (error?.code === '23505') {
-            skipped++
-            allStatuses[itemId] = 'skipped'
-          } else if (error) {
-            throw error
-          } else {
-            imported++
-            allStatuses[itemId] = part.status
+            if (ebaySkuRaw) {
+              const { data: existingPart } = await sb.from('parts')
+                .select('id').eq('store_id', storeId).eq('sku', ebaySkuRaw).maybeSingle()
+              if (existingPart) {
+                partId = existingPart.id
+              } else {
+                const { data: newPart, error: partErr } = await sb
+                  .from('parts').insert(buildPartRow(xml, ebaySkuRaw)).select('id').single()
+                if (partErr) throw partErr
+                partId = newPart.id
+              }
+            } else {
+              const { data: generatedSku, error: skuErr } = await sb.rpc('generate_next_sku', { p_store_id: storeId })
+              if (skuErr || !generatedSku) throw new Error(`SKU generation failed: ${skuErr?.message}`)
+              const { data: newPart, error: partErr } = await sb
+                .from('parts').insert(buildPartRow(xml, generatedSku as string)).select('id').single()
+              if (partErr) throw partErr
+              partId = newPart.id
+            }
+
+            const { error: listingErr } = await sb.from('listings').insert(buildListingRow(xml, partId))
+            if (listingErr) throw listingErr
+            await syncPhotosForPart(xml, partId)
+
+            imported++; processed++
+
+          } catch (e: any) {
+            failed++; processed++
+            failedReasons[itemId] = e.message
           }
-        } catch (e: any) {
-          failed++
-          failedReasons[itemId] = e.message
-          allStatuses[itemId] = 'failed'
+        }
+
+        const newOffset  = offset + CHUNK_SIZE
+        const isComplete = newOffset >= allIds.length
+
+        await sb.from('jobs').update({
+          processed_items: processed,
+          failed_items:    failed,
+          current_item: isComplete
+            ? `✓ Complete — ${imported} imported, ${skipped} skipped`
+            : `Processing ${Math.min(newOffset, allIds.length)} of ${allIds.length}...`,
+          status:         isComplete ? 'completed' : 'running',
+          completed_at:   isComplete ? new Date().toISOString() : null,
+          result_summary: { imported, skipped },
+          meta:           { all_item_ids: allIds, batch_offset: newOffset, failed_reasons: failedReasons },
+        }).eq('id', jobId)
+
+        return json({
+          status: isComplete ? 'completed' : 'running',
+          imported, skipped, failed,
+          offset: newOffset, total: allIds.length, isComplete,
+        })
+      }
+
+      let timeoutId: ReturnType<typeof setTimeout> | undefined
+      const timeoutPromise = new Promise<Response>((resolve) => {
+        timeoutId = setTimeout(() => {
+          resolve(json({ error: 'timeout', retry: true }, 408))
+        }, FUNCTION_TIMEOUT_MS)
+      })
+      try {
+        const response = await Promise.race([processChunk(), timeoutPromise])
+        if (timeoutId) clearTimeout(timeoutId)
+        return response
+      } catch (e) {
+        if (timeoutId) clearTimeout(timeoutId)
+        throw e
+      }
+    }
+
+    if (action === 'backfill_orders') {
+      const { token, certId } = await getToken()
+
+      const fromDate = body.fromDate
+      const toDate   = body.toDate || new Date().toISOString()
+      if (!fromDate) throw new Error('fromDate is required')
+
+      let page      = 1
+      let hasMore   = true
+      let updated    = 0
+      let alreadySold = 0
+      let notFound   = 0
+      const errors: string[] = []
+
+      while (hasMore && page <= 10) {
+        const xml = await trading(token, certId, 'GetSellerTransactions', `<?xml version="1.0" encoding="utf-8"?>
+<GetSellerTransactionsRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <ModifiedTimeFilter>
+    <TimeFrom>${fromDate}</TimeFrom>
+    <TimeTo>${toDate}</TimeTo>
+  </ModifiedTimeFilter>
+  <Pagination><EntriesPerPage>100</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination>
+</GetSellerTransactionsRequest>`)
+
+        if (getTag(xml, 'Ack') === 'Failure') {
+          throw new Error(getTag(xml, 'LongMessage') || 'GetSellerTransactions API error')
+        }
+
+        const transactions = parseTransactions(xml)
+        console.log(`[backfill_orders] ${fromDate.slice(0,10)} page ${page}: ${transactions.length} transactions`)
+
+        for (const tx of transactions) {
+          try {
+            const { data: listing } = await sb.from('listings')
+              .select('id, part_id, status')
+              .eq('store_id', storeId)
+              .eq('platform', 'ebay')
+              .eq('platform_listing_id', tx.itemId)
+              .maybeSingle()
+
+            if (!listing) { notFound++; continue }
+            if (!tx.salePrice || tx.salePrice <= 0) { notFound++; continue }
+            if (listing.status === 'sold') { alreadySold++; continue }
+
+            await sb.from('listings').update({
+              status:               'sold',
+              sold_price:           tx.salePrice || null,
+              sold_at:              tx.soldAt || null,
+              reconcile_flagged:    false,
+              reconcile_flagged_at: null,
+            }).eq('id', listing.id)
+
+            await sb.from('parts').update({
+              status: 'sold',
+              ...(tx.salePrice ? { sold_price: tx.salePrice } : {}),
+              ...(tx.soldAt    ? { sold_date:  tx.soldAt }    : {}),
+            }).eq('id', listing.part_id)
+
+            updated++
+          } catch (e: any) {
+            errors.push(`${tx.itemId}: ${e.message}`)
+          }
+        }
+
+        hasMore = xml.includes('<HasMoreTransactions>true</HasMoreTransactions>')
+        page++
+      }
+
+      return json({ updated, alreadySold, notFound, errors: errors.slice(0, 20) })
+    }
+
+    if (action === 'import_sold_history') {
+      const startTime = Date.now()
+      const { token, certId } = await getToken()
+
+      const fromDate = body.fromDate
+      const toDate   = body.toDate || new Date().toISOString()
+      if (!fromDate) throw new Error('fromDate is required')
+
+      // Collect all transactions for this window
+      const allTransactions: Array<{ itemId: string; title: string; salePrice: number; soldAt: string | null }> = []
+      let page    = 1
+      let hasMoreTx = true
+
+      while (hasMoreTx && page <= 10) {
+        const xml = await trading(token, certId, 'GetSellerTransactions', `<?xml version="1.0" encoding="utf-8"?>
+<GetSellerTransactionsRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <ModifiedTimeFilter>
+    <TimeFrom>${fromDate}</TimeFrom>
+    <TimeTo>${toDate}</TimeTo>
+  </ModifiedTimeFilter>
+  <Pagination><EntriesPerPage>100</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination>
+</GetSellerTransactionsRequest>`)
+
+        if (getTag(xml, 'Ack') === 'Failure') {
+          throw new Error(getTag(xml, 'LongMessage') || 'GetSellerTransactions API error')
+        }
+
+        allTransactions.push(...parseTransactions(xml))
+        hasMoreTx = xml.includes('<HasMoreTransactions>true</HasMoreTransactions>')
+        page++
+      }
+
+      // Genuine sales only, deduplicated by itemId
+      const seen = new Set<string>()
+      const genuine = allTransactions.filter(tx => {
+        if (tx.salePrice <= 0 || seen.has(tx.itemId)) return false
+        seen.add(tx.itemId)
+        return true
+      })
+
+      if (!genuine.length) return json({ created: 0, skipped: 0, noData: 0, hasMore: false })
+
+      // Check which are already in PartVault
+      const itemIds = genuine.map(tx => tx.itemId)
+      const { data: existing } = await sb.from('listings')
+        .select('platform_listing_id')
+        .eq('store_id', storeId)
+        .eq('platform', 'ebay')
+        .in('platform_listing_id', itemIds)
+      const existingIds = new Set((existing || []).map((r: any) => r.platform_listing_id))
+
+      const toCreate = genuine.filter(tx => !existingIds.has(tx.itemId))
+      if (!toCreate.length) return json({ created: 0, skipped: existingIds.size, noData: 0, hasMore: false })
+
+      // Fetch item details from Shopping API in batches of 20, with timeout guard
+      let created = 0
+      let noData  = 0
+      const errors: any[] = []
+
+      for (let i = 0; i < toCreate.length; i += 20) {
+        // Timeout guard — return hasMore:true so frontend re-calls this same window
+        if (Date.now() - startTime > 20000) {
+          return json({ created, skipped: existingIds.size, noData, errors: errors.slice(0, 20), hasMore: true })
+        }
+
+        const batch   = toCreate.slice(i, i + 20)
+        const details = await fetchItemDetails(batch.map(tx => tx.itemId))
+
+        for (const tx of batch) {
+          try {
+            const detail   = details[tx.itemId]
+            const catId    = detail?.PrimaryCategoryID?.toString()
+            const category = (catId && CATEGORY_ID_MAP[catId]) || 'Legacy Items'
+            if (!detail) noData++
+
+            const { data: part, error: partErr } = await sb.from('parts').insert({
+              store_id:   storeId,
+              sku:        `EBH-${tx.itemId}`,
+              title:      detail?.Title || tx.title || `eBay Item ${tx.itemId}`,
+              category,
+              status:     'sold',
+              sold_price: tx.salePrice,
+              sold_date:  tx.soldAt || null,
+              list_price: tx.salePrice,
+              condition:  detail?.ConditionDisplayName || 'Used – Good',
+              source:     'ebay_history',
+              costs:      { acquisition:0, labour:0, storage:0, packaging:0, postage:0, holding:0 },
+              ai_assessed: false,
+            }).select('id').single()
+
+            if (partErr) { errors.push({ itemId: tx.itemId, error: partErr.message }); continue }
+
+            await sb.from('listings').insert({
+              store_id:            storeId,
+              part_id:             part.id,
+              platform:            'ebay',
+              platform_listing_id: tx.itemId,
+              status:              'sold',
+              list_price:          tx.salePrice,
+              sold_price:          tx.salePrice,
+              sold_at:             tx.soldAt || null,
+              platform_data:       {},
+              photos:              [],
+              photos_archived:     false,
+            })
+            created++
+          } catch (e: any) {
+            errors.push({ itemId: tx.itemId, error: e.message })
+          }
         }
       }
 
-      const newOffset = offset + CHUNK_SIZE
-      const isComplete = newOffset >= allIds.length
-
-      await sb.from('import_jobs').update({
-        imported_count: imported,
-        skipped_count: skipped,
-        failed_count: failed,
-        failed_reasons: failedReasons,
-        all_item_statuses: allStatuses,
-        batch_offset: newOffset,
-        current_item: isComplete
-          ? `✓ Complete — ${imported} imported, ${skipped} skipped`
-          : `Processing ${Math.min(newOffset, allIds.length)} of ${allIds.length}...`,
-        status: isComplete ? 'completed' : 'running',
-      }).eq('id', jobId)
-
-      return new Response(JSON.stringify({
-        status: isComplete ? 'completed' : 'running',
-        imported, skipped, failed,
-        offset: newOffset,
-        total: allIds.length,
-        isComplete,
-      }), { headers: { ...CORS, 'Content-Type': 'application/json' } })
+      return json({ created, skipped: existingIds.size, noData, errors: errors.slice(0, 20), hasMore: false })
     }
 
-    // ── RECONCILE ──────────────────────────────────────────────────────────
     if (action === 'reconcile') {
       const { token, certId } = await getToken()
       const ebayIds = await fetchAllIds(token, certId, 'ActiveList')
       const ebaySet = new Set(ebayIds)
 
-      const { data: listedParts } = await sb.from('parts')
-        .select('id, sku, title, ebay_item_id').eq('store_id', storeId).eq('status', 'Listed')
+      const { data: activeListings } = await sb.from('listings')
+        .select('id, part_id, platform_listing_id, platform_sku')
+        .eq('store_id', storeId)
+        .eq('platform', 'ebay')
+        .eq('status', 'active')
+        .eq('deferred_review', false)
+        .is('deleted_at', null)
 
-      const { data: allParts } = await sb.from('parts')
-        .select('ebay_item_id').eq('store_id', storeId).not('ebay_item_id', 'is', null)
+      const { data: allListings } = await sb.from('listings')
+        .select('platform_listing_id')
+        .eq('store_id', storeId)
+        .eq('platform', 'ebay')
+        .is('deleted_at', null)
 
-      const allPvIds = new Set((allParts ?? []).map((p: any) => p.ebay_item_id))
-      const pvListedIds = new Set((listedParts ?? []).filter((p: any) => p.ebay_item_id).map((p: any) => p.ebay_item_id))
-      const missingIds = ebayIds.filter(id => !allPvIds.has(id))
-      const staleParts = (listedParts ?? []).filter((p: any) => p.ebay_item_id && !ebaySet.has(p.ebay_item_id))
+      const ourIds     = new Set((allListings ?? []).map((l: any) => l.platform_listing_id))
+      const missingIds = ebayIds.filter(id => !ourIds.has(id))
+      const stale      = (activeListings ?? []).filter((l: any) => !ebaySet.has(l.platform_listing_id))
 
-      if (staleParts.length > 0) {
-        await sb.from('parts')
+      if (stale.length > 0) {
+        await sb.from('listings')
           .update({ reconcile_flagged: true, reconcile_flagged_at: new Date().toISOString() })
-          .in('id', staleParts.map((p: any) => p.id))
+          .in('id', stale.map((l: any) => l.id))
       }
 
-      const { data: lastJob } = await sb.from('import_jobs')
-        .select('id, failed_reasons, failed_count').eq('store_id', storeId)
-        .order('updated_at', { ascending: false }).limit(1).maybeSingle()
+      const { data: lastJob } = await sb.from('jobs')
+        .select('id, meta, failed_items')
+        .eq('store_id', storeId)
+        .eq('type', 'ebay_import')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
 
-      const failedReasons: Record<string, string> = lastJob?.failed_reasons ?? {}
-      const failedItems = Object.entries(failedReasons).map(([itemId, reason]) => ({ itemId, reason }))
+      const failedReasons: Record<string, string> = lastJob?.meta?.failed_reasons ?? {}
 
-      return new Response(JSON.stringify({
+      return json({
         ebayActiveCount: ebayIds.length,
-        pvListedCount: pvListedIds.size,
-        missingCount: missingIds.length,
-        missingIds: missingIds.slice(0, 50),
-        staleCount: staleParts.length,
-        staleParts: staleParts.map((p: any) => ({ id: p.id, sku: p.sku, title: p.title, ebayItemId: p.ebay_item_id })),
-        failedCount: failedItems.length,
-        failedItems,
-        lastJobId: lastJob?.id ?? null,
+        pvActiveCount:   (activeListings ?? []).length,
+        missingCount:    missingIds.length,
+        missingIds:      missingIds.slice(0, 50),
+        staleCount:      stale.length,
+        staleListings:   stale.map((l: any) => ({
+          id:                l.id,
+          partId:            l.part_id,
+          platformListingId: l.platform_listing_id,
+          platformSku:       l.platform_sku,
+        })),
+        failedCount:  Object.keys(failedReasons).length,
+        failedItems:  Object.entries(failedReasons).map(([itemId, reason]) => ({ itemId, reason })),
+        lastJobId:    lastJob?.id ?? null,
         reconciledAt: new Date().toISOString(),
-      }), { headers: { ...CORS, 'Content-Type': 'application/json' } })
+      })
     }
 
-    // ── RETRY ──────────────────────────────────────────────────────────────
+    if (action === 'enrich_stale') {
+      const { token, certId } = await getToken()
+      const ids: string[] = body.itemIds ?? []
+      if (!ids.length) throw new Error('No item IDs provided')
+
+      const enriched: any[] = []
+
+      for (const itemId of ids) {
+        try {
+          const xml = await trading(token, certId, 'GetItem', `<?xml version="1.0" encoding="utf-8"?>
+<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <ItemID>${itemId}</ItemID><DetailLevel>ReturnAll</DetailLevel><IncludeItemSpecifics>false</IncludeItemSpecifics>
+</GetItemRequest>`)
+
+          const ack     = getTag(xml, 'Ack')
+          const errCode = getTag(xml, 'ErrorCode')
+          const longMsg = getTag(xml, 'LongMessage')
+
+          if (errCode === '17' || errCode === '291' || (ack === 'Failure' && longMsg.toLowerCase().includes('not found'))) {
+            enriched.push({ itemId, ebayStatus: 'NotFound' }); continue
+          }
+          if (ack === 'Failure') {
+            enriched.push({ itemId, ebayStatus: 'Error', error: longMsg }); continue
+          }
+
+          const sellingState  = getTag(xml, 'SellingState')
+          const listingStatus = getTag(xml, 'ListingStatus')
+          const endTime       = getTag(xml, 'EndTime')
+
+          let ebayStatus = 'Ended'
+          let salePrice: number | undefined
+          let soldDate: string | undefined
+
+          if (sellingState === 'EndedWithSales' || sellingState === 'Sold') {
+            ebayStatus = 'Sold'
+            salePrice  = parseFloat(getTag(xml, 'ConvertedCurrentPrice') || getTag(xml, 'CurrentPrice')) || undefined
+            soldDate   = getTag(xml, 'PaidTime') || endTime
+          } else if (listingStatus === 'Active' || sellingState === 'Active') {
+            ebayStatus = 'Active'
+          }
+
+          enriched.push({
+            itemId, ebayStatus,
+            endDate:        endTime || undefined,
+            salePrice,      soldDate,
+            relistedItemId: getTag(xml, 'RelistedItemID') || undefined,
+          })
+        } catch (e: any) {
+          enriched.push({ itemId, ebayStatus: 'Error', error: e.message })
+        }
+      }
+
+      return json({ enriched })
+    }
+
+    if (action === 'apply_stale_resolution') {
+      const resolutions: Array<{
+        listingId:  string
+        partId:     string
+        resolution: 'sold' | 'ended' | 'defer' | 'keep_active'
+        salePrice?: number
+        soldDate?:  string
+      }> = body.resolutions ?? []
+
+      if (!resolutions.length) throw new Error('No resolutions provided')
+
+      let updated = 0
+      const errors: Record<string, string> = {}
+
+      for (const r of resolutions) {
+        try {
+          if (r.resolution === 'defer') {
+            await sb.from('listings').update({ deferred_review: true, reconcile_flagged: false }).eq('id', r.listingId)
+            updated++; continue
+          }
+          if (r.resolution === 'keep_active') {
+            await sb.from('listings').update({ reconcile_flagged: false, reconcile_flagged_at: null }).eq('id', r.listingId)
+            updated++; continue
+          }
+
+          const listingUpdate: any = { reconcile_flagged: false, reconcile_flagged_at: null }
+          const partUpdate: any    = {}
+
+          if (r.resolution === 'sold') {
+            listingUpdate.status     = 'sold'
+            listingUpdate.sold_price = r.salePrice ?? null
+            listingUpdate.sold_at    = r.soldDate ?? null
+            partUpdate.status        = 'sold'
+            if (r.salePrice !== undefined) partUpdate.sold_price = r.salePrice
+            if (r.soldDate)               partUpdate.sold_date  = r.soldDate
+          } else if (r.resolution === 'ended') {
+            listingUpdate.status = 'ended'
+          }
+
+          await sb.from('listings').update(listingUpdate).eq('id', r.listingId)
+          if (Object.keys(partUpdate).length) {
+            await sb.from('parts').update(partUpdate).eq('id', r.partId)
+          }
+          updated++
+        } catch (e: any) {
+          errors[r.listingId] = e.message
+        }
+      }
+
+      return json({ updated, errors })
+    }
+
     if (action === 'retry') {
       const { token, certId } = await getToken()
-      const ids: string[] = retryIds ?? []
+      const ids: string[] = body.retryIds ?? []
       if (!ids.length) throw new Error('No retry IDs provided')
 
-      let imported = 0, failed = 0
+      let imported = 0
+      let failed   = 0
       const failedReasons: Record<string, string> = {}
 
       for (const itemId of ids) {
@@ -401,12 +927,41 @@ async function handleRequest(req: Request): Promise<Response> {
 <GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
   <ItemID>${itemId}</ItemID><DetailLevel>ReturnAll</DetailLevel>
 </GetItemRequest>`)
+
           if (!xml.includes('<Ack>Success</Ack>') && !xml.includes('<Ack>Warning</Ack>')) {
             throw new Error(getTag(xml, 'LongMessage') || 'eBay API error')
           }
-          const part = buildPart(xml, storeId)
-          const { error } = await sb.from('parts').upsert(part, { onConflict: 'store_id,sku' })
-          if (error) throw error
+
+          const { data: existingListing } = await sb.from('listings')
+            .select('id').eq('store_id', storeId).eq('platform', 'ebay').eq('platform_listing_id', itemId).maybeSingle()
+          if (existingListing) { imported++; continue }
+
+          const ebaySkuRaw = getTag(xml, 'SKU')
+          let partId: string
+
+          if (ebaySkuRaw) {
+            const { data: existingPart } = await sb.from('parts')
+              .select('id').eq('store_id', storeId).eq('sku', ebaySkuRaw).maybeSingle()
+            if (existingPart) {
+              partId = existingPart.id
+            } else {
+              const { data: newPart, error: partErr } = await sb
+                .from('parts').insert(buildPartRow(xml, ebaySkuRaw)).select('id').single()
+              if (partErr) throw partErr
+              partId = newPart.id
+            }
+          } else {
+            const { data: generatedSku, error: skuErr } = await sb.rpc('generate_next_sku', { p_store_id: storeId })
+            if (skuErr || !generatedSku) throw new Error(`SKU generation failed: ${skuErr?.message}`)
+            const { data: newPart, error: partErr } = await sb
+              .from('parts').insert(buildPartRow(xml, generatedSku as string)).select('id').single()
+            if (partErr) throw partErr
+            partId = newPart.id
+          }
+
+          const { error: listingErr } = await sb.from('listings').insert(buildListingRow(xml, partId))
+          if (listingErr) throw listingErr
+          await syncPhotosForPart(xml, partId)
           imported++
         } catch (e: any) {
           failed++
@@ -414,32 +969,307 @@ async function handleRequest(req: Request): Promise<Response> {
         }
       }
 
-      const { data: lastJob } = await sb.from('import_jobs').select('id, failed_reasons')
-        .eq('store_id', storeId).order('updated_at', { ascending: false }).limit(1).maybeSingle()
+      const { data: lastJob } = await sb.from('jobs')
+        .select('id, meta, failed_items')
+        .eq('store_id', storeId)
+        .eq('type', 'ebay_import')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
 
       if (lastJob) {
-        const updated = { ...(lastJob.failed_reasons ?? {}) }
+        const updatedReasons = { ...(lastJob.meta?.failed_reasons ?? {}) }
         for (const id of ids) {
-          if (!failedReasons[id]) delete updated[id]
-          else updated[id] = failedReasons[id]
+          if (failedReasons[id]) updatedReasons[id] = failedReasons[id]
+          else delete updatedReasons[id]
         }
-        await sb.from('import_jobs')
-          .update({ failed_reasons: updated, failed_count: Object.keys(updated).length })
-          .eq('id', lastJob.id)
+        await sb.from('jobs').update({
+          failed_items: Object.keys(updatedReasons).length,
+          meta:         { ...lastJob.meta, failed_reasons: updatedReasons },
+        }).eq('id', lastJob.id)
       }
 
-      return new Response(JSON.stringify({ imported, failed, failedReasons }), {
-        headers: { ...CORS, 'Content-Type': 'application/json' }
-      })
+      return json({ imported, failed, failedReasons })
+    }
+
+    if (action === 'backfill_categories') {
+      const startTime = Date.now()
+
+      const { data: uncategorised } = await sb
+        .from('parts')
+        .select('id')
+        .eq('store_id', storeId)
+        .or('category.is.null,category.eq.')
+        .is('deleted_at', null)
+
+      if (!uncategorised?.length) return json({ updated: 0, noData: 0, hasMore: false })
+
+      const uncategorisedIds = uncategorised.map((p: any) => p.id)
+
+      // Pull CategoryID from platform_data already stored in listings table
+      const partToCategoryId: Record<string, string> = {}
+      for (let i = 0; i < uncategorisedIds.length; i += 200) {
+        const chunk = uncategorisedIds.slice(i, i + 200)
+        const { data: listings } = await sb
+          .from('listings')
+          .select('part_id, platform_data')
+          .eq('store_id', storeId)
+          .eq('platform', 'ebay')
+          .in('part_id', chunk)
+        for (const l of (listings || [])) {
+          const catId = l.platform_data?.CategoryID?.toString()
+          if (catId && !partToCategoryId[l.part_id]) partToCategoryId[l.part_id] = catId
+        }
+      }
+
+      // Group by mapped category and batch update
+      const categoryGroups: Record<string, string[]> = {}
+      let noData = 0
+      for (const partId of uncategorisedIds) {
+        const catId   = partToCategoryId[partId]
+        const category = catId && CATEGORY_ID_MAP[catId]
+        if (!category) { noData++; continue }
+        if (!categoryGroups[category]) categoryGroups[category] = []
+        categoryGroups[category].push(partId)
+      }
+
+      let updated = 0
+      for (const [category, partIds] of Object.entries(categoryGroups)) {
+        if (Date.now() - startTime > 20000) {
+          return json({ updated, noData, hasMore: true })
+        }
+        for (let j = 0; j < partIds.length; j += 500) {
+          await sb.from('parts').update({ category }).in('id', partIds.slice(j, j + 500))
+          updated += Math.min(500, partIds.length - j)
+        }
+      }
+
+      return json({ updated, noData, hasMore: false })
+    }
+
+    if (action === 'create_draft_listings') {
+      const { token } = await getToken()
+      const partIds: string[] = body.partIds ?? []
+      if (!partIds.length) throw new Error('No part IDs provided')
+
+      const { data: parts, error: partsErr } = await sb
+        .from('parts')
+        .select('*')
+        .in('id', partIds)
+        .eq('store_id', storeId)
+      if (partsErr) throw partsErr
+      if (!parts?.length) throw new Error('No parts found')
+
+      const ebayHeaders = {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Accept-Language': 'en-AU',
+        'Content-Language': 'en-AU',
+        'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU',
+      }
+
+      // Fetch account policies and location (use first of each)
+      const [fpRes, ppRes, rpRes, locRes] = await Promise.all([
+        fetch('https://api.ebay.com/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_AU', { headers: ebayHeaders }),
+        fetch('https://api.ebay.com/sell/account/v1/payment_policy?marketplace_id=EBAY_AU', { headers: ebayHeaders }),
+        fetch('https://api.ebay.com/sell/account/v1/return_policy?marketplace_id=EBAY_AU', { headers: ebayHeaders }),
+        fetch('https://api.ebay.com/sell/inventory/v1/location', { headers: ebayHeaders }),
+      ])
+      const [fpData, ppData, rpData, locData] = await Promise.all([fpRes.json(), ppRes.json(), rpRes.json(), locRes.json()])
+
+      const fulfillmentPolicyId  = fpData.fulfillmentPolicies?.[0]?.fulfillmentPolicyId
+      const paymentPolicyId      = ppData.paymentPolicies?.[0]?.paymentPolicyId
+      const returnPolicyId       = rpData.returnPolicies?.[0]?.returnPolicyId
+      const merchantLocationKey  = locData.locations?.[0]?.merchantLocationKey
+
+      if (!fulfillmentPolicyId) throw new Error('No fulfillment policy on eBay account — set one up in eBay Seller Hub first')
+      if (!paymentPolicyId)     throw new Error('No payment policy on eBay account — set one up in eBay Seller Hub first')
+      if (!returnPolicyId)      throw new Error('No return policy on eBay account — set one up in eBay Seller Hub first')
+      if (!merchantLocationKey) throw new Error('No inventory location — go to Settings → eBay Inventory Location and set up your address first')
+
+      const CONDITION_MAP: Record<string, string> = {
+        'Used – Excellent': 'USED_EXCELLENT',
+        'Used – Good':      'USED_GOOD',
+        'Used – Fair':      'USED_ACCEPTABLE',
+        'For Parts Only':   'FOR_PARTS_OR_NOT_WORKING',
+        'Refurbished':      'SELLER_REFURBISHED',
+      }
+
+      const CATEGORY_ID: Record<string, string> = {
+        'Air & Fuel Delivery':'33549','Air Conditioning & Heating':'33542','Brakes & Brake Parts':'33559',
+        'Engines & Engine Parts':'33612','Engine Cooling':'33599','Exhaust & Emission':'33605',
+        'Exterior Parts':'33637','Ignition Systems':'33687','Interior Parts':'33694',
+        'Lighting & Bulbs':'33707','Starters, Alternators & Wiring':'33572','Steering & Suspension':'33579',
+        'Transmission & Drivetrain':'33726','Wheels, Tyres & Parts':'33743','Towing Parts':'180143',
+        'Other Car & Truck Parts':'9886','Legacy Items':'9886',
+      }
+
+      let drafted = 0
+      let failed  = 0
+      const errors: any[] = []
+
+      for (const part of parts) {
+        try {
+          const sku         = part.sku
+          const condition   = CONDITION_MAP[part.condition] || 'USED_GOOD'
+          const categoryId  = CATEGORY_ID[part.category]   || '9886'
+          const imageUrls   = (part.photos || []).map((p: any) => p.url || p.ebay_url).filter(Boolean).slice(0, 12)
+
+          const aspects: Record<string, string[]> = {}
+          if (part.make)  aspects['Make']  = [part.make]
+          if (part.model) aspects['Model'] = [part.model]
+          if (part.year)  aspects['Year']  = [String(part.year)]
+
+          // 1. Create inventory item
+          const invRes = await fetch(
+            `https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
+            {
+              method: 'PUT',
+              headers: ebayHeaders,
+              body: JSON.stringify({
+                product: {
+                  title: part.title,
+                  description: part.notes || part.title,
+                  aspects,
+                  ...(imageUrls.length ? { imageUrls } : {}),
+                },
+                condition,
+                availability: { shipToLocationAvailability: { quantity: 1 } },
+              }),
+            }
+          )
+          if (!invRes.ok && invRes.status !== 204) {
+            const errText = await invRes.text()
+            console.error(`Inventory item ${invRes.status} for ${sku}:`, errText)
+            throw new Error(`Inventory item ${invRes.status}: ${errText.slice(0, 300)}`)
+          }
+
+          // 2. Create offer (UNPUBLISHED by default — publishOffer never called)
+          const offerRes = await fetch('https://api.ebay.com/sell/inventory/v1/offer', {
+            method: 'POST',
+            headers: ebayHeaders,
+            body: JSON.stringify({
+              sku,
+              marketplaceId: 'EBAY_AU',
+              format: 'FIXED_PRICE',
+              listingDescription: part.notes || part.title,
+              pricingSummary: { price: { value: String(part.list_price), currency: 'AUD' } },
+              categoryId,
+              merchantLocationKey,
+              listingPolicies: { fulfillmentPolicyId, paymentPolicyId, returnPolicyId },
+              quantityLimitPerBuyer: 1,
+            }),
+          })
+          const offerData = await offerRes.json()
+          if (!offerRes.ok) throw new Error(offerData.errors?.[0]?.message || `Offer error ${offerRes.status}`)
+
+          const offerId = offerData.offerId
+
+          // 3. Update part + create listing record
+          await sb.from('parts').update({ status: 'listed' }).eq('id', part.id)
+          const { error: listingErr } = await sb.from('listings').insert({
+            store_id:            storeId,
+            part_id:             part.id,
+            platform:            'ebay',
+            platform_listing_id: offerId,
+            platform_sku:        sku,
+            status:              'draft',
+            list_price:          part.list_price,
+            platform_data:       { offerId, sku },
+            photos:              part.photos || [],
+            photos_archived:     false,
+          })
+          if (listingErr) throw new Error(`DB insert failed: ${listingErr.message}`)
+
+          drafted++
+        } catch (e: any) {
+          failed++
+          errors.push({ partId: part.id, sku: part.sku, error: e.message })
+          console.error(`Draft failed for ${part.sku}:`, e.message)
+        }
+      }
+
+      return json({ drafted, failed, errors })
+    }
+
+    if (action === 'get_ebay_username') {
+      const { token, certId } = await getToken()
+      const xml = await trading(token, certId, 'GetUser', `<?xml version="1.0" encoding="utf-8"?>
+<GetUserRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+</GetUserRequest>`)
+      const username = getTag(xml, 'UserID')
+      if (!username) throw new Error('Could not fetch eBay username')
+      return json({ username })
+    }
+
+    if (action === 'setup_ebay_location') {
+      const { token } = await getToken()
+      const address = body.address
+      if (!address?.addressLine1 || !address?.city || !address?.postalCode || !address?.country) {
+        throw new Error('Address line, city, postcode, and country are required')
+      }
+
+      const ebayHeaders = {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Accept-Language': 'en-AU',
+        'Content-Language': 'en-AU',
+        'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU',
+      }
+
+      const merchantLocationKey = 'PARTVAULT_MAIN'
+
+      // Check if it already exists
+      const existingRes = await fetch(`https://api.ebay.com/sell/inventory/v1/location/${merchantLocationKey}`, { headers: ebayHeaders })
+
+      const payload = {
+        location: {
+          address: {
+            addressLine1:    address.addressLine1,
+            city:            address.city,
+            stateOrProvince: address.stateOrProvince || '',
+            postalCode:      address.postalCode,
+            country:         address.country.toUpperCase(),
+          },
+        },
+        name: 'PartVault Main',
+        merchantLocationStatus: 'ENABLED',
+        locationTypes: ['WAREHOUSE'],
+      }
+
+      if (existingRes.ok) {
+        // Update existing
+        const updateRes = await fetch(`https://api.ebay.com/sell/inventory/v1/location/${merchantLocationKey}/update_location_details`, {
+          method: 'POST',
+          headers: ebayHeaders,
+          body: JSON.stringify({ address: payload.location.address }),
+        })
+        if (!updateRes.ok && updateRes.status !== 204) {
+          const e = await updateRes.json().catch(() => ({}))
+          throw new Error(`Failed to update location: ${e.errors?.[0]?.message || updateRes.status}`)
+        }
+      } else {
+        // Create new
+        const createRes = await fetch(`https://api.ebay.com/sell/inventory/v1/location/${merchantLocationKey}`, {
+          method: 'POST',
+          headers: ebayHeaders,
+          body: JSON.stringify(payload),
+        })
+        if (!createRes.ok && createRes.status !== 204) {
+          const e = await createRes.json().catch(() => ({}))
+          throw new Error(`Failed to create location: ${e.errors?.[0]?.message || createRes.status}`)
+        }
+      }
+
+      return json({ merchantLocationKey })
     }
 
     throw new Error(`Unknown action: ${action}`)
 
   } catch (e: any) {
     console.error('Edge function error:', e.message)
-    return new Response(JSON.stringify({ error: e.message }), {
-      status: 400,
-      headers: { ...CORS, 'Content-Type': 'application/json' }
-    })
+    return json({ error: e.message }, 400)
   }
 }
