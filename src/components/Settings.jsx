@@ -219,11 +219,12 @@ export default function Settings({ profile, storeId, onSignOut }) {
         setCertIsSet(true)
         setCertUpdating(false)
       }
-      // App ID and RuName are non-sensitive — stored directly in ebay_tokens
-      await sb.from('ebay_tokens').upsert(
-        { store_id: storeId, app_id: ebayCreds.appId, ru_name: ebayCreds.ruName },
-        { onConflict: 'store_id' }
-      )
+      // App ID and RuName are non-sensitive but ebay_tokens has no INSERT/UPDATE
+      // RLS policy for authenticated — write via admin-gated SECURITY DEFINER RPC
+      const { error: cfgErr } = await sb.rpc('set_ebay_app_config', {
+        p_store_id: storeId, p_app_id: ebayCreds.appId, p_ru_name: ebayCreds.ruName,
+      })
+      if (cfgErr) throw cfgErr
       setCredsSaved(true)
       setTimeout(() => setCredsSaved(false), 2000)
     } catch (e) {

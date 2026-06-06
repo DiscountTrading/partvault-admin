@@ -50,4 +50,42 @@ begin
 end;
 $function$;
 
+-- ---------------------------------------------------------------------------
+-- Persist the non-sensitive eBay app config (App ID + RuName).
+--
+-- These are NOT secrets (App ID appears in API requests; RuName is the OAuth
+-- redirect name) and are identical across every store for a given developer
+-- keyset. They were previously written by a direct browser upsert into
+-- ebay_tokens, but the multi-store migration only granted SELECT on that table
+-- to `authenticated` — so the write was silently denied by RLS and ru_name
+-- stayed null, producing "RuName not configured" at connect time.
+--
+-- Route the write through an admin-gated SECURITY DEFINER RPC instead, so the
+-- browser never needs direct write access to ebay_tokens.
+-- ---------------------------------------------------------------------------
+create or replace function public.set_ebay_app_config(
+  p_store_id uuid,
+  p_app_id   text,
+  p_ru_name  text
+)
+returns void
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+begin
+  if not public.is_store_admin(p_store_id) then
+    raise exception 'Unauthorised';
+  end if;
+
+  insert into public.ebay_tokens (store_id, app_id, ru_name)
+  values (p_store_id, p_app_id, p_ru_name)
+  on conflict (store_id) do update
+    set app_id  = excluded.app_id,
+        ru_name = excluded.ru_name;
+end;
+$function$;
+
+grant execute on function public.set_ebay_app_config(uuid, text, text) to authenticated;
+
 commit;
