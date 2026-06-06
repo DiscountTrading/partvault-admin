@@ -95,10 +95,8 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const [anthropicKeySaved, setAnthropicKeySaved] = useState(false)
 
   // eBay state
-  const [ebayCreds, setEbayCreds] = useState({ appId: EBAY_CLIENT_ID, certId: '', ruName: EBAY_RUNAME })
-  const [showCert, setShowCert] = useState(false)
-  const [certIsSet, setCertIsSet] = useState(false)
-  const [certUpdating, setCertUpdating] = useState(false)
+  // (App ID / Cert ID / RuName are platform-level config held server-side in the
+  //  edge function — not customer-editable, so no credential state lives here.)
   const [ebayConnected, setEbayConnected] = useState(false)
   const [ebayExpiry, setEbayExpiry] = useState(null)
   const [ebayUsername, setEbayUsername] = useState(null)
@@ -111,8 +109,6 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const [locationMsg, setLocationMsg] = useState(null)
   const [ebayTesting, setEbayTesting] = useState(false)
   const [ebayTestResult, setEbayTestResult] = useState(null)
-  const [credsSaving, setCredsSaving] = useState(false)
-  const [credsSaved, setCredsSaved] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importJob, setImportJob] = useState(null)
   const [backfilling, setBackfilling] = useState(false)
@@ -174,18 +170,14 @@ export default function Settings({ profile, storeId, onSignOut }) {
         if (data.settings.ebayLocationKey) setEbayLocationKey(data.settings.ebayLocationKey)
         if (data.settings.ebayUsername) setEbayUsername(data.settings.ebayUsername) // persisted — shows immediately
       }
-      // eBay credentials — non-sensitive fields from ebay_tokens; cert_id status via RPC (never exposed)
-      const { data: tokenRow } = await sb.from('ebay_tokens').select('app_id, ru_name, expires_at').eq('store_id', storeId).maybeSingle()
-      if (tokenRow) {
-        setEbayCreds(c => ({ ...c, appId: tokenRow.app_id||c.appId, ruName: tokenRow.ru_name||c.ruName }))
-        if (tokenRow.expires_at) {
-          setEbayConnected(true)
-          setEbayExpiry(tokenRow.expires_at)
-          refreshEbayUsername()
-        }
+      // eBay connection status — the keyset is server-side; we only need to know
+      // whether this store has connected (i.e. has a valid token expiry).
+      const { data: tokenRow } = await sb.from('ebay_tokens').select('expires_at').eq('store_id', storeId).maybeSingle()
+      if (tokenRow?.expires_at) {
+        setEbayConnected(true)
+        setEbayExpiry(tokenRow.expires_at)
+        refreshEbayUsername()
       }
-      const { data: hasCert } = await sb.rpc('has_ebay_cert_id', { p_store_id: storeId })
-      setCertIsSet(!!hasCert)
     } catch (e) {
       console.error('Failed to load settings', e)
     }
@@ -205,33 +197,6 @@ export default function Settings({ profile, storeId, onSignOut }) {
       console.error('Save failed', e)
     }
     setSaving(false)
-  }
-
-  const saveEbayCreds = async () => {
-    if (!storeId) return
-    setCredsSaving(true)
-    try {
-      // If a cert_id was entered, store it in Supabase Vault via SECURITY DEFINER RPC — it never persists in the browser
-      if (ebayCreds.certId) {
-        const { error: certErr } = await sb.rpc('set_ebay_cert_id', { p_store_id: storeId, p_cert_id: ebayCreds.certId })
-        if (certErr) throw certErr
-        setEbayCreds(c => ({ ...c, certId: '' }))
-        setCertIsSet(true)
-        setCertUpdating(false)
-      }
-      // App ID and RuName are non-sensitive but ebay_tokens has no INSERT/UPDATE
-      // RLS policy for authenticated — write via admin-gated SECURITY DEFINER RPC
-      const { error: cfgErr } = await sb.rpc('set_ebay_app_config', {
-        p_store_id: storeId, p_app_id: ebayCreds.appId, p_ru_name: ebayCreds.ruName,
-      })
-      if (cfgErr) throw cfgErr
-      setCredsSaved(true)
-      setTimeout(() => setCredsSaved(false), 2000)
-    } catch (e) {
-      console.error('Save creds failed', e)
-      alert(`Failed to save credentials: ${e.message}`)
-    }
-    setCredsSaving(false)
   }
 
   const saveAnthropicKey = async () => {
@@ -302,10 +267,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
   }
 
   const connectEbay = () => {
-    if (!certIsSet) {
-      setEbayTestResult({ ok: false, msg: 'Please enter and save your Cert ID first.' })
-      return
-    }
+    // Keyset is configured server-side, so connecting is always available.
     window.location.href = EBAY_OAUTH_URL
   }
 
@@ -1370,54 +1332,6 @@ export default function Settings({ profile, storeId, onSignOut }) {
       {tab === 'ebay' && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignItems: 'start' }}>
           <div>
-          {/* Credentials */}
-          <Section title="🔑 eBay API Credentials">
-            <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
-              Read-only access — stored in Supabase
-            </p>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
-              <div>
-                <label style={S.label}>App ID (Client ID)</label>
-                <input style={S.input} value={ebayCreds.appId} onChange={e => setEbayCreds(c => ({ ...c, appId: e.target.value }))} placeholder="App ID" />
-              </div>
-              <div>
-                <label style={S.label}>RuName</label>
-                <input style={S.input} value={ebayCreds.ruName} onChange={e => setEbayCreds(c => ({ ...c, ruName: e.target.value }))} placeholder="RuName" />
-              </div>
-            </div>
-            <div style={{ marginBottom: 16 }}>
-              <label style={S.label}>Cert ID (Client Secret)</label>
-              {certIsSet && !certUpdating ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: '#f0fdf4', border: `1.5px solid #86efac`, borderRadius: 8 }}>
-                  <span style={{ fontSize: 13, color: C.green, fontWeight: 600, flex: 1 }}>●●●●●●●●●●●● Stored securely in Vault</span>
-                  <button onClick={() => setCertUpdating(true)} style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer', color: C.muted }}>
-                    Update
-                  </button>
-                </div>
-              ) : (
-                <div style={{ position: 'relative' }}>
-                  <input
-                    style={{ ...S.input, paddingRight: 60 }}
-                    type={showCert ? 'text' : 'password'}
-                    value={ebayCreds.certId}
-                    onChange={e => setEbayCreds(c => ({ ...c, certId: e.target.value }))}
-                    placeholder={certUpdating ? 'Enter new Cert ID to replace stored value' : 'Cert ID'}
-                    autoFocus={certUpdating}
-                  />
-                  <button onClick={() => setShowCert(s => !s)} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: C.muted, fontSize: 12 }}>
-                    {showCert ? 'Hide' : 'Show'}
-                  </button>
-                </div>
-              )}
-              <p style={{ fontSize: 11, color: C.muted, marginTop: 5 }}>
-                Write-only — once saved, this value is encrypted in Supabase Vault and never returned to the browser.
-              </p>
-            </div>
-            <button style={{ ...S.btn('primary'), opacity: credsSaving ? 0.6 : 1 }} onClick={saveEbayCreds} disabled={credsSaving}>
-              {credsSaving ? 'Saving...' : credsSaved ? '✓ Saved' : 'Save Credentials'}
-            </button>
-          </Section>
-
           {/* Connection */}
           <Section title="🔗 eBay Connection">
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, padding: 16, background: ebayNeedsReconnect ? '#fffbeb' : ebayConnected ? '#f0fdf4' : '#fafaf9', border: `1px solid ${ebayNeedsReconnect ? '#fcd34d' : ebayConnected ? '#86efac' : C.border}`, borderRadius: 8 }}>
@@ -1463,7 +1377,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
                   <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{ebayUsernameError || 'Your eBay session has expired.'}</div>
                   <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>Importing and listing are paused until you reconnect. You'll choose which eBay account to connect.</div>
                 </div>
-                <button style={{ ...S.btn('primary'), flexShrink: 0, opacity: certIsSet ? 1 : 0.6 }} onClick={connectEbay} disabled={!certIsSet}>
+                <button style={{ ...S.btn('primary'), flexShrink: 0 }} onClick={connectEbay}>
                   Reconnect
                 </button>
               </div>

@@ -6,8 +6,15 @@ const CORS = {
 }
 
 const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
-const APP_ID                  = 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
-const EDGE_FN_VERSION         = '3.7.0-edge'
+// eBay developer keyset — a single application identity shared by every store.
+// These are platform-level config, NOT per-store data. Set them as edge-function
+// secrets (Supabase dashboard → Edge Functions → Secrets). Fallbacks keep the
+// existing app working if the secrets are not yet set; CERT_ID has no fallback
+// because it is a client secret and must never be hard-coded.
+const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
+const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
+const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
+const EDGE_FN_VERSION         = '3.8.0-edge'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 25 * 1000
@@ -171,13 +178,13 @@ async function handleRequest(req: Request): Promise<Response> {
 
     const expiresAt = t.expires_at ? new Date(t.expires_at).getTime() : 0
     if (expiresAt && expiresAt - Date.now() >= TOKEN_REFRESH_BUFFER_MS) {
-      return { token: t.access_token, certId: t.cert_id }
+      return { token: t.access_token, certId: CERT_ID }
     }
 
     if (!t.refresh_token) throw new Error('Access token expired — please reconnect in Settings')
 
     console.log(`Refreshing token (expires ${t.expires_at})...`)
-    const credentials = btoa(`${t.app_id || APP_ID}:${t.cert_id}`)
+    const credentials = btoa(`${APP_ID}:${CERT_ID}`)
     const refreshRes = await fetch(EBAY_TOKEN_URL, {
       method: 'POST',
       headers: {
@@ -205,7 +212,7 @@ async function handleRequest(req: Request): Promise<Response> {
     if (updateErr) console.error('Failed to persist refreshed token:', updateErr.message)
     else console.log(`Token refreshed, new expiry: ${newExpiresAt}`)
 
-    return { token: refreshData.access_token, certId: t.cert_id }
+    return { token: refreshData.access_token, certId: CERT_ID }
   }
 
   const fetchAllIds = async (token: string, certId: string, listType: string): Promise<string[]> => {
@@ -377,18 +384,10 @@ async function handleRequest(req: Request): Promise<Response> {
       const { code } = body
       if (!code) throw new Error('Missing authorisation code')
 
-      const { data: rows, error: tokenErr } = await sb.rpc('get_ebay_tokens', { p_store_id: storeId })
-      if (tokenErr) throw new Error(`Failed to read credentials: ${tokenErr.message}`)
+      // Keyset comes from edge-function secrets (platform-level), not per-store data.
+      if (!CERT_ID) return json({ error: 'Server eBay credentials not configured (EBAY_CERT_ID secret is missing).' }, 500)
 
-      const t      = rows?.[0]
-      const certId = t?.cert_id
-      const appId  = t?.app_id || APP_ID
-      const ruName = t?.ru_name
-
-      if (!certId) return json({ error: 'Cert ID not configured — enter and save your Cert ID in Settings first' }, 400)
-      if (!ruName) return json({ error: 'RuName not configured — save your eBay credentials in Settings first' }, 400)
-
-      const credentials = btoa(`${appId}:${certId}`)
+      const credentials = btoa(`${APP_ID}:${CERT_ID}`)
       const tokenRes = await fetch(EBAY_TOKEN_URL, {
         method: 'POST',
         headers: {
@@ -398,7 +397,7 @@ async function handleRequest(req: Request): Promise<Response> {
         body: new URLSearchParams({
           grant_type:   'authorization_code',
           code,
-          redirect_uri: ruName,
+          redirect_uri: RUNAME,
         }),
       })
 
