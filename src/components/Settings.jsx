@@ -104,6 +104,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
   const [ebayUsername, setEbayUsername] = useState(null)
   const [ebayUsernameStatus, setEbayUsernameStatus] = useState(null) // 'loading' | 'error' | null
   const [ebayUsernameError, setEbayUsernameError] = useState(null)
+  const [ebayNeedsReconnect, setEbayNeedsReconnect] = useState(false)
   const [shipAddress, setShipAddress] = useState({ addressLine1: '', city: '', stateOrProvince: '', postalCode: '', country: 'AU' })
   const [ebayLocationKey, setEbayLocationKey] = useState(null)
   const [savingLocation, setSavingLocation] = useState(false)
@@ -307,6 +308,26 @@ export default function Settings({ profile, storeId, onSignOut }) {
     window.location.href = EBAY_OAUTH_URL
   }
 
+  // Translate raw eBay/edge-function errors into friendly, actionable copy.
+  // Returns { text, needsReconnect } — needsReconnect drives the reconnect prompt.
+  const friendlyEbayError = (raw) => {
+    const r = (raw || '').toLowerCase()
+    if (r.includes('scope') || r.includes('refresh failed') || r.includes('invalid_grant') ||
+        r.includes('reconnect') || r.includes('expired') || r.includes('token refresh')) {
+      return { text: 'Your eBay session has expired. Reconnect to keep importing and listing.', needsReconnect: true }
+    }
+    if (r.includes('no ebay token') || r.includes('not connected') || r.includes('no token')) {
+      return { text: 'No eBay connection found. Connect your eBay account to continue.', needsReconnect: true }
+    }
+    if (r.includes('cert')) {
+      return { text: 'Your eBay Cert ID is missing. Add it above, then reconnect.', needsReconnect: false }
+    }
+    if (r.includes('failed to fetch') || r.includes('networkerror')) {
+      return { text: "Couldn't reach eBay just now. Check your connection and hit Refresh.", needsReconnect: false }
+    }
+    return { text: "Couldn't read your eBay account. Try Refresh — if it keeps failing, reconnect below.", needsReconnect: false }
+  }
+
   // Fetch the connected eBay account's UserID and persist it so it remains visible
   // even if a later GetUser call fails (rate limit, scope, etc.).
   const refreshEbayUsername = async () => {
@@ -320,6 +341,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
         setEbayUsername(d.username)
         setEbayUsernameStatus(null)
         setEbayUsernameError(null)
+        setEbayNeedsReconnect(false)
         // Persist into stores.settings so it survives reloads and transient fetch failures
         try {
           const { data: cur } = await sb.from('stores').select('settings').eq('id', storeId).single()
@@ -329,12 +351,16 @@ export default function Settings({ profile, storeId, onSignOut }) {
           console.warn('Failed to persist eBay username', persistErr)
         }
       } else {
+        const f = friendlyEbayError(d.error)
         setEbayUsernameStatus('error')
-        setEbayUsernameError(d.error || 'eBay did not return a username')
+        setEbayUsernameError(f.text)
+        setEbayNeedsReconnect(f.needsReconnect)
       }
     } catch (e) {
+      const f = friendlyEbayError(e.message)
       setEbayUsernameStatus('error')
-      setEbayUsernameError(e.message)
+      setEbayUsernameError(f.text)
+      setEbayNeedsReconnect(f.needsReconnect)
     }
   }
 
@@ -346,6 +372,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
       setEbayUsername(null)
       setEbayUsernameStatus(null)
       setEbayUsernameError(null)
+      setEbayNeedsReconnect(false)
       setEbayTestResult(null)
       // Clear the persisted username so a future connection can't show a stale account
       try {
@@ -1392,11 +1419,11 @@ export default function Settings({ profile, storeId, onSignOut }) {
 
           {/* Connection */}
           <Section title="🔗 eBay Connection">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, padding: 16, background: ebayConnected ? '#f0fdf4' : '#fafaf9', border: `1px solid ${ebayConnected ? '#86efac' : C.border}`, borderRadius: 8 }}>
-              <div style={{ width: 12, height: 12, borderRadius: '50%', background: ebayConnected ? C.green : C.muted, flexShrink: 0 }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, padding: 16, background: ebayNeedsReconnect ? '#fffbeb' : ebayConnected ? '#f0fdf4' : '#fafaf9', border: `1px solid ${ebayNeedsReconnect ? '#fcd34d' : ebayConnected ? '#86efac' : C.border}`, borderRadius: 8 }}>
+              <div style={{ width: 12, height: 12, borderRadius: '50%', background: ebayNeedsReconnect ? C.yellow : ebayConnected ? C.green : C.muted, flexShrink: 0 }} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 600, fontSize: 14, color: ebayConnected ? C.green : C.muted }}>
-                  {ebayConnected ? 'Connected to eBay' : 'Not connected'}
+                <div style={{ fontWeight: 600, fontSize: 14, color: ebayNeedsReconnect ? C.yellow : ebayConnected ? C.green : C.muted }}>
+                  {ebayNeedsReconnect ? 'eBay session expired' : ebayConnected ? 'Connected to eBay' : 'Not connected'}
                 </div>
                 {ebayConnected && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3, flexWrap: 'wrap' }}>
@@ -1406,8 +1433,10 @@ export default function Settings({ profile, storeId, onSignOut }) {
                       </span>
                     ) : ebayUsernameStatus === 'loading' ? (
                       <span style={{ fontSize: 12, color: C.muted }}>Checking account…</span>
+                    ) : ebayNeedsReconnect ? (
+                      <span style={{ fontSize: 12, color: C.yellow }}>Account hidden until you reconnect</span>
                     ) : (
-                      <span style={{ fontSize: 12, color: C.red }}>Account unknown — couldn't read username</span>
+                      <span style={{ fontSize: 12, color: C.red }}>Account unknown — tap Refresh</span>
                     )}
                     <button onClick={refreshEbayUsername} disabled={ebayUsernameStatus === 'loading'}
                       style={{ background: 'none', border: 'none', color: C.blue, cursor: 'pointer', fontSize: 12, padding: 0, opacity: ebayUsernameStatus === 'loading' ? 0.5 : 1 }}>
@@ -1415,7 +1444,7 @@ export default function Settings({ profile, storeId, onSignOut }) {
                     </button>
                   </div>
                 )}
-                {ebayConnected && ebayUsernameStatus === 'error' && ebayUsernameError && (
+                {ebayConnected && ebayUsernameStatus === 'error' && ebayUsernameError && !ebayNeedsReconnect && (
                   <div style={{ fontSize: 11, color: C.red, marginTop: 3 }}>{ebayUsernameError}</div>
                 )}
                 {ebayConnected && ebayExpiry && (
@@ -1425,6 +1454,19 @@ export default function Settings({ profile, storeId, onSignOut }) {
                 )}
               </div>
             </div>
+
+            {ebayConnected && ebayNeedsReconnect && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 14, marginBottom: 12, background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 8 }}>
+                <div style={{ fontSize: 20, flexShrink: 0 }}>⚠️</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{ebayUsernameError || 'Your eBay session has expired.'}</div>
+                  <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>Importing and listing are paused until you reconnect. You'll choose which eBay account to connect.</div>
+                </div>
+                <button style={{ ...S.btn('primary'), flexShrink: 0, opacity: certIsSet ? 1 : 0.6 }} onClick={connectEbay} disabled={!certIsSet}>
+                  Reconnect
+                </button>
+              </div>
+            )}
 
             {ebayTestResult && (
               <div style={{ padding: 12, borderRadius: 8, marginBottom: 12, background: ebayTestResult.ok ? '#f0fdf4' : '#fef2f2', border: `1px solid ${ebayTestResult.ok ? '#86efac' : '#fca5a5'}`, fontSize: 13, color: ebayTestResult.ok ? C.green : C.red }}>
