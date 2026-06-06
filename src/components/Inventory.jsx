@@ -11,6 +11,26 @@ function Field({ label, children }) {
   return <div style={{ marginBottom: 12 }}><label style={S.label}>{label}</label>{children}</div>
 }
 
+// eBay-style accent + section card (mirrors eBay's "Create your listing" layout)
+const EBAY_BLUE = '#3665f3'
+function Section({ title, hint, action, children, accent }) {
+  return (
+    <div style={{ background:'#fff', border:`1px solid ${C.border}`, borderRadius:14, padding:'18px 22px', marginBottom:16, boxShadow:'0 1px 2px rgba(0,0,0,0.04)' }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14, gap:12 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10, minWidth:0 }}>
+          <span style={{ width:4, height:18, borderRadius:2, background:accent||EBAY_BLUE, flexShrink:0 }} />
+          <div style={{ minWidth:0 }}>
+            <div style={{ fontSize:16, fontWeight:700, color:C.text, fontFamily:"'Inter Tight',system-ui,sans-serif" }}>{title}</div>
+            {hint && <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>{hint}</div>}
+          </div>
+        </div>
+        {action}
+      </div>
+      {children}
+    </div>
+  )
+}
+
 function AutoInput({ value, onChange, suggestions, placeholder, style }) {
   const [open, setOpen] = useState(false)
   const filtered = (suggestions || []).filter(s => s.toLowerCase().includes((value||'').toLowerCase())).slice(0, 8)
@@ -98,6 +118,16 @@ function AddCarModal({ storeId, onSave, onCancel }) {
       for (const p of photos) { try { photoUrls.push(await uploadPhoto(p, storeId)) } catch(e) { console.warn('Photo upload failed', e) } }
       const { data, error } = await sb.from('cars').insert({ store_id: storeId, created_by: user?.id, make: form.make, model: form.model, year: form.year, purchase_price: form.purchase_price ? +form.purchase_price : null, purchase_date: form.purchase_date||null, notes: form.notes, status: 'active', photos: photoUrls }).select().single()
       if (error) throw error
+      // Dual-write: also insert into the new photos table (column above kept during transition)
+      if (photoUrls.length) {
+        const { error: photoErr } = await sb.from('photos').insert(
+          photoUrls.map((url, i) => ({
+            parent_type: 'car', parent_id: data.id, url,
+            display_order: i, is_primary: i === 0, source: 'upload',
+          }))
+        )
+        if (photoErr) console.warn('photos table insert failed', photoErr)
+      }
       onSave(data)
     } catch(e) { console.error('Add car failed', e) }
     setSaving(false)
@@ -202,8 +232,13 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
   const handleSave = () => onSave({ ...form, list_price:+form.listPrice||0, sold_price:form.soldPrice?+form.soldPrice:null })
   const handleSaveAndAdd = () => onSaveAndAdd({ ...form, list_price:+form.listPrice||0, sold_price:form.soldPrice?+form.soldPrice:null })
 
+  const titleLen = (form.title||'').length
+  const ebayBtn = (kind='primary') => kind==='primary'
+    ? { background:EBAY_BLUE, color:'#fff', border:'none', borderRadius:24, padding:'11px 26px', fontSize:14, fontWeight:700, cursor:'pointer' }
+    : { background:'#fff', color:EBAY_BLUE, border:`1.5px solid ${EBAY_BLUE}`, borderRadius:24, padding:'11px 22px', fontSize:14, fontWeight:600, cursor:'pointer' }
+
   return (
-    <div style={{ maxWidth: 800 }}>
+    <div style={{ maxWidth: 820, paddingBottom: 84 }}>
       {uncheckedWarning && (
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:999, display:'flex', alignItems:'center', justifyContent:'center' }}>
           <div style={{ ...S.card, maxWidth:400, width:'90%', textAlign:'center', borderColor:C.yellow, borderWidth:2 }}>
@@ -218,141 +253,160 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
         </div>
       )}
 
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
-        <h2 style={S.h1}>{part ? 'Edit Part' : 'Add Part'}</h2>
-        <div style={{ display:'flex', gap:8 }}>
-          <button style={S.btn('secondary')} onClick={onCancel}>Cancel</button>
-          {!part && <button style={{ ...S.btn('secondary'), border:`1.5px solid ${C.blue}`, color:C.blue }} onClick={handleSaveAndAdd}>Save & Add Another</button>}
-          <button style={S.btn()} onClick={handleSave}>Save Part</button>
+      {/* eBay-style header */}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:18 }}>
+        <div>
+          <h2 style={{ ...S.h1, marginBottom:2 }}>{part ? 'Edit your listing' : 'Create your listing'}</h2>
+          <div style={{ fontSize:13, color:C.muted }}>Build the eBay draft — review every section before listing.</div>
         </div>
+        <button style={S.btn('secondary')} onClick={onCancel}>Cancel</button>
       </div>
 
-      {/* AI Quick Add */}
+      {/* Photos / AI Quick Add — eBay puts photos first */}
       {!part && (
-        <div style={{ ...S.card, background:'#f5f3ff', borderColor:'#c4b5fd', marginBottom:20 }}>
-          <div style={{ fontWeight:700, fontSize:14, color:'#7c3aed', marginBottom:6 }}>✨ AI Quick Add</div>
-          <div style={{ fontSize:12, color:C.muted, marginBottom:10 }}>Upload a photo and AI will fill in title, category, condition, description and pricing.</div>
+        <Section title="Photos" hint="Add a photo and AI fills in the listing details." accent="#7c3aed"
+          action={<span style={{ fontSize:12, fontWeight:700, color:'#7c3aed' }}>✨ AI Quick Add</span>}>
           <input ref={photoRef} type="file" accept="image/*" multiple style={{ display:'none' }} onChange={handlePhoto} />
-          {aiPhotos.length > 0 && (
-            <div style={{ display:'flex', gap:8, marginBottom:10, flexWrap:'wrap' }}>
-              {aiPhotos.map((p,i) => (
-                <div key={i} style={{ position:'relative', width:64, height:64 }}>
-                  <img src={p} style={{ width:64, height:64, borderRadius:6, objectFit:'cover' }} />
-                  <button onClick={() => setAiPhotos(ps => ps.filter((_,j) => j!==i))} style={{ position:'absolute', top:-5, right:-5, background:C.red, border:'none', color:'#fff', borderRadius:'50%', width:18, height:18, fontSize:10, cursor:'pointer', padding:0, lineHeight:'18px' }}>×</button>
-                </div>
-              ))}
-            </div>
-          )}
-          {aiError && <div style={{ fontSize:12, color:C.red, marginBottom:8 }}>{aiError}</div>}
-          <div style={{ display:'flex', gap:8 }}>
-            <button style={{ ...S.btn('secondary'), padding:'7px 14px', fontSize:12 }} onClick={() => photoRef.current.click()}>📷 {aiPhotos.length ? 'Change Photo' : 'Add Photo'}</button>
-            <button style={{ ...S.btn(), background:'#7c3aed', padding:'7px 14px', fontSize:12, opacity:analysing||!aiPhotos.length?0.6:1 }} onClick={handleAIQuickAdd} disabled={analysing||!aiPhotos.length}>
-              {analysing ? '⏳ Analysing...' : '✨ Analyse & Fill'}
+          <div style={{ display:'flex', gap:10, flexWrap:'wrap', alignItems:'center' }}>
+            {aiPhotos.map((p,i) => (
+              <div key={i} style={{ position:'relative', width:84, height:84 }}>
+                <img src={p} style={{ width:84, height:84, borderRadius:8, objectFit:'cover', border:`1px solid ${C.border}` }} />
+                <button onClick={() => setAiPhotos(ps => ps.filter((_,j) => j!==i))} style={{ position:'absolute', top:-6, right:-6, background:C.red, border:'none', color:'#fff', borderRadius:'50%', width:20, height:20, fontSize:11, cursor:'pointer', padding:0, lineHeight:'20px' }}>×</button>
+              </div>
+            ))}
+            <button onClick={() => photoRef.current.click()} style={{ width:84, height:84, borderRadius:8, border:`2px dashed ${C.border}`, background:'#fafafa', cursor:'pointer', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:2, fontSize:11, color:C.muted, fontWeight:600 }}>
+              <span style={{ fontSize:22 }}>📷</span>{aiPhotos.length ? 'Add' : 'Add photo'}
             </button>
           </div>
+          {aiError && <div style={{ fontSize:12, color:C.red, marginTop:10 }}>{aiError}</div>}
+          {aiPhotos.length > 0 && (
+            <button style={{ ...ebayBtn('secondary'), marginTop:14, padding:'8px 18px', fontSize:13, borderColor:'#7c3aed', color:'#7c3aed', opacity:analysing?0.6:1 }} onClick={handleAIQuickAdd} disabled={analysing}>
+              {analysing ? '⏳ Analysing…' : '✨ Analyse & fill details'}
+            </button>
+          )}
+        </Section>
+      )}
+
+      {/* Title & details */}
+      <Section title="Title & details" hint="The title buyers see in search results.">
+        {cars && cars.length > 0 && (
+          <Field label="Link to Car">
+            <select style={S.select} value={form.car_id||''} onChange={e => handleCarChange(e.target.value)}>
+              <option value="">— No car linked —</option>
+              {cars.map(c => <option key={c.id} value={c.id}>{c.make} {c.model} {c.year}</option>)}
+            </select>
+          </Field>
+        )}
+        <Field label="Listing title">
+          <input style={{ ...S.input, fontWeight:600 }} maxLength={80} value={form.title||''} onChange={e => set('title', e.target.value)} placeholder="e.g. Toyota Hilux 2018 Headlight RH Genuine OEM" />
+          <div style={{ textAlign:'right', fontSize:11, color:titleLen>80?C.red:C.muted, marginTop:4 }}>{titleLen}/80</div>
+        </Field>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+          <Field label="SKU"><input style={S.input} value={form.sku||''} onChange={e => set('sku', e.target.value)} /></Field>
+          <Field label="OEM Part Number"><input style={S.input} value={form.partNumber||''} onChange={e => set('partNumber', e.target.value)} /></Field>
         </div>
-      )}
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+          <Field label="Category">
+            <select style={S.select} value={form.category||defCat} onChange={e => { set('category', e.target.value); set('subcategory', EBAY_AU_CATEGORIES[e.target.value]?.[0]||'') }}>
+              {CATEGORY_NAMES.map(c => <option key={c}>{c}</option>)}
+            </select>
+          </Field>
+          <Field label="Subcategory">
+            <select style={S.select} value={form.subcategory||''} onChange={e => set('subcategory', e.target.value)}>
+              {(EBAY_AU_CATEGORIES[form.category]||[]).map(s => <option key={s}>{s}</option>)}
+            </select>
+          </Field>
+        </div>
+      </Section>
 
-      {/* Link to Car */}
-      {cars && cars.length > 0 && (
-        <Field label="Link to Car">
-          <select style={S.select} value={form.car_id||''} onChange={e => handleCarChange(e.target.value)}>
-            <option value="">— No car linked —</option>
-            {cars.map(c => <option key={c.id} value={c.id}>{c.make} {c.model} {c.year}</option>)}
-          </select>
-        </Field>
-      )}
+      {/* Item specifics — vehicle fitment */}
+      <Section title="Item specifics" hint="Compatibility buyers filter on.">
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+          <Field label="Make">
+            <select style={S.select} value={form.make||''} onChange={e => { set('make', e.target.value); set('model', '') }}>
+              <option value="">Select Make</option>
+              {MAKES.map(m => <option key={m}>{m}</option>)}
+            </select>
+          </Field>
+          <Field label="Model">
+            <AutoInput value={form.model} onChange={v => set('model', v)} suggestions={MODEL_SUGS[form.make]||[]} placeholder="Model" />
+          </Field>
+          <Field label="Year"><input style={S.input} value={form.year||''} onChange={e => set('year', e.target.value)} /></Field>
+        </div>
+      </Section>
 
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
-        <Field label="SKU"><input style={S.input} value={form.sku||''} onChange={e => set('sku', e.target.value)} /></Field>
-        <Field label="OEM Part Number"><input style={S.input} value={form.partNumber||''} onChange={e => set('partNumber', e.target.value)} /></Field>
-      </div>
-      <Field label={`Title (${(form.title||'').length}/80)`}>
-        <input style={S.input} value={form.title||''} onChange={e => set('title', e.target.value)} />
-      </Field>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
-        <Field label="Category">
-          <select style={S.select} value={form.category||defCat} onChange={e => { set('category', e.target.value); set('subcategory', EBAY_AU_CATEGORIES[e.target.value]?.[0]||'') }}>
-            {CATEGORY_NAMES.map(c => <option key={c}>{c}</option>)}
-          </select>
-        </Field>
-        <Field label="Subcategory">
-          <select style={S.select} value={form.subcategory||''} onChange={e => set('subcategory', e.target.value)}>
-            {(EBAY_AU_CATEGORIES[form.category]||[]).map(s => <option key={s}>{s}</option>)}
-          </select>
-        </Field>
-      </div>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
-        <Field label="Make">
-          <select style={S.select} value={form.make||''} onChange={e => { set('make', e.target.value); set('model', '') }}>
-            <option value="">Select Make</option>
-            {MAKES.map(m => <option key={m}>{m}</option>)}
-          </select>
-        </Field>
-        <Field label="Model">
-          <AutoInput value={form.model} onChange={v => set('model', v)} suggestions={MODEL_SUGS[form.make]||[]} placeholder="Model" />
-        </Field>
-        <Field label="Year"><input style={S.input} value={form.year||''} onChange={e => set('year', e.target.value)} /></Field>
-      </div>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
-        <Field label="Condition">
-          <select style={S.select} value={form.condition||''} onChange={e => set('condition', e.target.value)}>
-            {PART_CONDITIONS.map(c => <option key={c}>{c}</option>)}
-          </select>
-        </Field>
-        <Field label="Status">
-          <select style={S.select} value={form.status||'in_stock'} onChange={e => set('status', e.target.value)}>
-            {['in_stock','listed','sold','scrapped','deferred'].map(s => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
-          </select>
-        </Field>
-      </div>
+      {/* Condition */}
+      <Section title="Condition">
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+          <Field label="Item condition">
+            <select style={S.select} value={form.condition||''} onChange={e => set('condition', e.target.value)}>
+              {PART_CONDITIONS.map(c => <option key={c}>{c}</option>)}
+            </select>
+          </Field>
+          <Field label="Status">
+            <select style={S.select} value={form.status||'in_stock'} onChange={e => set('status', e.target.value)}>
+              {['in_stock','listed','sold','scrapped','deferred'].map(s => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
+            </select>
+          </Field>
+        </div>
+      </Section>
 
-      <div style={{ marginBottom:12 }}>
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6 }}>
-          <label style={{ ...S.label, margin:0 }}>Description</label>
-          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+      {/* Description */}
+      <Section title="Description"
+        action={
+          <div style={{ display:'flex', alignItems:'center', gap:12 }}>
             <label style={{ display:'flex', alignItems:'center', gap:6, cursor:'pointer', fontSize:12, color:form.ai_assessed?C.green:C.muted }}>
               <input type="checkbox" checked={form.ai_assessed||false}
                 onChange={e => { if (!e.target.checked && form.ai_assessed) setUncheckedWarning(true); else set('ai_assessed', e.target.checked) }}
                 style={{ accentColor:C.green, width:14, height:14 }} />
               <span style={{ fontWeight:600 }}>AI Assessed {form.ai_assessed?'✓':''}</span>
             </label>
-            <button style={{ ...S.btn('blue'), padding:'4px 12px', fontSize:12, opacity:generating?0.6:1 }} onClick={handleGenerateDesc} disabled={generating}>
-              {generating ? '⏳ Generating...' : '✨ Generate'}
+            <button style={{ ...S.btn('blue'), padding:'5px 14px', fontSize:12, borderRadius:20, opacity:generating?0.6:1 }} onClick={handleGenerateDesc} disabled={generating}>
+              {generating ? '⏳ Generating…' : '✨ Generate'}
             </button>
           </div>
-        </div>
-        <textarea style={S.textarea} value={form.description||''} onChange={e => { set('description', e.target.value); if (e.target.value) set('ai_assessed', false) }} />
-      </div>
+        }>
+        <textarea style={{ ...S.textarea, minHeight:140 }} value={form.description||''} onChange={e => { set('description', e.target.value); if (e.target.value) set('ai_assessed', false) }} placeholder="Describe condition, fitment and any defects…" />
+      </Section>
 
-      <div style={{ ...S.card, background:'#f9f8f5', marginBottom:20 }}>
-        <h2 style={{ ...S.h2, marginBottom:16 }}>💸 Costs (AUD)</h2>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10 }}>
-          {Object.keys(form.costs||{}).map(k => (
-            <Field key={k} label={`${k.charAt(0).toUpperCase()+k.slice(1)} ($)`}>
-              <input style={S.input} type="number" min="0" step="0.01" value={form.costs[k]||0} onChange={e => setCost(k, e.target.value)} />
-            </Field>
-          ))}
+      {/* Pricing */}
+      <Section title="Pricing" hint="Buy It Now price and your internal cost breakdown.">
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+          <Field label="List Price ($)"><input style={{ ...S.input, fontWeight:700, fontSize:16 }} type="number" value={form.listPrice||''} onChange={e => set('listPrice', e.target.value)} /></Field>
+          <Field label="Sold Price ($)"><input style={S.input} type="number" value={form.soldPrice||''} onChange={e => set('soldPrice', e.target.value)} /></Field>
+          <Field label="Weight (kg)"><input style={S.input} type="number" value={form.weight||''} onChange={e => set('weight', e.target.value)} /></Field>
         </div>
-        <div style={{ display:'flex', gap:20, marginTop:8, fontSize:12 }}>
-          <span>Cost: <strong style={{ color:C.red }}>{fmt(cost)}</strong></span>
-          <span>Profit: <strong style={{ color:profit>=0?C.green:C.red }}>{fmt(profit)}</strong></span>
-          <span>Margin: <strong style={{ color:margin>=30?C.green:C.yellow }}>{pct(margin)}</strong></span>
+        <div style={{ background:'#f9f8f5', border:`1px solid ${C.border}`, borderRadius:10, padding:'14px 16px', marginTop:6 }}>
+          <div style={{ fontSize:13, fontWeight:700, color:C.text, marginBottom:12 }}>Cost breakdown (AUD)</div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10 }}>
+            {Object.keys(form.costs||{}).map(k => (
+              <Field key={k} label={`${k.charAt(0).toUpperCase()+k.slice(1)} ($)`}>
+                <input style={S.input} type="number" min="0" step="0.01" value={form.costs[k]||0} onChange={e => setCost(k, e.target.value)} />
+              </Field>
+            ))}
+          </div>
+          <div style={{ display:'flex', gap:20, marginTop:8, fontSize:12 }}>
+            <span>Cost: <strong style={{ color:C.red }}>{fmt(cost)}</strong></span>
+            <span>Profit: <strong style={{ color:profit>=0?C.green:C.red }}>{fmt(profit)}</strong></span>
+            <span>Margin: <strong style={{ color:margin>=30?C.green:C.yellow }}>{pct(margin)}</strong></span>
+          </div>
         </div>
-      </div>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
-        <Field label="List Price ($)"><input style={S.input} type="number" value={form.listPrice||''} onChange={e => set('listPrice', e.target.value)} /></Field>
-        <Field label="Sold Price ($)"><input style={S.input} type="number" value={form.soldPrice||''} onChange={e => set('soldPrice', e.target.value)} /></Field>
-        <Field label="Weight (kg)"><input style={S.input} type="number" value={form.weight||''} onChange={e => set('weight', e.target.value)} /></Field>
-      </div>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
-        <Field label="Acquired Date"><input style={S.input} type="date" value={form.acquiredDate||''} onChange={e => set('acquiredDate', e.target.value)} /></Field>
-        <Field label="Notes"><input style={S.input} value={form.notes||''} onChange={e => set('notes', e.target.value)} /></Field>
-      </div>
-      <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:8 }}>
-        <button style={S.btn('secondary')} onClick={onCancel}>Cancel</button>
-        {!part && <button style={{ ...S.btn('secondary'), border:`1.5px solid ${C.blue}`, color:C.blue }} onClick={handleSaveAndAdd}>Save & Add Another</button>}
-        <button style={S.btn()} onClick={handleSave}>Save Part</button>
+      </Section>
+
+      {/* Record keeping */}
+      <Section title="Record keeping">
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+          <Field label="Acquired Date"><input style={S.input} type="date" value={form.acquiredDate||''} onChange={e => set('acquiredDate', e.target.value)} /></Field>
+          <Field label="Notes"><input style={S.input} value={form.notes||''} onChange={e => set('notes', e.target.value)} /></Field>
+        </div>
+      </Section>
+
+      {/* eBay-style sticky action bar */}
+      <div style={{ position:'sticky', bottom:0, marginTop:8, marginLeft:-2, marginRight:-2, background:'rgba(255,255,255,0.92)', backdropFilter:'blur(6px)', borderTop:`1px solid ${C.border}`, padding:'14px 4px', display:'flex', gap:12, justifyContent:'flex-end', alignItems:'center' }}>
+        <span style={{ fontSize:12, color:C.muted, marginRight:'auto' }}>Saved as draft — not published to eBay until you list it.</span>
+        <button style={ebayBtn('secondary')} onClick={onCancel}>Cancel</button>
+        {!part && <button style={ebayBtn('secondary')} onClick={handleSaveAndAdd}>Save & add another</button>}
+        <button style={ebayBtn('primary')} onClick={handleSave}>{part ? 'Save changes' : 'Save draft'}</button>
       </div>
     </div>
   )
