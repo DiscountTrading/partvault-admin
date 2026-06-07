@@ -33,17 +33,24 @@ security definer
 set search_path to 'public', 'vault'
 as $function$
 declare
-  v_access_id  uuid;
-  v_refresh_id uuid;
+  v_access_id   uuid;
+  v_refresh_id  uuid;
+  v_access_name  text := 'ebay_access_'  || p_store_id::text;
+  v_refresh_name text := 'ebay_refresh_' || p_store_id::text;
 begin
   select access_token_id, refresh_token_id
     into v_access_id, v_refresh_id
   from public.ebay_tokens
   where store_id = p_store_id;
 
-  -- Access token: create the Vault secret on first connect, else update in place
+  -- Access token. If the row's pointer is null (e.g. after a disconnect) a Vault
+  -- secret with this name may still exist — reuse it rather than create a dup
+  -- (vault.secrets.name is unique).
   if v_access_id is null then
-    v_access_id := vault.create_secret(p_access_token, 'ebay_access_' || p_store_id::text);
+    select id into v_access_id from vault.secrets where name = v_access_name;
+  end if;
+  if v_access_id is null then
+    v_access_id := vault.create_secret(p_access_token, v_access_name);
   else
     perform vault.update_secret(v_access_id, p_access_token);
   end if;
@@ -51,7 +58,10 @@ begin
   -- Refresh token: only touch it if eBay actually returned one
   if coalesce(p_refresh_token, '') <> '' then
     if v_refresh_id is null then
-      v_refresh_id := vault.create_secret(p_refresh_token, 'ebay_refresh_' || p_store_id::text);
+      select id into v_refresh_id from vault.secrets where name = v_refresh_name;
+    end if;
+    if v_refresh_id is null then
+      v_refresh_id := vault.create_secret(p_refresh_token, v_refresh_name);
     else
       perform vault.update_secret(v_refresh_id, p_refresh_token);
     end if;
