@@ -41,9 +41,19 @@ export function useParts(storeId) {
   const channelRef = useRef(null)
 
   const fetch = useCallback(async () => {
+    // No active store yet → nothing to show. (Prevents an unscoped query that
+    // would otherwise return parts from every store the user is a member of.)
+    if (!storeId) {
+      setParts([])
+      setTotalCount(0)
+      setLoading(false)
+      return
+    }
+
     const { count, error: countErr } = await sb
       .from('parts')
       .select('id', { count: 'exact', head: true })
+      .eq('store_id', storeId)
       .is('deleted_at', null)
     if (countErr) {
       console.error('Parts count error:', countErr)
@@ -61,6 +71,7 @@ export function useParts(storeId) {
       const { data, error } = await sb
         .from('parts')
         .select('*')
+        .eq('store_id', storeId)
         .is('deleted_at', null)
         .order('created_at', { ascending: false })
         .range(from, to)
@@ -75,14 +86,16 @@ export function useParts(storeId) {
     setParts(allRows.map(mapRow))
     setSyncStatus('live')
     setLoading(false)
-  }, [])
+  }, [storeId])
 
   useEffect(() => {
+    setLoading(true)
     fetch()
-    channelRef.current = sb.channel('admin-parts-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'parts' }, () => {
-        fetch()
-      })
+    // Scope realtime to this store so another store's edits don't trigger refetches
+    channelRef.current = sb.channel(`admin-parts-realtime-${storeId || 'none'}`)
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'parts', filter: storeId ? `store_id=eq.${storeId}` : undefined },
+        () => { fetch() })
       .subscribe(status => {
         if (status === 'SUBSCRIBED') setSyncStatus('live')
         if (status === 'CHANNEL_ERROR') setSyncStatus('error')
@@ -90,7 +103,7 @@ export function useParts(storeId) {
     return () => {
       if (channelRef.current) sb.removeChannel(channelRef.current)
     }
-  }, [])
+  }, [storeId, fetch])
 
   const addPart = async p => {
     const { data: { user } } = await sb.auth.getUser()
