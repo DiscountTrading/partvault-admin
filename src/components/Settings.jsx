@@ -160,6 +160,20 @@ export default function Settings({ profile, storeId, onSignOut }) {
 
   const loadSettings = async () => {
     if (!storeId) return
+    // Reset per-store state first so a previous store's values can't bleed
+    // through when switching stores (the load below only sets values that exist).
+    setFooter(DEFAULT_FOOTER)
+    setAiSettings(DEFAULT_AI_SETTINGS)
+    setAnthropicKey('')
+    setShipAddress({ addressLine1: '', city: '', stateOrProvince: '', postalCode: '', country: 'AU' })
+    setEbayLocationKey(null)
+    setEbayConnected(false)
+    setEbayExpiry(null)
+    setEbayUsername(null)
+    setEbayUsernameStatus(null)
+    setEbayUsernameError(null)
+    setEbayNeedsReconnect(false)
+    setEbayTestResult(null)
     try {
       const { data } = await sb.from('stores').select('settings').eq('id', storeId).single()
       if (data?.settings) {
@@ -329,7 +343,10 @@ export default function Settings({ profile, storeId, onSignOut }) {
 
   const disconnectEbay = async () => {
     try {
-      await sb.from('ebay_tokens').update({ expires_at: new Date().toISOString() }).eq('store_id', storeId)
+      // ebay_tokens has no UPDATE policy for authenticated — must go through the
+      // admin-gated SECURITY DEFINER RPC, or the write is silently denied by RLS.
+      const { error: dErr } = await sb.rpc('disconnect_ebay', { p_store_id: storeId })
+      if (dErr) throw dErr
       setEbayConnected(false)
       setEbayExpiry(null)
       setEbayUsername(null)
