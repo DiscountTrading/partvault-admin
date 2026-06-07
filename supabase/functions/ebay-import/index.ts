@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.8.0-edge'
+const EDGE_FN_VERSION         = '3.8.1-edge'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 25 * 1000
@@ -407,11 +407,15 @@ async function handleRequest(req: Request): Promise<Response> {
       }
 
       const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString()
-      const { error: updateErr } = await sb.rpc('update_ebay_access_token', {
-        p_store_id:     storeId,
-        p_access_token: tokens.access_token,
-        p_expires_at:   expiresAt,
-        p_expires_in:   tokens.expires_in,
+      // Create-or-update the store's ebay_tokens row and persist BOTH tokens.
+      // (The row no longer pre-exists from a cert-save step, and the refresh
+      //  token must be stored so future silent refreshes work.)
+      const { error: updateErr } = await sb.rpc('store_ebay_oauth_tokens', {
+        p_store_id:      storeId,
+        p_access_token:  tokens.access_token,
+        p_refresh_token: tokens.refresh_token,
+        p_expires_at:    expiresAt,
+        p_expires_in:    tokens.expires_in,
       })
       if (updateErr) throw new Error(`Failed to store token: ${updateErr.message}`)
 
