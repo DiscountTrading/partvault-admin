@@ -76,7 +76,7 @@ function StoreSwitcher({ stores, activeStoreId, setActiveStore, refreshStores })
                   style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, width: '100%', textAlign: 'left', background: isActive ? '#fff4ef' : '#fff', border: 'none', borderTop: `1px solid ${C.border}`, padding: '10px 12px', cursor: 'pointer' }}>
                   <span style={{ minWidth: 0 }}>
                     <span style={{ display: 'block', fontSize: 13, fontWeight: 700, color: C.text }}>{s.store_name}</span>
-                    <span style={{ display: 'block', fontSize: 11, color: C.muted }}>{s.ebay_user ? `eBay: ${s.ebay_user}` : 'eBay not connected'} · {s.role}</span>
+                    <span style={{ display: 'block', fontSize: 11, color: C.muted }}>{s.ebay_connected ? `eBay: ${s.ebay_user || 'connected'}` : 'eBay not connected'} · {s.role}</span>
                   </span>
                   {isActive && <span style={{ color: C.accent, fontWeight: 800 }}>✓</span>}
                 </button>
