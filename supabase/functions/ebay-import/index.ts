@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.8.1-edge'
+const EDGE_FN_VERSION         = '3.8.2-edge'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 25 * 1000
@@ -1114,7 +1114,15 @@ async function handleRequest(req: Request): Promise<Response> {
 
       for (const part of parts) {
         try {
-          const sku         = part.sku
+          // Blocking SKU gate: nothing reaches eBay without a valid SKU. If the
+          // part has none, mint one from the store's format and persist it.
+          let sku = part.sku
+          if (!sku || !String(sku).trim()) {
+            const { data: gen, error: genErr } = await sb.rpc('generate_next_sku', { p_store_id: storeId, p_car_make: part.make || null })
+            if (genErr || !gen) throw new Error(`Cannot create eBay draft without a SKU (auto-generation failed: ${genErr?.message || 'no SKU returned'})`)
+            sku = gen as string
+            await sb.from('parts').update({ sku }).eq('id', part.id)
+          }
           const condition   = CONDITION_MAP[part.condition] || 'USED_GOOD'
           const categoryId  = CATEGORY_ID[part.category]   || '9886'
           const imageUrls   = (part.photos || []).map((p: any) => p.url || p.ebay_url).filter(Boolean).slice(0, 12)

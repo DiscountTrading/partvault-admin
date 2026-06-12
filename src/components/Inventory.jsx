@@ -205,10 +205,17 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
 
   const handlePhoto = e => { Array.from(e.target.files||[]).slice(0,4).forEach(f => compressImg(f, d => setAiPhotos(p => [...p, d]))); e.target.value='' }
 
-  const handleCarChange = carId => {
+  const handleCarChange = async carId => {
     set('car_id', carId)
     const car = cars?.find(c => c.id === carId)
-    if (car) { set('make', car.make||''); set('model', car.model||''); set('year', car.year||'') }
+    if (car) {
+      set('make', car.make||''); set('model', car.model||''); set('year', car.year||'')
+      // Auto-fill the SKU from the store's format if one hasn't been set yet
+      if (!form.sku && storeId) {
+        const { data, error } = await sb.rpc('generate_next_sku', { p_store_id: storeId, p_car_make: car.make || null })
+        if (!error && data) set('sku', data)
+      }
+    }
   }
 
   const handleGenerateDesc = async () => {
@@ -302,7 +309,17 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
           <div style={{ textAlign:'right', fontSize:11, color:titleLen>80?C.red:C.muted, marginTop:4 }}>{titleLen}/80</div>
         </Field>
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
-          <Field label="SKU"><input style={S.input} value={form.sku||''} onChange={e => set('sku', e.target.value)} /></Field>
+          <Field label="SKU">
+            <div style={{ display:'flex', gap:6 }}>
+              <input style={{ ...S.input, flex:1 }} value={form.sku||''} onChange={e => set('sku', e.target.value)} placeholder="Auto-generates when you link a car" />
+              <button type="button" onClick={async () => {
+                if (!storeId) return
+                const car = cars?.find(c => c.id === form.car_id)
+                const { data, error } = await sb.rpc('generate_next_sku', { p_store_id: storeId, p_car_make: car?.make || null })
+                if (!error && data) set('sku', data)
+              }} style={{ ...S.btn('secondary'), padding:'0 14px', whiteSpace:'nowrap' }}>Generate</button>
+            </div>
+          </Field>
           <Field label="OEM Part Number"><input style={S.input} value={form.partNumber||''} onChange={e => set('partNumber', e.target.value)} /></Field>
         </div>
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>

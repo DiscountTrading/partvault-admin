@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { C, S, APP_VERSION } from '../lib/constants'
 import { sb } from '../lib/supabase'
+import { buildSkuPreview, SKU_TOKENS, DEFAULT_SKU_TEMPLATE, DEFAULT_SKU_PAD } from '../lib/sku'
 
 const DEFAULT_FOOTER = `At Cloud9 Auto Parts, we aim to make your buying experience as simple and reliable as possible. All photos shown are of the exact part you will receive, no stock images. We clearly list the compatible models and year ranges in each title, but we always recommend double checking fitment by comparing photos, part numbers, and your own research.
 All parts are genuine used OEM components unless stated otherwise. As they are pre-owned, some items may show minor wear, which we highlight clearly in the photos. Everything we have in stock is listed here on our eBay store.
@@ -94,6 +95,12 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
   const [anthropicKeySaving, setAnthropicKeySaving] = useState(false)
   const [anthropicKeySaved, setAnthropicKeySaved] = useState(false)
 
+  // SKU format (stored in stores.sku_format_config, NOT settings)
+  const [skuTemplate, setSkuTemplate] = useState(DEFAULT_SKU_TEMPLATE)
+  const [skuPad, setSkuPad] = useState(DEFAULT_SKU_PAD)
+  const [skuSaving, setSkuSaving] = useState(false)
+  const [skuSaved, setSkuSaved] = useState(false)
+
   // eBay state
   // (App ID / Cert ID / RuName are platform-level config held server-side in the
   //  edge function — not customer-editable, so no credential state lives here.)
@@ -174,8 +181,14 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
     setEbayUsernameError(null)
     setEbayNeedsReconnect(false)
     setEbayTestResult(null)
+    setSkuTemplate(DEFAULT_SKU_TEMPLATE)
+    setSkuPad(DEFAULT_SKU_PAD)
     try {
-      const { data } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      const { data } = await sb.from('stores').select('settings, sku_format_config').eq('id', storeId).single()
+      if (data?.sku_format_config) {
+        if (data.sku_format_config.template) setSkuTemplate(data.sku_format_config.template)
+        if (data.sku_format_config.seqPad) setSkuPad(data.sku_format_config.seqPad)
+      }
       if (data?.settings) {
         if (data.settings.footer) setFooter(data.settings.footer)
         if (data.settings.aiDescription) setAiSettings(s => ({ ...s, ...data.settings.aiDescription }))
@@ -227,6 +240,23 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
       alert(`Failed to save: ${e.message}`)
     }
     setAnthropicKeySaving(false)
+  }
+
+  const saveSkuFormat = async () => {
+    if (!storeId) return
+    setSkuSaving(true)
+    try {
+      const { data: current } = await sb.from('stores').select('sku_format_config').eq('id', storeId).single()
+      const merged = { ...(current?.sku_format_config || {}), template: skuTemplate.trim() || DEFAULT_SKU_TEMPLATE, seqPad: Number(skuPad) || DEFAULT_SKU_PAD }
+      const { error } = await sb.from('stores').update({ sku_format_config: merged }).eq('id', storeId)
+      if (error) throw error
+      setSkuSaved(true)
+      setTimeout(() => setSkuSaved(false), 2000)
+    } catch (e) {
+      console.error('Save SKU format failed', e)
+      alert(`Failed to save SKU format: ${e.message}`)
+    }
+    setSkuSaving(false)
   }
 
   const handleOAuthCallback = async (code) => {
@@ -1275,6 +1305,49 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
               >
                 {anthropicKeySaving ? 'Saving…' : anthropicKeySaved ? '✓ Saved' : 'Save'}
               </button>
+            </div>
+          </Section>
+          <Section title="SKU Format">
+            <div style={{ fontSize: 13, color: C.muted, marginBottom: 12, lineHeight: 1.5 }}>
+              The template used to auto-generate SKUs for new parts. The running number is store-wide and never reused. Tokens for a part with no linked car simply render empty.
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'stretch', flexWrap: 'wrap', marginBottom: 12 }}>
+              <input
+                value={skuTemplate}
+                onChange={e => setSkuTemplate(e.target.value)}
+                placeholder={DEFAULT_SKU_TEMPLATE}
+                style={{ ...S.input, flex: '1 1 320px', minWidth: 0, fontFamily: 'monospace', fontSize: 13 }}
+              />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <label style={{ fontSize: 12, color: C.muted }}>Pad</label>
+                <input
+                  type="number" min={1} max={8} value={skuPad}
+                  onChange={e => setSkuPad(e.target.value)}
+                  style={{ ...S.input, width: 64, fontSize: 13 }}
+                />
+              </div>
+              <button
+                onClick={saveSkuFormat}
+                disabled={skuSaving}
+                style={{ ...S.btn(skuSaved ? 'success' : 'primary'), padding: '0 20px', whiteSpace: 'nowrap' }}
+              >
+                {skuSaving ? 'Saving…' : skuSaved ? '✓ Saved' : 'Save'}
+              </button>
+            </div>
+            <div style={{ fontSize: 13, marginBottom: 12 }}>
+              <span style={{ color: C.muted }}>Preview: </span>
+              <span style={{ fontFamily: 'monospace', fontWeight: 700, color: C.text, background: '#f4f4f5', borderRadius: 6, padding: '3px 8px' }}>
+                {buildSkuPreview(skuTemplate, skuPad)}
+              </span>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {SKU_TOKENS.map(([tok, desc]) => (
+                <button key={tok} type="button" onClick={() => setSkuTemplate(t => t + tok)}
+                  title={desc}
+                  style={{ fontFamily: 'monospace', fontSize: 12, background: '#fff', border: `1px solid ${C.border}`, borderRadius: 6, padding: '4px 8px', cursor: 'pointer', color: C.text }}>
+                  {tok}
+                </button>
+              ))}
             </div>
           </Section>
           <Section title="Supabase Connection">
