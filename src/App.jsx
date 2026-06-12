@@ -171,7 +171,7 @@ export default function App() {
           />
         )}
         {tab === 'csv' && <CSVHistory storeId={storeId} />}
-        {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} />}
+        {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores} />}
       </main>
       {toast && (
         <div style={{ position: 'fixed', bottom: 24, right: 24, background: toast.color, color: '#fff', padding: '12px 22px', borderRadius: 10, fontSize: 14, fontWeight: 600, zIndex: 1000, boxShadow: '0 8px 30px rgba(0,0,0,0.2)' }}>

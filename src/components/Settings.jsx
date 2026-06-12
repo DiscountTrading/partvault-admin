@@ -80,7 +80,7 @@ function StatCard({ label, value, color, sub }) {
   )
 }
 
-export default function Settings({ profile, storeId, onSignOut }) {
+export default function Settings({ profile, storeId, onSignOut, refreshStores }) {
   const [tab, setTab] = useState('account')
   const [footer, setFooter] = useState(DEFAULT_FOOTER)
   const [aiSettings, setAiSettings] = useState(DEFAULT_AI_SETTINGS)
@@ -324,6 +324,8 @@ export default function Settings({ profile, storeId, onSignOut }) {
           const { data: cur } = await sb.from('stores').select('settings').eq('id', storeId).single()
           const merged = { ...(cur?.settings || {}), ebayUsername: d.username }
           await sb.from('stores').update({ settings: merged }).eq('id', storeId)
+          // Surface the account name (and connection status) in the store switcher
+          refreshStores?.()
         } catch (persistErr) {
           console.warn('Failed to persist eBay username', persistErr)
         }
@@ -364,6 +366,8 @@ export default function Settings({ profile, storeId, onSignOut }) {
       } catch (clearErr) {
         console.warn('Failed to clear persisted eBay username', clearErr)
       }
+      // Keep the store switcher's connection status in sync
+      refreshStores?.()
     } catch (e) {
       console.error('Disconnect failed', e)
     }
