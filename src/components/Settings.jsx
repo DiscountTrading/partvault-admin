@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { C, S, APP_VERSION } from '../lib/constants'
 import { sb } from '../lib/supabase'
 import { buildSkuPreview, SKU_TOKENS, DEFAULT_SKU_TEMPLATE, DEFAULT_SKU_PAD } from '../lib/sku'
+import TeamAccess from './TeamAccess'
 
 const DEFAULT_FOOTER = `At Cloud9 Auto Parts, we aim to make your buying experience as simple and reliable as possible. All photos shown are of the exact part you will receive, no stock images. We clearly list the compatible models and year ranges in each title, but we always recommend double checking fitment by comparing photos, part numbers, and your own research.
 All parts are genuine used OEM components unless stated otherwise. As they are pre-owned, some items may show minor wear, which we highlight clearly in the photos. Everything we have in stock is listed here on our eBay store.
@@ -974,6 +975,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
     { id: 'account', label: '👤 Account' },
     { id: 'descriptions', label: '📝 Descriptions' },
     { id: 'ebay', label: '🛒 eBay Sync' },
+    { id: 'team', label: '👥 User Access' },
   ]
 
   const importProgress = importJob ? (() => {
@@ -1263,6 +1265,9 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
           }}>{t.label}</button>
         ))}
       </div>
+
+      {/* USER ACCESS TAB */}
+      {tab === 'team' && <TeamAccess storeId={storeId} />}
 
       {/* ACCOUNT TAB */}
       {tab === 'account' && (
