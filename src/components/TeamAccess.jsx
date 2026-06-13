@@ -30,6 +30,7 @@ function Section({ title, children }) {
 export default function TeamAccess({ storeId }) {
   const [members, setMembers] = useState([])
   const [edited, setEdited] = useState({})   // user_id -> permissions draft
+  const [meId, setMeId] = useState(null)
   const [joinCode, setJoinCode] = useState('')
   const [loading, setLoading] = useState(true)
   const [noAccess, setNoAccess] = useState(false)
@@ -43,6 +44,8 @@ export default function TeamAccess({ storeId }) {
 
   const load = async () => {
     setLoading(true); setNoAccess(false)
+    const { data: { user } } = await sb.auth.getUser()
+    setMeId(user?.id || null)
     const { data, error } = await sb.rpc('get_store_members', { p_store_id: storeId })
     if (error) { setNoAccess(true); setLoading(false); return }
     const list = data || []
@@ -176,13 +179,19 @@ export default function TeamAccess({ storeId }) {
                       <div style={{ fontWeight: 600, color: C.text }}>{m.name || m.email}</div>
                       <div style={{ fontSize: 11, color: C.muted }}>{m.email}{isOwner ? ' · owner' : ''}</div>
                     </td>
-                    {CAPS.map(([k]) => (
-                      <td key={k} style={{ textAlign: 'center', padding: '10px 6px' }}>
-                        <input type="checkbox" checked={!!perms[k]} disabled={isOwner}
-                          onChange={() => toggle(m.user_id, k)}
-                          style={{ width: 18, height: 18, cursor: isOwner ? 'not-allowed' : 'pointer' }} />
-                      </td>
-                    ))}
+                    {CAPS.map(([k]) => {
+                      // Can't strip your own Manage Users access (anti-lockout)
+                      const lockSelfManage = m.user_id === meId && k === 'manage_users'
+                      const disabled = isOwner || lockSelfManage
+                      return (
+                        <td key={k} style={{ textAlign: 'center', padding: '10px 6px' }}>
+                          <input type="checkbox" checked={!!perms[k]} disabled={disabled}
+                            title={lockSelfManage ? "You can't remove your own Manage Users access" : undefined}
+                            onChange={() => toggle(m.user_id, k)}
+                            style={{ width: 18, height: 18, cursor: disabled ? 'not-allowed' : 'pointer' }} />
+                        </td>
+                      )
+                    })}
                     <td style={{ textAlign: 'center', padding: '10px 6px', whiteSpace: 'nowrap' }}>
                       {isOwner ? <span style={{ color: C.muted, fontSize: 11 }}>full</span> : (
                         <span style={{ display: 'inline-flex', gap: 4 }}>
