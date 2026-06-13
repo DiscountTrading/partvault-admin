@@ -34,6 +34,9 @@ export default function Insights({ storeId }) {
   const [loading, setLoading] = useState(true)
   const [segment, setSegment] = useState('all')
   const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [shelfMin, setShelfMin] = useState('')
+  const [shelfMax, setShelfMax] = useState('')
   const [sort, setSort] = useState({ key: 'days_on_shelf', dir: 'desc' })
 
   useEffect(() => {
@@ -78,10 +81,17 @@ export default function Insights({ storeId }) {
     if (def) setSort(def)
   }
 
+  const statuses = useMemo(() => [...new Set(rows.map(r => r.status).filter(Boolean))].sort(), [rows])
+
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase()
     let list = segmented.list
     if (q) list = list.filter(r => [r.sku, r.title, r.make, r.model].some(v => (v || '').toLowerCase().includes(q)))
+    if (statusFilter !== 'all') list = list.filter(r => r.status === statusFilter)
+    const min = shelfMin === '' ? null : Number(shelfMin)
+    const max = shelfMax === '' ? null : Number(shelfMax)
+    if (min != null && !Number.isNaN(min)) list = list.filter(r => r.days_on_shelf >= min)
+    if (max != null && !Number.isNaN(max)) list = list.filter(r => r.days_on_shelf <= max)
     const { key, dir } = sort
     return [...list].sort((a, b) => {
       const av = a[key], bv = b[key]
@@ -90,7 +100,7 @@ export default function Insights({ storeId }) {
       if (bv == null) return -1
       return dir === 'asc' ? (av > bv ? 1 : -1) : (av < bv ? 1 : -1)
     })
-  }, [segmented, search, sort])
+  }, [segmented, search, statusFilter, shelfMin, shelfMax, sort])
 
   const toggleSort = (key) => setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' })
 
@@ -140,8 +150,30 @@ export default function Insights({ storeId }) {
         ))}
       </div>
 
-      <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search SKU, title, make, model…"
-        style={{ ...S.input, maxWidth: 360, marginBottom: 14 }} />
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search SKU, title, make, model…"
+          style={{ ...S.input, flex: '1 1 260px', minWidth: 0, marginBottom: 0 }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <label style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>Status</label>
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+            style={{ ...S.input, marginBottom: 0, padding: '8px 10px', width: 'auto' }}>
+            <option value="all">All</option>
+            {statuses.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <label style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>On shelf (days)</label>
+          <input type="number" min={0} value={shelfMin} onChange={e => setShelfMin(e.target.value)} placeholder="min"
+            style={{ ...S.input, marginBottom: 0, width: 70, padding: '8px 10px' }} />
+          <span style={{ color: C.muted }}>–</span>
+          <input type="number" min={0} value={shelfMax} onChange={e => setShelfMax(e.target.value)} placeholder="max"
+            style={{ ...S.input, marginBottom: 0, width: 70, padding: '8px 10px' }} />
+        </div>
+        {(statusFilter !== 'all' || shelfMin || shelfMax || search) && (
+          <button onClick={() => { setStatusFilter('all'); setShelfMin(''); setShelfMax(''); setSearch('') }}
+            style={{ ...S.btn('secondary'), padding: '8px 12px', fontSize: 12 }}>Clear</button>
+        )}
+      </div>
 
       {loading ? <div style={{ color: C.muted, padding: 20 }}>Loading…</div> : (
         <div style={{ overflowX: 'auto', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>
