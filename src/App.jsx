@@ -8,6 +8,7 @@ import Dashboard from './components/Dashboard'
 import Inventory from './components/Inventory'
 import CSVHistory from './components/CSVHistory'
 import Settings from './components/Settings'
+import JoinStore from './components/JoinStore'
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊' },
@@ -39,7 +40,9 @@ function SyncBadge({ status }) {
 function StoreSwitcher({ stores, activeStoreId, setActiveStore, refreshStores }) {
   const [open, setOpen] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [joining, setJoining] = useState(false)
   const [newName, setNewName] = useState('')
+  const [joinCode, setJoinCode] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const active = stores.find(s => s.store_id === activeStoreId)
@@ -52,6 +55,18 @@ function StoreSwitcher({ stores, activeStoreId, setActiveStore, refreshStores })
       if (error) throw error
       await refreshStores(data) // data = new store id -> switch to it
       setNewName(''); setCreating(false); setOpen(false)
+    } catch (e) { setErr(e.message) }
+    setBusy(false)
+  }
+
+  const joinStore = async () => {
+    if (!joinCode.trim()) return
+    setBusy(true); setErr('')
+    try {
+      const { data, error } = await sb.rpc('join_store', { p_join_code: joinCode.trim() })
+      if (error) throw error
+      await refreshStores(data)
+      setJoinCode(''); setJoining(false); setOpen(false)
     } catch (e) { setErr(e.message) }
     setBusy(false)
   }
@@ -92,9 +107,23 @@ function StoreSwitcher({ stores, activeStoreId, setActiveStore, refreshStores })
                 </div>
                 {err && <div style={{ fontSize: 11, color: C.red, marginTop: 6 }}>{err}</div>}
               </div>
+            ) : joining ? (
+              <div style={{ borderTop: `1px solid ${C.border}`, padding: 10 }}>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input autoFocus value={joinCode} onChange={e => setJoinCode(e.target.value.toUpperCase())} onKeyDown={e => e.key === 'Enter' && joinStore()}
+                    placeholder="Join code" style={{ flex: 1, border: `1.5px solid ${C.border}`, borderRadius: 6, padding: '7px 10px', fontSize: 13, outline: 'none', fontFamily: 'monospace', fontWeight: 700, letterSpacing: 1 }} />
+                  <button onClick={joinStore} disabled={busy || !joinCode.trim()}
+                    style={{ background: C.accent, color: '#fff', border: 'none', borderRadius: 6, padding: '7px 12px', fontSize: 13, fontWeight: 700, cursor: 'pointer', opacity: (busy || !joinCode.trim()) ? 0.6 : 1 }}>{busy ? '…' : 'Join'}</button>
+                </div>
+                {err && <div style={{ fontSize: 11, color: C.red, marginTop: 6 }}>{err}</div>}
+              </div>
             ) : (
-              <button onClick={() => setCreating(true)}
-                style={{ width: '100%', textAlign: 'left', background: '#fafaf9', border: 'none', borderTop: `1px solid ${C.border}`, padding: '10px 12px', cursor: 'pointer', fontSize: 13, fontWeight: 600, color: C.accent }}>＋ New store</button>
+              <div style={{ display: 'flex', borderTop: `1px solid ${C.border}` }}>
+                <button onClick={() => { setCreating(true); setErr('') }}
+                  style={{ flex: 1, textAlign: 'left', background: '#fafaf9', border: 'none', padding: '10px 12px', cursor: 'pointer', fontSize: 13, fontWeight: 600, color: C.accent }}>＋ New store</button>
+                <button onClick={() => { setJoining(true); setErr('') }}
+                  style={{ flex: 1, textAlign: 'left', background: '#fafaf9', border: 'none', borderLeft: `1px solid ${C.border}`, padding: '10px 12px', cursor: 'pointer', fontSize: 13, fontWeight: 600, color: C.accent }}>↪ Join store</button>
+              </div>
             )}
           </div>
         </>
@@ -141,6 +170,9 @@ export default function App() {
     </div>
   )
   if (!session) return <AuthScreen />
+
+  // Authenticated but not a member of any store yet — let them join with a code.
+  if (!stores || stores.length === 0) return <JoinStore onJoined={(id) => refreshStores(id)} onSignOut={signOut} />
 
   return (
     <div style={S.app}>

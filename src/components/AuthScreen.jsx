@@ -10,13 +10,14 @@ export default function AuthScreen() {
   const [err, setErr] = useState('')
   const [otpSent, setOtpSent] = useState(false)
   const [otp, setOtp] = useState('')
+  const [creating, setCreating] = useState(false) // true = creating a new account
 
   const sendOtp = async () => {
     if (!email) { setErr('Enter your email'); return }
     setLoading(true); setErr('')
     const { error } = await sb.auth.signInWithOtp({
       email,
-      options: { shouldCreateUser: false }
+      options: { shouldCreateUser: creating }
     })
     if (error) setErr(error.message)
     else setOtpSent(true)
@@ -105,12 +106,17 @@ export default function AuthScreen() {
           </div>
           {err && !mode.includes('password') && <div style={{ fontSize:13, color:C.red, marginBottom:12 }}>{err}</div>}
           <button
-            style={{ ...S.btn(), width:'100%', padding:14, fontSize:15, marginBottom:16, opacity: loading ? 0.6 : 1 }}
+            style={{ ...S.btn(), width:'100%', padding:14, fontSize:15, marginBottom:10, opacity: loading ? 0.6 : 1 }}
             onClick={sendOtp}
             disabled={loading}
           >
-            {loading ? '⏳ Sending…' : '✉️ Send Login Code'}
+            {loading ? '⏳ Sending…' : creating ? '✨ Create Account' : '✉️ Send Login Code'}
           </button>
+          <div style={{ textAlign:'center', fontSize:13, marginBottom:16 }}>
+            <span style={{ color:C.accent, cursor:'pointer', fontWeight:600 }} onClick={() => { setCreating(c => !c); setErr('') }}>
+              {creating ? '← I already have an account' : 'First time? Create an account'}
+            </span>
+          </div>
           <div style={{ textAlign:'center', fontSize:12, color:C.muted, marginBottom:16 }}>— or sign in with password —</div>
           {mode === 'password' ? (
             <>
