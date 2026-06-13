@@ -16,7 +16,7 @@ const PRESETS = {
 }
 
 const ADMIN_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/admin-users'
-const PWA_URL = 'https://discounttrading.github.io/PartVault-Mobile/'
+const PWA_URL = 'https://app.partvault.app/'
 
 function Section({ title, children }) {
   return (
