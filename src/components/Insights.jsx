@@ -13,6 +13,16 @@ const SEGMENTS = [
   { id: 'dead',  label: '🪦 Dead stock' },
 ]
 
+// Numeric metrics that support a min–max range filter (blank = unbounded)
+const RANGE_FIELDS = [
+  ['days_on_shelf', 'On shelf (days)'],
+  ['listing_count', '# Listed'],
+  ['total_days_listed', 'Days listed'],
+  ['margin_pct', 'Margin %'],
+  ['profit', 'Profit $'],
+]
+const fieldVal = (r, key) => key === 'profit' ? (r.realized_profit != null ? r.realized_profit : r.potential_profit) : r[key]
+
 const isUnsold = r => r.status !== 'sold' && r.status !== 'scrapped'
 const isDead = r => isUnsold(r) && r.days_on_shelf > DEAD_DAYS && (r.margin_pct == null || r.margin_pct <= DEAD_MARGIN)
 
@@ -35,8 +45,8 @@ export default function Insights({ storeId }) {
   const [segment, setSegment] = useState('all')
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
-  const [shelfMin, setShelfMin] = useState('')
-  const [shelfMax, setShelfMax] = useState('')
+  const [ranges, setRanges] = useState({})       // metric key -> { min, max }
+  const [showFilters, setShowFilters] = useState(false)
   const [sort, setSort] = useState({ key: 'days_on_shelf', dir: 'desc' })
 
   useEffect(() => {
@@ -88,10 +98,14 @@ export default function Insights({ storeId }) {
     let list = segmented.list
     if (q) list = list.filter(r => [r.sku, r.title, r.make, r.model].some(v => (v || '').toLowerCase().includes(q)))
     if (statusFilter !== 'all') list = list.filter(r => r.status === statusFilter)
-    const min = shelfMin === '' ? null : Number(shelfMin)
-    const max = shelfMax === '' ? null : Number(shelfMax)
-    if (min != null && !Number.isNaN(min)) list = list.filter(r => r.days_on_shelf >= min)
-    if (max != null && !Number.isNaN(max)) list = list.filter(r => r.days_on_shelf <= max)
+    for (const [key] of RANGE_FIELDS) {
+      const rg = ranges[key]
+      if (!rg) continue
+      const mn = rg.min === '' || rg.min == null ? null : Number(rg.min)
+      const mx = rg.max === '' || rg.max == null ? null : Number(rg.max)
+      if (mn != null && !Number.isNaN(mn)) list = list.filter(r => { const v = fieldVal(r, key); return v != null && v >= mn })
+      if (mx != null && !Number.isNaN(mx)) list = list.filter(r => { const v = fieldVal(r, key); return v != null && v <= mx })
+    }
     const { key, dir } = sort
     return [...list].sort((a, b) => {
       const av = a[key], bv = b[key]
@@ -100,7 +114,11 @@ export default function Insights({ storeId }) {
       if (bv == null) return -1
       return dir === 'asc' ? (av > bv ? 1 : -1) : (av < bv ? 1 : -1)
     })
-  }, [segmented, search, statusFilter, shelfMin, shelfMax, sort])
+  }, [segmented, search, statusFilter, ranges, sort])
+
+  const setRange = (key, bound, val) => setRanges(rs => ({ ...rs, [key]: { ...rs[key], [bound]: val } }))
+  const anyFilter = statusFilter !== 'all' || search || RANGE_FIELDS.some(([k]) => ranges[k] && (ranges[k].min || ranges[k].max))
+  const clearFilters = () => { setStatusFilter('all'); setSearch(''); setRanges({}) }
 
   const toggleSort = (key) => setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' })
 
@@ -161,19 +179,28 @@ export default function Insights({ storeId }) {
             {statuses.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <label style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>On shelf (days)</label>
-          <input type="number" min={0} value={shelfMin} onChange={e => setShelfMin(e.target.value)} placeholder="min"
-            style={{ ...S.input, marginBottom: 0, width: 70, padding: '8px 10px' }} />
-          <span style={{ color: C.muted }}>–</span>
-          <input type="number" min={0} value={shelfMax} onChange={e => setShelfMax(e.target.value)} placeholder="max"
-            style={{ ...S.input, marginBottom: 0, width: 70, padding: '8px 10px' }} />
-        </div>
-        {(statusFilter !== 'all' || shelfMin || shelfMax || search) && (
-          <button onClick={() => { setStatusFilter('all'); setShelfMin(''); setShelfMax(''); setSearch('') }}
-            style={{ ...S.btn('secondary'), padding: '8px 12px', fontSize: 12 }}>Clear</button>
+        <button onClick={() => setShowFilters(f => !f)}
+          style={{ ...S.btn('secondary'), padding: '8px 12px', fontSize: 13 }}>Filters {showFilters ? '▴' : '▾'}</button>
+        {anyFilter && (
+          <button onClick={clearFilters} style={{ ...S.btn('secondary'), padding: '8px 12px', fontSize: 12 }}>Clear</button>
         )}
       </div>
+
+      {showFilters && (
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', padding: '12px 14px', background: '#fafaf9', border: `1px solid ${C.border}`, borderRadius: 10, marginBottom: 14 }}>
+          {RANGE_FIELDS.map(([key, label]) => (
+            <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <label style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>{label}</label>
+              <input type="number" value={ranges[key]?.min ?? ''} onChange={e => setRange(key, 'min', e.target.value)} placeholder="min"
+                style={{ ...S.input, marginBottom: 0, width: 64, padding: '7px 9px' }} />
+              <span style={{ color: C.muted }}>–</span>
+              <input type="number" value={ranges[key]?.max ?? ''} onChange={e => setRange(key, 'max', e.target.value)} placeholder="max"
+                style={{ ...S.input, marginBottom: 0, width: 64, padding: '7px 9px' }} />
+            </div>
+          ))}
+          <div style={{ fontSize: 11, color: C.muted, alignSelf: 'center' }}>Blank = no limit</div>
+        </div>
+      )}
 
       {loading ? <div style={{ color: C.muted, padding: 20 }}>Loading…</div> : (
         <div style={{ overflowX: 'auto', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>
