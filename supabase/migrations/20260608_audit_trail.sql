@@ -1,126 +1,123 @@
 -- ============================================================================
--- Audit trail: who did what, when. Populated by database triggers so it can't
--- be bypassed or forgotten by application code. Captures auth.uid() (the acting
--- user) on every cars/parts/store_members change. Soft-deletes (deleted_at) and
--- restores are recorded as their real intent, not as generic updates.
+-- Audit trail — REUSE the existing system, don't recreate it.
 --
--- Visible to users with the manage_users capability (and owners). Rows are never
--- updated/deleted by app code — append-only.
+-- The database already has a populated `audit_log` (id, store_id, table_name,
+-- record_id, action, old_data, new_data, changed_by, changed_at) fed by the
+-- generic trigger function `log_audit_event()`, currently attached to jobs,
+-- listings, and parts. This migration:
+--   1. Extends that same logging to `cars`.
+--   2. Logs user-access changes (permissions / add / remove) from the team RPCs.
+--   3. Adds a read-side `get_audit_log` RPC (SECURITY DEFINER, manage_users-gated)
+--      that maps the real columns and synthesises readable summaries.
+-- It does NOT touch the existing table, its rows, or its existing SELECT policy
+-- (the read RPC is SECURITY DEFINER, so it works regardless of that policy).
 -- ============================================================================
 
 begin;
 
-create table if not exists public.audit_log (
-  id          bigint generated always as identity primary key,
-  store_id    uuid not null references public.stores(id) on delete cascade,
-  user_id     uuid references auth.users(id),
-  action      text not null,        -- insert | update | delete | restore | member_added | member_removed | member_updated
-  entity_type text not null,        -- cars | parts | member
-  entity_id   uuid,
-  summary     text,
-  created_at  timestamptz not null default now()
-);
-
-create index if not exists audit_log_store_time on public.audit_log (store_id, created_at desc);
-
-alter table public.audit_log enable row level security;
-
-drop policy if exists audit_log_select on public.audit_log;
-create policy audit_log_select on public.audit_log
-  for select using (public.has_permission(store_id, 'manage_users'));
--- No insert/update/delete policies: only the SECURITY DEFINER triggers write here.
+-- ---------------------------------------------------------------------------
+-- 1. Extend the existing audit logging to cars (same function as parts)
+-- ---------------------------------------------------------------------------
+drop trigger if exists cars_audit on public.cars;
+create trigger cars_audit
+  after insert or update or delete on public.cars
+  for each row execute function public.log_audit_event();
 
 -- ---------------------------------------------------------------------------
--- Trigger: cars & parts
+-- 2. Log user-access changes into the same audit_log. store_members has a
+--    composite key (no single id) so we log explicitly from the RPCs, with
+--    before/after permissions, rather than via a row trigger.
 -- ---------------------------------------------------------------------------
-create or replace function public.audit_cars_parts()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
+create or replace function public.set_member_permissions(p_store_id uuid, p_user_id uuid, p_permissions jsonb)
+returns void language plpgsql security definer set search_path = public
 as $$
-declare
-  v_store uuid; v_id uuid; v_action text; v_summary text;
+declare v_role text; v_old jsonb;
 begin
-  if TG_OP = 'DELETE' then
-    v_store := OLD.store_id; v_id := OLD.id; v_action := 'delete';
-  else
-    v_store := NEW.store_id; v_id := NEW.id; v_action := lower(TG_OP);
-  end if;
-
-  if TG_OP = 'UPDATE' then
-    if NEW.deleted_at is not null and OLD.deleted_at is null then v_action := 'delete';
-    elsif NEW.deleted_at is null and OLD.deleted_at is not null then v_action := 'restore';
-    end if;
-  end if;
-
-  if TG_TABLE_NAME = 'cars' then
-    v_summary := 'car ' || coalesce((case when TG_OP='DELETE' then OLD.make else NEW.make end), '')
-              || ' ' || coalesce((case when TG_OP='DELETE' then OLD.model else NEW.model end), '');
-  else
-    v_summary := 'part ' || coalesce((case when TG_OP='DELETE' then OLD.title else NEW.title end), '');
-    if TG_OP = 'UPDATE' and NEW.status is distinct from OLD.status then
-      v_summary := v_summary || ' (' || coalesce(OLD.status,'') || ' → ' || coalesce(NEW.status,'') || ')';
-    end if;
-  end if;
-
-  insert into public.audit_log (store_id, user_id, action, entity_type, entity_id, summary)
-  values (v_store, auth.uid(), v_action, TG_TABLE_NAME, v_id, v_summary);
-  return null;
+  if not public.has_permission(p_store_id, 'manage_users') then raise exception 'Unauthorised'; end if;
+  select role, permissions into v_role, v_old from public.store_members where store_id = p_store_id and user_id = p_user_id;
+  if v_role is null then raise exception 'Not a member of this store'; end if;
+  if v_role = 'owner' then raise exception 'The store owner always has full access'; end if;
+  update public.store_members set permissions = coalesce(p_permissions, '{}'::jsonb)
+   where store_id = p_store_id and user_id = p_user_id;
+  insert into public.audit_log (id, store_id, table_name, record_id, action, old_data, new_data, changed_by, changed_at)
+  values (gen_random_uuid(), p_store_id, 'store_members', p_user_id, 'UPDATE',
+          jsonb_build_object('permissions', v_old),
+          jsonb_build_object('permissions', coalesce(p_permissions, '{}'::jsonb)),
+          auth.uid(), now());
 end;
 $$;
 
-drop trigger if exists trg_audit_parts on public.parts;
-create trigger trg_audit_parts after insert or update or delete on public.parts
-  for each row execute function public.audit_cars_parts();
-
-drop trigger if exists trg_audit_cars on public.cars;
-create trigger trg_audit_cars after insert or update or delete on public.cars
-  for each row execute function public.audit_cars_parts();
-
--- ---------------------------------------------------------------------------
--- Trigger: store_members (access changes)
--- ---------------------------------------------------------------------------
-create or replace function public.audit_members()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
+create or replace function public.remove_member(p_store_id uuid, p_user_id uuid)
+returns void language plpgsql security definer set search_path = public
 as $$
-declare
-  v_store uuid; v_user uuid; v_action text; v_summary text;
+declare v_role text; v_perms jsonb;
 begin
-  if TG_OP = 'DELETE' then
-    v_store := OLD.store_id; v_user := OLD.user_id; v_action := 'member_removed'; v_summary := 'Removed a member';
-  elsif TG_OP = 'INSERT' then
-    v_store := NEW.store_id; v_user := NEW.user_id; v_action := 'member_added'; v_summary := 'Added a member (' || NEW.role || ')';
-  else
-    v_store := NEW.store_id; v_user := NEW.user_id; v_action := 'member_updated'; v_summary := 'Updated member access';
-  end if;
-
-  insert into public.audit_log (store_id, user_id, action, entity_type, entity_id, summary)
-  values (v_store, auth.uid(), v_action, 'member', v_user, v_summary);
-  return null;
+  if not public.has_permission(p_store_id, 'manage_users') then raise exception 'Unauthorised'; end if;
+  select role, permissions into v_role, v_perms from public.store_members where store_id = p_store_id and user_id = p_user_id;
+  if v_role = 'owner' then raise exception 'The store owner cannot be removed'; end if;
+  delete from public.store_members where store_id = p_store_id and user_id = p_user_id;
+  insert into public.audit_log (id, store_id, table_name, record_id, action, old_data, new_data, changed_by, changed_at)
+  values (gen_random_uuid(), p_store_id, 'store_members', p_user_id, 'DELETE',
+          jsonb_build_object('role', v_role, 'permissions', v_perms), null, auth.uid(), now());
 end;
 $$;
 
-drop trigger if exists trg_audit_members on public.store_members;
-create trigger trg_audit_members after insert or update or delete on public.store_members
-  for each row execute function public.audit_members();
+create or replace function public.join_store(p_join_code text)
+returns uuid language plpgsql security definer set search_path = public
+as $$
+declare s_id uuid;
+begin
+  select id into s_id from public.stores where join_code = upper(trim(p_join_code));
+  if s_id is null then raise exception 'Invalid join code'; end if;
+  insert into public.store_members (user_id, store_id, role, permissions)
+  values (auth.uid(), s_id, 'member', '{"add_edit":true}'::jsonb)
+  on conflict (user_id, store_id) do nothing;
+  if found then
+    insert into public.audit_log (id, store_id, table_name, record_id, action, old_data, new_data, changed_by, changed_at)
+    values (gen_random_uuid(), s_id, 'store_members', auth.uid(), 'INSERT',
+            null, jsonb_build_object('role', 'member', 'permissions', '{"add_edit":true}'::jsonb), auth.uid(), now());
+  end if;
+  return s_id;
+end;
+$$;
 
 -- ---------------------------------------------------------------------------
--- Read RPC for the Activity view (joins the actor's email; manage_users only)
+-- 3. Read RPC for the Activity view — maps real columns, synthesises summaries,
+--    normalises soft-delete (deleted_at) to delete/restore, gates on manage_users.
 -- ---------------------------------------------------------------------------
-create or replace function public.get_audit_log(p_store_id uuid, p_limit int default 200)
-returns table (id bigint, created_at timestamptz, user_email text, action text, entity_type text, summary text)
+create or replace function public.get_audit_log(p_store_id uuid, p_limit int default 300)
+returns table (id uuid, created_at timestamptz, user_email text, action text, entity_type text, summary text)
 language sql security definer stable set search_path = public
 as $$
-  select a.id, a.created_at, u.email, a.action, a.entity_type, a.summary
+  select
+    a.id,
+    a.changed_at,
+    u.email,
+    case
+      when a.table_name = 'store_members' then
+        case lower(a.action) when 'insert' then 'member_added' when 'delete' then 'member_removed' else 'member_updated' end
+      when lower(a.action) = 'update' and (a.new_data->>'deleted_at') is not null and (a.old_data->>'deleted_at') is null then 'delete'
+      when lower(a.action) = 'update' and (a.new_data->>'deleted_at') is null and (a.old_data->>'deleted_at') is not null then 'restore'
+      else lower(a.action)
+    end as action,
+    a.table_name,
+    case a.table_name
+      when 'parts' then 'part ' || coalesce(a.new_data->>'title', a.old_data->>'title', '')
+        || case when lower(a.action) = 'update' and (a.new_data->>'status') is distinct from (a.old_data->>'status')
+                then ' (' || coalesce(a.old_data->>'status','') || ' → ' || coalesce(a.new_data->>'status','') || ')' else '' end
+      when 'cars' then 'car ' || coalesce(a.new_data->>'make', a.old_data->>'make', '') || ' ' || coalesce(a.new_data->>'model', a.old_data->>'model', '')
+      when 'listings' then 'listing ' || coalesce(a.new_data->>'platform_sku', a.old_data->>'platform_sku', '')
+      when 'store_members' then case lower(a.action)
+        when 'insert' then 'user added to store'
+        when 'delete' then 'user removed from store'
+        else 'user access changed' end
+      else a.table_name
+    end as summary
   from public.audit_log a
-  left join auth.users u on u.id = a.user_id
+  left join auth.users u on u.id = a.changed_by
   where a.store_id = p_store_id
     and public.has_permission(p_store_id, 'manage_users')
-  order by a.created_at desc
+  order by a.changed_at desc
   limit greatest(1, least(p_limit, 1000));
 $$;
 
