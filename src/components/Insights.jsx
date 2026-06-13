@@ -94,6 +94,9 @@ export default function Insights({ storeId }) {
 
   const toggleSort = (key) => setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' })
 
+  const RENDER_CAP = 250
+  const shown = visible.slice(0, RENDER_CAP)
+
   const COLS = [
     ['sku', 'SKU', false], ['title', 'Title', false], ['status', 'Status', false],
     ['days_on_shelf', 'On shelf', true], ['listing_count', '# Listed', true],
@@ -156,7 +159,7 @@ export default function Insights({ storeId }) {
             <tbody>
               {visible.length === 0 ? (
                 <tr><td colSpan={COLS.length} style={{ padding: 24, textAlign: 'center', color: C.muted }}>No parts in this view.</td></tr>
-              ) : visible.map(r => (
+              ) : shown.map(r => (
                 <tr key={r.part_id} style={{ borderBottom: `1px solid ${C.border}`, background: isDead(r) ? '#fff7ed' : '#fff' }}>
                   {COLS.map(([key, , num]) => (
                     <td key={key} style={{ textAlign: num ? 'right' : 'left', padding: '9px 12px', color: C.text, whiteSpace: key === 'title' ? 'normal' : 'nowrap', maxWidth: key === 'title' ? 280 : undefined, overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -169,7 +172,9 @@ export default function Insights({ storeId }) {
           </table>
         </div>
       )}
-      <div style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>Showing {visible.length} of {rows.length} parts. Promotion & ad metrics arrive once the eBay Marketing API is connected.</div>
+      <div style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>
+        {visible.length > RENDER_CAP ? `Showing top ${RENDER_CAP} of ${visible.length} matching` : `Showing ${visible.length}`} (of {rows.length} parts). Narrow with a segment or search. Promotion & ad metrics arrive once the eBay Marketing API is connected.
+      </div>
     </div>
   )
 }
