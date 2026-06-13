@@ -1,0 +1,10 @@
+# Supabase project config.
+# project_id is the project ref (from https://mtpektsxaklhedknincs.supabase.co).
+project_id = "mtpektsxaklhedknincs"
+
+# The ebay-import function is called from the browser without a Supabase JWT
+# (it does its own storeId-scoped authorization internally). JWT verification
+# MUST stay off, or the gateway rejects those calls with
+# UNAUTHORIZED_NO_AUTH_HEADER before they reach the function code.
+[functions.ebay-import]
+verify_jwt = false
