@@ -15,16 +15,16 @@ const SEGMENTS = [
 
 // Column definitions drive both the table and the per-column filters.
 const COLS = [
-  { key: 'sku', label: 'SKU', type: 'text', align: 'left' },
-  { key: 'title', label: 'Title', type: 'text', align: 'left' },
-  { key: 'status', label: 'Status', type: 'status', align: 'left' },
-  { key: 'days_on_shelf', label: 'On shelf', type: 'range', align: 'right', unit: 'd' },
-  { key: 'listing_count', label: '# Listed', type: 'range', align: 'right' },
-  { key: 'total_days_listed', label: 'Days listed', type: 'range', align: 'right', unit: 'd' },
-  { key: 'total_cost', label: 'Cost', type: 'range', align: 'right', fmt: 'money' },
-  { key: 'list_price', label: 'Price', type: 'range', align: 'right', fmt: 'money' },
-  { key: 'profit', label: 'Profit', type: 'range', align: 'right', fmt: 'money' },
-  { key: 'margin_pct', label: 'Margin', type: 'range', align: 'right', fmt: 'pct' },
+  { key: 'sku', label: 'SKU', type: 'text', align: 'left', w: 120 },
+  { key: 'title', label: 'Title', type: 'text', align: 'left', w: 300 },
+  { key: 'status', label: 'Status', type: 'status', align: 'left', w: 105 },
+  { key: 'days_on_shelf', label: 'On shelf', type: 'range', align: 'right', unit: 'd', w: 105 },
+  { key: 'listing_count', label: '# Listed', type: 'range', align: 'right', w: 95 },
+  { key: 'total_days_listed', label: 'Days listed', type: 'range', align: 'right', unit: 'd', w: 110 },
+  { key: 'total_cost', label: 'Cost', type: 'range', align: 'right', fmt: 'money', w: 95 },
+  { key: 'list_price', label: 'Price', type: 'range', align: 'right', fmt: 'money', w: 95 },
+  { key: 'profit', label: 'Profit', type: 'range', align: 'right', fmt: 'money', w: 100 },
+  { key: 'margin_pct', label: 'Margin', type: 'range', align: 'right', fmt: 'pct', w: 95 },
 ]
 
 const fieldVal = (r, key) => key === 'profit' ? (r.realized_profit != null ? r.realized_profit : r.potential_profit) : r[key]
@@ -209,15 +209,18 @@ export default function Insights({ storeId }) {
 
       {loading ? <div style={{ color: C.muted, padding: 20 }}>Loading…</div> : (
         <div style={{ overflowX: 'auto', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <table style={{ width: '100%', minWidth: 1100, borderCollapse: 'collapse', fontSize: 13, tableLayout: 'fixed' }}>
+            <colgroup>{COLS.map(c => <col key={c.key} style={{ width: c.w }} />)}</colgroup>
             <thead>
               <tr style={{ borderBottom: `2px solid ${C.border}` }}>
                 {COLS.map(col => (
                   <th key={col.key} style={{ textAlign: 'left', padding: '9px 12px', color: C.muted, fontWeight: 700, fontSize: 11, whiteSpace: 'nowrap', position: 'relative' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-                      <span onClick={() => toggleSort(col.key)} style={{ cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                        <span style={{ width: 9, display: 'inline-block', color: C.accent, fontSize: 10 }}>{sort.key === col.key ? (sort.dir === 'asc' ? '▲' : '▼') : ''}</span>
-                        {col.label}
+                      <span onClick={() => toggleSort(col.key)} style={{ cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', gap: 4, overflow: 'hidden' }}>
+                        <span style={{ width: 9, flexShrink: 0, display: 'inline-block', fontSize: 10, color: sort.key === col.key ? C.text : '#cbd5e1' }}>
+                          {sort.key === col.key ? (sort.dir === 'asc' ? '▲' : '▼') : '↕'}
+                        </span>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{col.label}</span>
                       </span>
                       <button onClick={() => setOpenFilter(o => o === col.key ? null : col.key)}
                         style={{ background: 'none', border: 'none', padding: 2, cursor: 'pointer', lineHeight: 0 }} title="Filter">
