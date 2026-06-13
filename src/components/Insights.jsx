@@ -237,7 +237,7 @@ export default function Insights({ storeId }) {
                                 placeholder={`Contains…`} style={{ ...S.input, marginBottom: 8, fontSize: 13 }} />
                               <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                                 <button onClick={() => clearFilter(col.key)} style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 12 }}>Clear</button>
-                                <button onClick={() => setOpenFilter(null)} style={{ ...S.btn('primary'), padding: '5px 10px', fontSize: 12 }}>Apply</button>
+                                <button onClick={() => setOpenFilter(null)} style={{ ...S.btn('primary'), padding: '5px 10px', fontSize: 12 }}>Done</button>
                               </div>
                             </div>
                           )}
@@ -262,7 +262,7 @@ export default function Insights({ storeId }) {
                               <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>Blank = no limit</div>
                               <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                                 <button onClick={() => clearFilter(col.key)} style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 12 }}>Clear</button>
-                                <button onClick={() => setOpenFilter(null)} style={{ ...S.btn('primary'), padding: '5px 10px', fontSize: 12 }}>Apply</button>
+                                <button onClick={() => setOpenFilter(null)} style={{ ...S.btn('primary'), padding: '5px 10px', fontSize: 12 }}>Done</button>
                               </div>
                             </div>
                           )}
