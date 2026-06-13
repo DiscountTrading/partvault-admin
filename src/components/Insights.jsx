@@ -63,6 +63,8 @@ export default function Insights({ storeId }) {
   const [meId, setMeId] = useState(null)
   const [saving, setSaving] = useState(false)
   const [viewName, setViewName] = useState('')
+  const [selectedViewId, setSelectedViewId] = useState(null)
+  const [viewMenuOpen, setViewMenuOpen] = useState(false)
 
   useEffect(() => {
     if (!storeId) return
@@ -82,7 +84,7 @@ export default function Insights({ storeId }) {
     if (typeof f === 'object') return f.min !== '' && f.min != null || f.max !== '' && f.max != null
     return f !== ''
   }
-  const anyFilter = COLS.some(c => active(c.key))
+  const anyFilter = segment !== 'all' || COLS.some(c => active(c.key))
 
   const summary = useMemo(() => {
     const unsold = rows.filter(isUnsold)
@@ -136,9 +138,11 @@ export default function Insights({ storeId }) {
   const shown = visible.slice(0, RENDER_CAP)
 
   const toggleSort = (key) => setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' })
-  const setFilter = (key, val) => setFilters(f => ({ ...f, [key]: val }))
-  const clearFilter = (key) => { setFilters(f => { const n = { ...f }; delete n[key]; return n }); setOpenFilter(null) }
-  const removeAll = () => { setFilters({}); setOpenFilter(null) }
+  // Any manual change to filters/segment means we're no longer on a saved view.
+  const setFilter = (key, val) => { setFilters(f => ({ ...f, [key]: val })); setSelectedViewId(null) }
+  const clearFilter = (key) => { setFilters(f => { const n = { ...f }; delete n[key]; return n }); setSelectedViewId(null); setOpenFilter(null) }
+  const pickSegment = (id) => { setSegment(id); setSelectedViewId(null) }
+  const removeAll = () => { setFilters({}); setSegment('all'); setSelectedViewId(null); setOpenFilter(null) }
 
   const applyView = (id) => {
     const v = views.find(x => x.id === id)
@@ -147,21 +151,36 @@ export default function Insights({ storeId }) {
     setSegment(cfg.segment || 'all')
     setFilters(cfg.filters || {})
     setSort(cfg.sort || { key: 'days_on_shelf', dir: 'desc' })
+    setSelectedViewId(id)
   }
   const saveView = async () => {
     const name = viewName.trim()
     if (!name || !meId) return
-    setSaving(true)
     const config = { segment, filters, sort }
-    const { error } = await sb.from('saved_views').insert({ user_id: meId, store_id: storeId, name, config })
+    const existing = views.find(v => v.name.toLowerCase() === name.toLowerCase())
+    setSaving(true)
+    if (existing) {
+      if (!confirm(`A view named "${existing.name}" already exists. Replace it?`)) { setSaving(false); return }
+      await sb.from('saved_views').update({ config }).eq('id', existing.id)
+      setSelectedViewId(existing.id)
+    } else {
+      const { data } = await sb.from('saved_views').insert({ user_id: meId, store_id: storeId, name, config }).select().single()
+      if (data) setSelectedViewId(data.id)
+    }
     setSaving(false)
-    if (!error) { setViewName(''); loadViews() }
-  }
-  const deleteView = async (id) => {
-    if (!confirm('Delete this saved view?')) return
-    await sb.from('saved_views').delete().eq('id', id)
+    setViewName('')
     loadViews()
   }
+  const deleteView = async (id) => {
+    if (!confirm('Delete this saved view? This cannot be undone.')) return
+    await sb.from('saved_views').delete().eq('id', id)
+    if (selectedViewId === id) setSelectedViewId(null)
+    loadViews()
+  }
+
+  const currentViewLabel = selectedViewId
+    ? (views.find(v => v.id === selectedViewId)?.name || 'No filter')
+    : (anyFilter ? 'Custom filter' : 'No filter')
 
   const cell = (r, col) => {
     const v = fieldVal(r, col.key)
@@ -186,20 +205,41 @@ export default function Insights({ storeId }) {
       {/* Segments + saved views */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
         {SEGMENTS.map(s => (
-          <button key={s.id} onClick={() => setSegment(s.id)}
+          <button key={s.id} onClick={() => pickSegment(s.id)}
             style={{ padding: '7px 14px', borderRadius: 20, border: `1.5px solid ${segment === s.id ? C.accent : C.border}`, background: segment === s.id ? C.accent : '#fff', color: segment === s.id ? '#fff' : C.muted, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
             {s.label}
           </button>
         ))}
         <div style={{ flex: 1 }} />
         {anyFilter && <button onClick={removeAll} style={{ ...S.btn('secondary'), padding: '7px 12px', fontSize: 12 }}>✕ Remove all filters</button>}
-        {views.length > 0 && (
-          <select onChange={e => { if (e.target.value) applyView(e.target.value) }} defaultValue=""
-            style={{ ...S.input, marginBottom: 0, padding: '7px 10px', width: 'auto' }}>
-            <option value="">Saved views…</option>
-            {views.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
-          </select>
-        )}
+
+        {/* Saved views — always present */}
+        <div style={{ position: 'relative' }}>
+          <button onClick={() => setViewMenuOpen(o => !o)}
+            style={{ ...S.btn('secondary'), padding: '7px 12px', fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6, fontStyle: currentViewLabel === 'Custom filter' ? 'italic' : 'normal' }}>
+            {currentViewLabel} <span style={{ opacity: 0.6 }}>▾</span>
+          </button>
+          {viewMenuOpen && (
+            <>
+              <div onClick={() => setViewMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+              <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, zIndex: 41, background: '#fff', border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: '0 8px 30px rgba(0,0,0,0.15)', minWidth: 210, overflow: 'hidden' }}>
+                <button onClick={() => { removeAll(); setViewMenuOpen(false) }}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', background: (!anyFilter && !selectedViewId) ? '#fff4ef' : '#fff', border: 'none', padding: '9px 12px', cursor: 'pointer', fontSize: 13, fontWeight: 600, color: C.text }}>No filter</button>
+                {views.length === 0 ? (
+                  <div style={{ padding: '9px 12px', fontSize: 12, color: C.muted, borderTop: `1px solid ${C.border}` }}>No saved views yet</div>
+                ) : views.map(v => (
+                  <div key={v.id} style={{ display: 'flex', alignItems: 'center', borderTop: `1px solid ${C.border}`, background: selectedViewId === v.id ? '#fff4ef' : '#fff' }}>
+                    <button onClick={() => { applyView(v.id); setViewMenuOpen(false) }}
+                      style={{ flex: 1, textAlign: 'left', background: 'none', border: 'none', padding: '9px 12px', cursor: 'pointer', fontSize: 13, color: C.text }}>{v.name}</button>
+                    <button onClick={() => deleteView(v.id)} title="Delete view"
+                      style={{ background: 'none', border: 'none', color: C.red, cursor: 'pointer', fontSize: 14, fontWeight: 700, padding: '0 12px' }}>✕</button>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <input value={viewName} onChange={e => setViewName(e.target.value)} placeholder="Save view as…" onKeyDown={e => e.key === 'Enter' && saveView()}
             style={{ ...S.input, marginBottom: 0, padding: '7px 10px', width: 130 }} />
@@ -290,17 +330,10 @@ export default function Insights({ storeId }) {
         </div>
       )}
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, gap: 12, flexWrap: 'wrap' }}>
+      <div style={{ marginTop: 10 }}>
         <span style={{ fontSize: 12, color: C.muted }}>
           {visible.length > RENDER_CAP ? `Showing top ${RENDER_CAP} of ${visible.length} matching` : `Showing ${visible.length}`} (of {rows.length} parts). Promotion & ad metrics arrive with the eBay Marketing API.
         </span>
-        {views.length > 0 && openFilter == null && (
-          <span style={{ fontSize: 11, color: C.muted }}>
-            {views.map(v => (
-              <span key={v.id} style={{ marginLeft: 8 }}>{v.name} <button onClick={() => deleteView(v.id)} style={{ background: 'none', border: 'none', color: C.red, cursor: 'pointer', fontSize: 11 }}>✕</button></span>
-            ))}
-          </span>
-        )}
       </div>
     </div>
   )
