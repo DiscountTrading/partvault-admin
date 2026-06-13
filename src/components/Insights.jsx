@@ -213,20 +213,21 @@ export default function Insights({ storeId }) {
             <thead>
               <tr style={{ borderBottom: `2px solid ${C.border}` }}>
                 {COLS.map(col => (
-                  <th key={col.key} style={{ textAlign: col.align, padding: '9px 12px', color: C.muted, fontWeight: 700, fontSize: 11, whiteSpace: 'nowrap', position: 'relative' }}>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexDirection: col.align === 'right' ? 'row-reverse' : 'row' }}>
-                      <span onClick={() => toggleSort(col.key)} style={{ cursor: 'pointer', userSelect: 'none' }}>
-                        {col.label}{sort.key === col.key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
+                  <th key={col.key} style={{ textAlign: 'left', padding: '9px 12px', color: C.muted, fontWeight: 700, fontSize: 11, whiteSpace: 'nowrap', position: 'relative' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                      <span onClick={() => toggleSort(col.key)} style={{ cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        <span style={{ width: 9, display: 'inline-block', color: C.accent, fontSize: 10 }}>{sort.key === col.key ? (sort.dir === 'asc' ? '▲' : '▼') : ''}</span>
+                        {col.label}
                       </span>
                       <button onClick={() => setOpenFilter(o => o === col.key ? null : col.key)}
                         style={{ background: 'none', border: 'none', padding: 2, cursor: 'pointer', lineHeight: 0 }} title="Filter">
                         <FunnelIcon active={active(col.key)} />
                       </button>
-                    </span>
+                    </div>
                     {openFilter === col.key && (
                       <>
                         <div onClick={() => setOpenFilter(null)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-                        <div style={{ position: 'absolute', top: '100%', [col.align === 'right' ? 'right' : 'left']: 8, marginTop: 4, zIndex: 41, background: '#fff', border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: '0 8px 30px rgba(0,0,0,0.15)', padding: 12, minWidth: 180 }}>
+                        <div style={{ position: 'absolute', top: '100%', right: 8, marginTop: 4, zIndex: 41, background: '#fff', border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: '0 8px 30px rgba(0,0,0,0.15)', padding: 12, minWidth: 180 }}>
                           {col.type === 'text' && (
                             <div>
                               <input autoFocus value={filters[col.key] || ''} onChange={e => setFilter(col.key, e.target.value)} onKeyDown={e => e.key === 'Enter' && setOpenFilter(null)}
