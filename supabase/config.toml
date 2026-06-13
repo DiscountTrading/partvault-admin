@@ -8,3 +8,8 @@ project_id = "mtpektsxaklhedknincs"
 # UNAUTHORIZED_NO_AUTH_HEADER before they reach the function code.
 [functions.ebay-import]
 verify_jwt = false
+
+# admin-users does its own auth (verifies the caller's JWT + manage_users in
+# code), and JWT-at-gateway would reject the browser's CORS preflight. Off.
+[functions.admin-users]
+verify_jwt = false

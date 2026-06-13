@@ -15,6 +15,9 @@ const PRESETS = {
   Admin: { add_edit: true, delete: true, publish: true, settings: true, manage_users: true },
 }
 
+const ADMIN_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/admin-users'
+const PWA_URL = 'https://discounttrading.github.io/PartVault-Mobile/'
+
 function Section({ title, children }) {
   return (
     <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 14, padding: '18px 22px', marginBottom: 16, boxShadow: '0 1px 2px rgba(0,0,0,0.04)' }}>
@@ -32,6 +35,11 @@ export default function TeamAccess({ storeId }) {
   const [noAccess, setNoAccess] = useState(false)
   const [savingId, setSavingId] = useState(null)
   const [toast, setToast] = useState('')
+  const [showInvite, setShowInvite] = useState(false)
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [invitePreset, setInvitePreset] = useState('Worker')
+  const [inviting, setInviting] = useState(false)
+  const [inviteErr, setInviteErr] = useState('')
 
   const load = async () => {
     setLoading(true); setNoAccess(false)
@@ -62,6 +70,26 @@ export default function TeamAccess({ storeId }) {
     load()
   }
 
+  const inviteUser = async () => {
+    const email = inviteEmail.trim()
+    if (!email) return
+    setInviting(true); setInviteErr('')
+    try {
+      const { data: { session } } = await sb.auth.getSession()
+      const res = await fetch(ADMIN_FN, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ action: 'invite_member', storeId, email, permissions: PRESETS[invitePreset], redirectTo: PWA_URL }),
+      })
+      const d = await res.json()
+      if (!res.ok || d.error) throw new Error(d.error || 'Invite failed')
+      setShowInvite(false); setInviteEmail(''); setInvitePreset('Worker')
+      flash(d.alreadyMember ? 'Already a member' : d.emailed ? '✓ Invite emailed' : '✓ Added (existing user)')
+      load()
+    } catch (e) { setInviteErr(e.message) }
+    setInviting(false)
+  }
+
   const removeMember = async (uid, email) => {
     if (!confirm(`Remove ${email} from this store? They'll lose all access.`)) return
     const { error } = await sb.rpc('remove_member', { p_store_id: storeId, p_user_id: uid })
@@ -86,14 +114,44 @@ export default function TeamAccess({ storeId }) {
   return (
     <>
       <Section title="Invite someone">
-        <div style={{ fontSize: 13, color: C.muted, marginBottom: 10, lineHeight: 1.5 }}>
-          Share this store's join code. A new person creates their own PartVault account, enters the code, and joins as a worker (Add/Edit only) — you then grant more below.
+        <div style={{ fontSize: 13, color: C.muted, marginBottom: 12, lineHeight: 1.5 }}>
+          Email them an invite link (creates their account and lets them click to join), or share the join code for them to enter themselves.
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontFamily: 'monospace', fontSize: 20, fontWeight: 800, letterSpacing: '2px', color: C.text, background: '#f4f4f5', borderRadius: 8, padding: '8px 16px' }}>{joinCode || '—'}</span>
-          <button onClick={() => { navigator.clipboard?.writeText(joinCode); flash('✓ Copied') }} style={{ ...S.btn('secondary'), padding: '8px 14px' }}>Copy</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <button onClick={() => { setShowInvite(true); setInviteErr('') }} style={{ ...S.btn('primary'), padding: '10px 18px' }}>✉️ Invite by email</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 12, color: C.muted }}>or join code:</span>
+            <span style={{ fontFamily: 'monospace', fontSize: 18, fontWeight: 800, letterSpacing: '2px', color: C.text, background: '#f4f4f5', borderRadius: 8, padding: '6px 14px' }}>{joinCode || '—'}</span>
+            <button onClick={() => { navigator.clipboard?.writeText(joinCode); flash('✓ Copied') }} style={{ ...S.btn('secondary'), padding: '6px 12px' }}>Copy</button>
+          </div>
         </div>
       </Section>
+
+      {showInvite && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div style={{ background: '#fff', borderRadius: 14, padding: 24, width: '100%', maxWidth: 400 }}>
+            <div style={{ fontSize: 17, fontWeight: 700, color: C.text, marginBottom: 14 }}>Invite by email</div>
+            <label style={S.label}>Email</label>
+            <input style={S.input} type="email" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && inviteUser()} placeholder="person@example.com" autoFocus />
+            <label style={{ ...S.label, marginTop: 14 }}>Access level</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {Object.keys(PRESETS).map(p => (
+                <button key={p} onClick={() => setInvitePreset(p)}
+                  style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: `1.5px solid ${invitePreset === p ? C.accent : C.border}`, background: invitePreset === p ? C.accent : '#fff', color: invitePreset === p ? '#fff' : C.text, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>{p}</button>
+              ))}
+            </div>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>You can fine-tune their permissions in the table after they join.</div>
+            {inviteErr && <div style={{ fontSize: 13, color: C.red, marginTop: 12 }}>{inviteErr}</div>}
+            <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+              <button onClick={() => setShowInvite(false)} style={{ ...S.btn('secondary'), flex: 1 }}>Cancel</button>
+              <button onClick={inviteUser} disabled={inviting || !inviteEmail.trim()} style={{ ...S.btn('primary'), flex: 2, opacity: (inviting || !inviteEmail.trim()) ? 0.6 : 1 }}>
+                {inviting ? 'Sending…' : 'Send Invite'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <Section title="User Access">
         <div style={{ overflowX: 'auto' }}>
