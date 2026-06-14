@@ -41,7 +41,14 @@ export default function Publish({ storeId }) {
   })
 
   const selectedParts = parts.filter(p => sel.has(p.id))
-  const photoOf = p => p.primary_photo || (p.photos || [])[0]?.url || (p.photos || [])[0]?.ebay_url
+  // parts.photos is text[] where each entry may be a plain URL or a stringified
+  // {"url":...} / {"ebay_url":...}; primary_photo (from the photos table) is a plain URL.
+  const urlFrom = (v) => {
+    if (!v) return null
+    if (typeof v === 'object') return v.url || v.ebay_url || null
+    try { const o = JSON.parse(v); return o.url || o.ebay_url || v } catch { return v }
+  }
+  const photoOf = p => p.primary_photo || urlFrom((p.photos || [])[0])
   const issues = p => {
     const out = []
     if (!photoOf(p)) out.push('no photo')
