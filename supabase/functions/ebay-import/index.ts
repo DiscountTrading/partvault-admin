@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.9.1-edge'
+const EDGE_FN_VERSION         = '3.9.2-edge'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 25 * 1000
@@ -1093,8 +1093,8 @@ async function handleRequest(req: Request): Promise<Response> {
 
       const CONDITION_MAP: Record<string, string> = {
         'Used – Excellent': 'USED_EXCELLENT',
-        'Used – Good':      'USED_GOOD',
-        'Used – Fair':      'USED_ACCEPTABLE',
+        'Used – Good':      'USED_EXCELLENT',
+        'Used – Fair':      'USED_EXCELLENT',
         'For Parts Only':   'FOR_PARTS_OR_NOT_WORKING',
         'Refurbished':      'SELLER_REFURBISHED',
       }
@@ -1250,8 +1250,11 @@ async function handleRequest(req: Request): Promise<Response> {
       if (!returnPolicyId)      throw new Error('No return policy on eBay account — set one up in eBay Seller Hub first')
       if (!merchantLocationKey) throw new Error('No inventory location — set it up in Settings → eBay first')
 
+      // Auto-parts categories only accept "Used" (id 3000 = USED_EXCELLENT enum),
+      // "For parts" (7000), "New" (1000), or Refurbished — NOT the graded
+      // USED_GOOD/USED_ACCEPTABLE conditions (those are media-only).
       const CONDITION_MAP: Record<string, string> = {
-        'Used – Excellent': 'USED_EXCELLENT', 'Used – Good': 'USED_GOOD', 'Used – Fair': 'USED_ACCEPTABLE',
+        'Used – Excellent': 'USED_EXCELLENT', 'Used – Good': 'USED_EXCELLENT', 'Used – Fair': 'USED_EXCELLENT',
         'For Parts Only': 'FOR_PARTS_OR_NOT_WORKING', 'Refurbished': 'SELLER_REFURBISHED',
       }
       const CATEGORY_ID: Record<string, string> = {
