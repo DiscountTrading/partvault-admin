@@ -6,7 +6,6 @@ import { C, S, APP_VERSION } from './lib/constants'
 import AuthScreen from './components/AuthScreen'
 import Dashboard from './components/Dashboard'
 import Inventory from './components/Inventory'
-import CSVHistory from './components/CSVHistory'
 import Settings from './components/Settings'
 import JoinStore from './components/JoinStore'
 import Insights from './components/Insights'
@@ -15,7 +14,6 @@ const TABS = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊' },
   { id: 'inventory', label: 'Inventory', icon: '📦' },
   { id: 'insights', label: 'Insights', icon: '📈' },
-  { id: 'csv', label: 'CSV History', icon: '📄' },
   { id: 'settings', label: 'Settings', icon: '⚙️' },
 ]
 
@@ -206,7 +204,6 @@ export default function App() {
           />
         )}
         {tab === 'insights' && <Insights storeId={storeId} />}
-        {tab === 'csv' && <CSVHistory storeId={storeId} />}
         {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores} />}
       </main>
       {toast && (
