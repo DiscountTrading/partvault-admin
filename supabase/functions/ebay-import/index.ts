@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.9.0-edge'
+const EDGE_FN_VERSION         = '3.9.1-edge'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 25 * 1000
@@ -1281,7 +1281,15 @@ async function handleRequest(req: Request): Promise<Response> {
 
           const condition  = CONDITION_MAP[part.condition] || 'USED_GOOD'
           const categoryId = CATEGORY_ID[part.category]    || '9886'
-          const imageUrls  = (part.photos || []).map((p: any) => p.url || p.ebay_url).filter(Boolean).slice(0, 12)
+          // Images come from the normalized photos table (covers imported parts);
+          // fall back to the legacy parts.photos column if none are there.
+          const { data: phRows } = await sb.from('photos')
+            .select('url, ebay_url, is_primary, display_order')
+            .eq('parent_type', 'part').eq('parent_id', part.id)
+            .order('is_primary', { ascending: false }).order('display_order', { ascending: true })
+          let imageUrls = (phRows || []).map((r: any) => r.url || r.ebay_url).filter(Boolean)
+          if (!imageUrls.length) imageUrls = (part.photos || []).map((p: any) => p.url || p.ebay_url).filter(Boolean)
+          imageUrls = imageUrls.slice(0, 12)
           const aspects: Record<string, string[]> = {}
           if (part.make)  aspects['Make']  = [part.make]
           if (part.model) aspects['Model'] = [part.model]

@@ -16,7 +16,7 @@ export default function Publish({ storeId }) {
 
   const load = async () => {
     setLoading(true)
-    const { data } = await sb.from('parts').select('*').eq('store_id', storeId).eq('status', 'in_stock').is('deleted_at', null).order('created_at', { ascending: false })
+    const { data } = await sb.from('parts_for_listing').select('*').eq('store_id', storeId).eq('status', 'in_stock').is('deleted_at', null).order('created_at', { ascending: false })
     setParts(data || [])
     setSel(new Set())
     setLoading(false)
@@ -41,7 +41,7 @@ export default function Publish({ storeId }) {
   })
 
   const selectedParts = parts.filter(p => sel.has(p.id))
-  const photoOf = p => (p.photos || [])[0]?.url || (p.photos || [])[0]?.ebay_url
+  const photoOf = p => p.primary_photo || (p.photos || [])[0]?.url || (p.photos || [])[0]?.ebay_url
   const issues = p => {
     const out = []
     if (!photoOf(p)) out.push('no photo')
