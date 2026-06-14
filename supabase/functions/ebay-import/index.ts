@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.11.0-edge'
+const EDGE_FN_VERSION         = '3.11.1-edge'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 25 * 1000
@@ -1431,12 +1431,12 @@ async function handleRequest(req: Request): Promise<Response> {
           if (!pubRes.ok) throw new Error(pubData.errors?.[0]?.message || `Publish error ${pubRes.status}`)
           const listingId = pubData.listingId
 
-          // 4. Record it — part now listed, listing row marked published
+          // 4. Record it — part now listed; listing 'active' (matches reconcile/import)
           await sb.from('parts').update({ status: 'listed' }).eq('id', part.id)
           await sb.from('listings').delete().eq('part_id', part.id).eq('platform', 'ebay').neq('status', 'sold')
           await sb.from('listings').insert({
             store_id: storeId, part_id: part.id, platform: 'ebay',
-            platform_listing_id: listingId, platform_sku: sku, status: 'published',
+            platform_listing_id: listingId, platform_sku: sku, status: 'active',
             list_price: part.list_price, listed_at: new Date().toISOString(),
             platform_data: { offerId, listingId, sku }, photos: part.photos || [], photos_archived: false,
           })
