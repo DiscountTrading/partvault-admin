@@ -141,6 +141,9 @@ export default function App() {
   const [footer, setFooter] = useState(DEFAULT_FOOTER)
   const [cars, setCars] = useState([])
 
+  // Name this window so the field app's "Open Admin" link returns to this tab
+  useEffect(() => { window.name = 'partvault-admin' }, [])
+
   // Load store settings and cars on mount / when the active store changes
   useEffect(() => {
     if (!storeId) return
