@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.10.0-edge'
+const EDGE_FN_VERSION         = '3.10.1-edge'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 25 * 1000
@@ -1320,12 +1320,18 @@ async function handleRequest(req: Request): Promise<Response> {
           if (part.model) aspects['Model'] = [part.model]
           if (part.year)  aspects['Year']  = [String(part.year)]
 
+          // eBay requires a package weight (grams). Use the part's weight, else
+          // the store default (settings.defaultWeightG), else 1000g.
+          const weightG = Math.round((+part.weight > 0 ? +part.weight : (storeRow?.settings?.defaultWeightG ?? 1000)))
+
           // 1. Create/replace the inventory item (PUT is idempotent)
           const invRes = await fetch(`https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, {
             method: 'PUT', headers: ebayHeaders,
             body: JSON.stringify({
               product: { title: part.title, description: part.notes || part.title, aspects, ...(imageUrls.length ? { imageUrls } : {}) },
-              condition, availability: { shipToLocationAvailability: { quantity: 1 } },
+              condition,
+              availability: { shipToLocationAvailability: { quantity: 1 } },
+              packageWeightAndSize: { weight: { value: weightG, unit: 'GRAM' } },
             }),
           })
           if (!invRes.ok && invRes.status !== 204) {
