@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.8.2-edge'
+const EDGE_FN_VERSION         = '3.9.0-edge'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 25 * 1000
@@ -1202,6 +1202,156 @@ async function handleRequest(req: Request): Promise<Response> {
       }
 
       return json({ drafted, failed, errors })
+    }
+
+    if (action === 'publish_listings') {
+      // ── Authorize: caller must hold the 'publish' capability for this store ──
+      const authHeader = req.headers.get('Authorization') || ''
+      const userClient = createClient(
+        Deno.env.get('SUPABASE_URL')!,
+        Deno.env.get('SUPABASE_ANON_KEY')!,
+        { global: { headers: { Authorization: authHeader } } }
+      )
+      const { data: allowed, error: permErr } = await userClient.rpc('has_permission', { p_store_id: storeId, p_capability: 'publish' })
+      if (permErr) throw permErr
+      if (!allowed) return json({ error: 'You do not have permission to publish listings for this store' }, 403)
+
+      const { token } = await getToken()
+      const partIds: string[] = body.partIds ?? []
+      if (!partIds.length) throw new Error('No part IDs provided')
+
+      const { data: parts, error: partsErr } = await sb
+        .from('parts').select('*').in('id', partIds).eq('store_id', storeId)
+      if (partsErr) throw partsErr
+      if (!parts?.length) throw new Error('No parts found')
+
+      const ebayHeaders = {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Accept-Language': 'en-AU',
+        'Content-Language': 'en-AU',
+        'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU',
+      }
+
+      const [fpRes, ppRes, rpRes, locRes] = await Promise.all([
+        fetch('https://api.ebay.com/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_AU', { headers: ebayHeaders }),
+        fetch('https://api.ebay.com/sell/account/v1/payment_policy?marketplace_id=EBAY_AU', { headers: ebayHeaders }),
+        fetch('https://api.ebay.com/sell/account/v1/return_policy?marketplace_id=EBAY_AU', { headers: ebayHeaders }),
+        fetch('https://api.ebay.com/sell/inventory/v1/location', { headers: ebayHeaders }),
+      ])
+      const [fpData, ppData, rpData, locData] = await Promise.all([fpRes.json(), ppRes.json(), rpRes.json(), locRes.json()])
+      const fulfillmentPolicyId  = fpData.fulfillmentPolicies?.[0]?.fulfillmentPolicyId
+      const paymentPolicyId      = ppData.paymentPolicies?.[0]?.paymentPolicyId
+      const returnPolicyId       = rpData.returnPolicies?.[0]?.returnPolicyId
+      const merchantLocationKey  = locData.locations?.[0]?.merchantLocationKey
+      if (!fulfillmentPolicyId) throw new Error('No fulfillment policy on eBay account — set one up in eBay Seller Hub first')
+      if (!paymentPolicyId)     throw new Error('No payment policy on eBay account — set one up in eBay Seller Hub first')
+      if (!returnPolicyId)      throw new Error('No return policy on eBay account — set one up in eBay Seller Hub first')
+      if (!merchantLocationKey) throw new Error('No inventory location — set it up in Settings → eBay first')
+
+      const CONDITION_MAP: Record<string, string> = {
+        'Used – Excellent': 'USED_EXCELLENT', 'Used – Good': 'USED_GOOD', 'Used – Fair': 'USED_ACCEPTABLE',
+        'For Parts Only': 'FOR_PARTS_OR_NOT_WORKING', 'Refurbished': 'SELLER_REFURBISHED',
+      }
+      const CATEGORY_ID: Record<string, string> = {
+        'Air & Fuel Delivery':'33549','Air Conditioning & Heating':'33542','Brakes & Brake Parts':'33559',
+        'Engines & Engine Parts':'33612','Engine Cooling':'33599','Exhaust & Emission':'33605',
+        'Exterior Parts':'33637','Ignition Systems':'33687','Interior Parts':'33694',
+        'Lighting & Bulbs':'33707','Starters, Alternators & Wiring':'33572','Steering & Suspension':'33579',
+        'Transmission & Drivetrain':'33726','Wheels, Tyres & Parts':'33743','Towing Parts':'180143',
+        'Other Car & Truck Parts':'9886','Legacy Items':'9886',
+      }
+
+      let published = 0
+      let failed = 0
+      const errors: any[] = []
+      const results: any[] = []
+
+      for (const part of parts) {
+        try {
+          // Blocking SKU gate
+          let sku = part.sku
+          if (!sku || !String(sku).trim()) {
+            const { data: gen, error: genErr } = await sb.rpc('generate_next_sku', { p_store_id: storeId, p_car_make: part.make || null })
+            if (genErr || !gen) throw new Error(`Cannot list without a SKU (auto-generation failed: ${genErr?.message || 'no SKU'})`)
+            sku = gen as string
+            await sb.from('parts').update({ sku }).eq('id', part.id)
+          }
+
+          const condition  = CONDITION_MAP[part.condition] || 'USED_GOOD'
+          const categoryId = CATEGORY_ID[part.category]    || '9886'
+          const imageUrls  = (part.photos || []).map((p: any) => p.url || p.ebay_url).filter(Boolean).slice(0, 12)
+          const aspects: Record<string, string[]> = {}
+          if (part.make)  aspects['Make']  = [part.make]
+          if (part.model) aspects['Model'] = [part.model]
+          if (part.year)  aspects['Year']  = [String(part.year)]
+
+          // 1. Create/replace the inventory item (PUT is idempotent)
+          const invRes = await fetch(`https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, {
+            method: 'PUT', headers: ebayHeaders,
+            body: JSON.stringify({
+              product: { title: part.title, description: part.notes || part.title, aspects, ...(imageUrls.length ? { imageUrls } : {}) },
+              condition, availability: { shipToLocationAvailability: { quantity: 1 } },
+            }),
+          })
+          if (!invRes.ok && invRes.status !== 204) {
+            throw new Error(`Inventory item ${invRes.status}: ${(await invRes.text()).slice(0, 300)}`)
+          }
+
+          // 2. Create the offer — or reuse an existing one for this SKU
+          const offerBody = {
+            sku, marketplaceId: 'EBAY_AU', format: 'FIXED_PRICE',
+            listingDescription: part.notes || part.title,
+            pricingSummary: { price: { value: String(part.list_price), currency: 'AUD' } },
+            categoryId, merchantLocationKey,
+            listingPolicies: { fulfillmentPolicyId, paymentPolicyId, returnPolicyId },
+            quantityLimitPerBuyer: 1,
+          }
+          let offerId: string | undefined
+          const offerRes = await fetch('https://api.ebay.com/sell/inventory/v1/offer', { method: 'POST', headers: ebayHeaders, body: JSON.stringify(offerBody) })
+          if (offerRes.ok) {
+            offerId = (await offerRes.json()).offerId
+          } else {
+            const offerData = await offerRes.json()
+            const msg = offerData.errors?.[0]?.message || ''
+            if (offerRes.status === 409 || /already exists/i.test(msg)) {
+              const getRes = await fetch(`https://api.ebay.com/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}&marketplace_id=EBAY_AU`, { headers: ebayHeaders })
+              offerId = (await getRes.json()).offers?.[0]?.offerId
+              if (!offerId) throw new Error('Offer already exists but could not be retrieved')
+              // keep price/policies current on the existing offer
+              await fetch(`https://api.ebay.com/sell/inventory/v1/offer/${offerId}`, { method: 'PUT', headers: ebayHeaders, body: JSON.stringify(offerBody) })
+            } else {
+              throw new Error(msg || `Offer error ${offerRes.status}`)
+            }
+          }
+
+          // 3. PUBLISH — this makes the listing LIVE on eBay
+          const pubRes = await fetch(`https://api.ebay.com/sell/inventory/v1/offer/${offerId}/publish`, { method: 'POST', headers: ebayHeaders })
+          const pubData = await pubRes.json()
+          if (!pubRes.ok) throw new Error(pubData.errors?.[0]?.message || `Publish error ${pubRes.status}`)
+          const listingId = pubData.listingId
+
+          // 4. Record it — part now listed, listing row marked published
+          await sb.from('parts').update({ status: 'listed' }).eq('id', part.id)
+          await sb.from('listings').delete().eq('part_id', part.id).eq('platform', 'ebay').neq('status', 'sold')
+          await sb.from('listings').insert({
+            store_id: storeId, part_id: part.id, platform: 'ebay',
+            platform_listing_id: listingId, platform_sku: sku, status: 'published',
+            list_price: part.list_price, listed_at: new Date().toISOString(),
+            platform_data: { offerId, listingId, sku }, photos: part.photos || [], photos_archived: false,
+          })
+
+          published++
+          results.push({ partId: part.id, sku, listingId })
+        } catch (e: any) {
+          failed++
+          errors.push({ partId: part.id, sku: part.sku, error: e.message })
+          console.error(`Publish failed for ${part.sku}:`, e.message)
+        }
+      }
+
+      return json({ published, failed, errors, results })
     }
 
     if (action === 'get_ebay_username') {

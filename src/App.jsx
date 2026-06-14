@@ -9,10 +9,12 @@ import Inventory from './components/Inventory'
 import Settings from './components/Settings'
 import JoinStore from './components/JoinStore'
 import Insights from './components/Insights'
+import Publish from './components/Publish'
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊' },
   { id: 'inventory', label: 'Inventory', icon: '📦' },
+  { id: 'publish', label: 'List to eBay', icon: '🛒' },
   { id: 'insights', label: 'Insights', icon: '📈' },
   { id: 'settings', label: 'Settings', icon: '⚙️' },
 ]
@@ -206,6 +208,7 @@ export default function App() {
             aiSettings={aiSettings} footer={footer}
           />
         )}
+        {tab === 'publish' && <Publish storeId={storeId} />}
         {tab === 'insights' && <Insights storeId={storeId} />}
         {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores} />}
       </main>
