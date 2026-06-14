@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.11.1-edge'
+const EDGE_FN_VERSION         = '3.12.0-edge'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 25 * 1000
@@ -1451,6 +1451,65 @@ async function handleRequest(req: Request): Promise<Response> {
       }
 
       return json({ published, failed, errors, results })
+    }
+
+    if (action === 'delist_listings') {
+      // End live eBay listings for the selected parts, optionally binning the parts.
+      const authHeader = req.headers.get('Authorization') || ''
+      const userClient = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: authHeader } } })
+      const { data: canPub } = await userClient.rpc('has_permission', { p_store_id: storeId, p_capability: 'publish' })
+      if (!canPub) return json({ error: 'You do not have permission to manage eBay listings for this store' }, 403)
+      const bin = !!body.bin
+      if (bin) {
+        const { data: canDel } = await userClient.rpc('has_permission', { p_store_id: storeId, p_capability: 'delete' })
+        if (!canDel) return json({ error: 'You need Delete permission to bin parts' }, 403)
+      }
+
+      const { token, certId } = await getToken()
+      const partIds: string[] = body.partIds ?? []
+      if (!partIds.length) throw new Error('No part IDs provided')
+
+      const ebayHeaders = {
+        'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Accept': 'application/json',
+        'Accept-Language': 'en-AU', 'Content-Language': 'en-AU', 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU',
+      }
+      const now = new Date().toISOString()
+      let delisted = 0
+      let failed = 0
+      const errors: any[] = []
+
+      for (const partId of partIds) {
+        try {
+          const { data: listings } = await sb.from('listings').select('*')
+            .eq('part_id', partId).eq('platform', 'ebay').eq('status', 'active').is('deleted_at', null)
+          for (const listing of (listings || [])) {
+            const offerId = listing.platform_data?.offerId
+            if (offerId) {
+              // Listings we published — withdraw the offer
+              const r = await fetch(`https://api.ebay.com/sell/inventory/v1/offer/${offerId}/withdraw`, { method: 'POST', headers: ebayHeaders })
+              if (!r.ok && r.status !== 404) throw new Error(`Withdraw ${r.status}: ${(await r.text()).slice(0, 200)}`)
+            } else if (listing.platform_listing_id) {
+              // Imported listings — end via the Trading API
+              const xml = await trading(token, certId, 'EndFixedPriceItem',
+                `<?xml version="1.0" encoding="utf-8"?><EndFixedPriceItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><ItemID>${listing.platform_listing_id}</ItemID><EndingReason>NotAvailable</EndingReason></EndFixedPriceItemRequest>`)
+              const ack = getTag(xml, 'Ack')
+              if (ack && ack !== 'Success' && ack !== 'Warning') {
+                const msg = getTag(xml, 'LongMessage') || getTag(xml, 'ShortMessage')
+                // Treat "already ended/unavailable" as success
+                if (!/ended|no longer|not available|auction.*closed/i.test(msg)) throw new Error(msg || 'End listing failed')
+              }
+            }
+            await sb.from('listings').update({ status: 'ended', ended_at: now }).eq('id', listing.id)
+          }
+          if (bin) await sb.from('parts').update({ deleted_at: now }).eq('id', partId)
+          else await sb.from('parts').update({ status: 'in_stock' }).eq('id', partId)
+          delisted++
+        } catch (e: any) {
+          failed++
+          errors.push({ partId, error: e.message })
+        }
+      }
+      return json({ delisted, failed, errors })
     }
 
     if (action === 'get_ebay_username') {

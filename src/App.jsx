@@ -9,12 +9,12 @@ import Inventory from './components/Inventory'
 import Settings from './components/Settings'
 import JoinStore from './components/JoinStore'
 import Insights from './components/Insights'
-import Publish from './components/Publish'
+import Ebay from './components/Ebay'
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊' },
   { id: 'inventory', label: 'Inventory', icon: '📦' },
-  { id: 'publish', label: 'List to eBay', icon: '🛒' },
+  { id: 'ebay', label: 'eBay', icon: '🛒' },
   { id: 'insights', label: 'Insights', icon: '📈' },
   { id: 'settings', label: 'Settings', icon: '⚙️' },
 ]
@@ -215,7 +215,7 @@ export default function App() {
             aiSettings={aiSettings} footer={footer}
           />
         )}
-        {tab === 'publish' && <Publish storeId={storeId} onChanged={smartRefetch} />}
+        {tab === 'ebay' && <Ebay storeId={storeId} onChanged={smartRefetch} />}
         {tab === 'insights' && <Insights storeId={storeId} />}
         {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores} />}
       </main>

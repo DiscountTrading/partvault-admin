@@ -92,7 +92,6 @@ export default function Publish({ storeId, onChanged }) {
 
   return (
     <div>
-      <h2 style={{ ...S.h1, marginBottom: 4 }}>List to eBay</h2>
       <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>Review your in-stock parts and publish them as live eBay listings.</div>
 
       {canPublish === false && (
