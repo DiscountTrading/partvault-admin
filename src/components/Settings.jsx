@@ -5,6 +5,7 @@ import { buildSkuPreview, SKU_TOKENS, DEFAULT_SKU_TEMPLATE, DEFAULT_SKU_PAD } fr
 import TeamAccess from './TeamAccess'
 import Activity from './Activity'
 import { compressImage } from '../lib/image'
+import ShippingSettings from './ShippingSettings'
 
 const DEFAULT_FOOTER = `At Cloud9 Auto Parts, we aim to make your buying experience as simple and reliable as possible. All photos shown are of the exact part you will receive, no stock images. We clearly list the compatible models and year ranges in each title, but we always recommend double checking fitment by comparing photos, part numbers, and your own research.
 All parts are genuine used OEM components unless stated otherwise. As they are pre-owned, some items may show minor wear, which we highlight clearly in the photos. Everything we have in stock is listed here on our eBay store.
@@ -1018,6 +1019,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
     { id: 'account', label: '👤 Account' },
     { id: 'descriptions', label: '📝 Descriptions' },
     { id: 'ebay', label: '🛒 eBay Sync' },
+    { id: 'shipping', label: '📦 Shipping' },
     { id: 'team', label: '👥 User Access' },
     { id: 'activity', label: '📋 Activity' },
   ]
@@ -1309,6 +1311,9 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
           }}>{t.label}</button>
         ))}
       </div>
+
+      {/* SHIPPING TAB */}
+      {tab === 'shipping' && <ShippingSettings storeId={storeId} />}
 
       {/* USER ACCESS TAB */}
       {tab === 'team' && <TeamAccess storeId={storeId} />}

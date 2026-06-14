@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.10.4-edge'
+const EDGE_FN_VERSION         = '3.11.0-edge'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 25 * 1000
@@ -1275,6 +1275,13 @@ async function handleRequest(req: Request): Promise<Response> {
       const marketingImages: string[] = storeRow?.settings?.marketingImages || []
       const EBAY_MAX_IMAGES = 24
 
+      // Shipping: per-category preset > store default > hardcoded. Weight in grams,
+      // dims in cm. Per-part weight (part.weight) overrides everything.
+      const shipping = storeRow?.settings?.shipping || {}
+      const shipCats = shipping.categories || {}
+      const shipDefW = +shipping.defaultWeightG > 0 ? +shipping.defaultWeightG : 1000
+      const shipDefDims = shipping.defaultDimsCm || {}
+
       const photoUrls = async (parentType: string, parentId: string) => {
         const { data } = await sb.from('photos')
           .select('url, ebay_url, is_primary, display_order')
@@ -1338,32 +1345,41 @@ async function handleRequest(req: Request): Promise<Response> {
           if (part.make)  aspects['Make']  = [part.make]
           if (part.model) aspects['Model'] = [part.model]
           if (part.year)  aspects['Year']  = [String(part.year)]
-          // Fill any REQUIRED item specifics the category demands, with a valid
-          // value (first allowed value for constrained aspects, else a sensible default).
+          // Fill any REQUIRED item specifics the category demands. Prefer sensible
+          // values (make for Brand, part number for MPN, neutral "Unknown"/"Unbranded"
+          // rather than asserting a specific country/value).
           try {
             const aRes = await fetch(`https://api.ebay.com/commerce/taxonomy/v1/category_tree/${categoryTreeId}/get_item_aspects_for_category?category_id=${categoryId}`, { headers: ebayHeaders })
             if (aRes.ok) {
               const aData = await aRes.json()
+              const NEUTRAL = ['unbranded', 'does not apply', 'unknown', 'not specified', 'unspecified', 'other', 'na', 'n/a']
+              const pick = (allowed: string[], prefer: string[]) => {
+                for (const p of prefer) { const m = allowed.find(v => v.toLowerCase() === String(p || '').toLowerCase()); if (m) return m }
+                const n = allowed.find(v => NEUTRAL.includes(v.toLowerCase()))
+                return n || allowed[0]
+              }
               for (const a of (aData.aspects || [])) {
                 const name = a.localizedAspectName
                 if (!a.aspectConstraint?.aspectRequired || aspects[name]) continue
-                const allowed = a.aspectValues?.[0]?.localizedValue
-                if (allowed) aspects[name] = [allowed]
-                else if (/brand|manufacturer/i.test(name)) aspects[name] = [part.make || 'Unbranded']
-                else if (/part\s*number|mpn/i.test(name)) aspects[name] = [part.part_number || 'Does Not Apply']
-                else aspects[name] = ['Unbranded']
+                const allowed = (a.aspectValues || []).map((v: any) => v.localizedValue).filter(Boolean)
+                let value: string
+                if (/^brand$|manufacturer$/i.test(name)) value = allowed.length ? pick(allowed, [part.make, 'Unbranded']) : (part.make || 'Unbranded')
+                else if (/part\s*number|mpn/i.test(name)) value = part.part_number || 'Does Not Apply'
+                else if (/type/i.test(name)) value = allowed.length ? pick(allowed, [part.subcategory, part.category]) : (part.subcategory || part.category || 'Unbranded')
+                else if (/country|region/i.test(name)) value = allowed.length ? pick(allowed, ['Unknown', 'Not Specified']) : 'Unknown'
+                else value = allowed.length ? pick(allowed, []) : 'Unbranded'
+                aspects[name] = [value]
               }
             }
           } catch (_) { /* best effort */ }
 
           // eBay (calculated shipping) requires package weight + dimensions.
-          // Use the part's weight, else store default, else 1000g; dimensions
-          // default from store settings, else a sensible box.
-          const weightG = Math.round((+part.weight > 0 ? +part.weight : (storeRow?.settings?.defaultWeightG ?? 1000)))
-          const dims = storeRow?.settings?.defaultDimsCm || {}
-          const dimL = +dims.l > 0 ? +dims.l : 30
-          const dimW = +dims.w > 0 ? +dims.w : 20
-          const dimH = +dims.h > 0 ? +dims.h : 15
+          // part weight > category preset > store default > hardcoded.
+          const preset = shipCats[part.category] || {}
+          const weightG = Math.round(+part.weight > 0 ? +part.weight : (+preset.weightG > 0 ? +preset.weightG : shipDefW))
+          const dimL = +preset.l > 0 ? +preset.l : (+shipDefDims.l > 0 ? +shipDefDims.l : 30)
+          const dimW = +preset.w > 0 ? +preset.w : (+shipDefDims.w > 0 ? +shipDefDims.w : 20)
+          const dimH = +preset.h > 0 ? +preset.h : (+shipDefDims.h > 0 ? +shipDefDims.h : 15)
 
           // 1. Create/replace the inventory item (PUT is idempotent)
           const invRes = await fetch(`https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, {
