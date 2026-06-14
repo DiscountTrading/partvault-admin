@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.9.3-edge'
+const EDGE_FN_VERSION         = '3.10.0-edge'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 25 * 1000
@@ -1266,6 +1266,23 @@ async function handleRequest(req: Request): Promise<Response> {
         'Other Car & Truck Parts':'9886','Legacy Items':'9886',
       }
 
+      // Store-wide image composition config: shared car/marketing images added
+      // to every listing, with per-source budgets (eBay allows up to 24 images).
+      const { data: storeRow } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      const comp = storeRow?.settings?.imageComposition || {}
+      const carMax = comp.carMax ?? 5
+      const marketingMax = comp.marketingMax ?? 5
+      const marketingImages: string[] = storeRow?.settings?.marketingImages || []
+      const EBAY_MAX_IMAGES = 24
+
+      const photoUrls = async (parentType: string, parentId: string) => {
+        const { data } = await sb.from('photos')
+          .select('url, ebay_url, is_primary, display_order')
+          .eq('parent_type', parentType).eq('parent_id', parentId)
+          .order('is_primary', { ascending: false }).order('display_order', { ascending: true })
+        return (data || []).map((r: any) => r.url || r.ebay_url).filter(Boolean)
+      }
+
       let published = 0
       let failed = 0
       const errors: any[] = []
@@ -1284,21 +1301,20 @@ async function handleRequest(req: Request): Promise<Response> {
 
           const condition  = CONDITION_MAP[part.condition] || 'USED_GOOD'
           const categoryId = CATEGORY_ID[part.category]    || '9886'
-          // Images come from the normalized photos table (covers imported parts);
-          // fall back to the legacy parts.photos column if none are there.
-          const { data: phRows } = await sb.from('photos')
-            .select('url, ebay_url, is_primary, display_order')
-            .eq('parent_type', 'part').eq('parent_id', part.id)
-            .order('is_primary', { ascending: false }).order('display_order', { ascending: true })
-          let imageUrls = (phRows || []).map((r: any) => r.url || r.ebay_url).filter(Boolean)
-          if (!imageUrls.length) {
+          // Compose images: the part's own photos first (eBay's gallery image),
+          // then up to carMax donor-car photos, then up to marketingMax store
+          // marketing images. Deduped and capped at eBay's 24.
+          let partUrls = await photoUrls('part', part.id)
+          if (!partUrls.length) {
             // Legacy parts.photos: text[] of plain URLs or stringified {"url":...}
-            imageUrls = (part.photos || []).map((p: any) => {
+            partUrls = (part.photos || []).map((p: any) => {
               if (p && typeof p === 'object') return p.url || p.ebay_url
               try { const o = JSON.parse(p); return o.url || o.ebay_url || p } catch { return p }
             }).filter(Boolean)
           }
-          imageUrls = imageUrls.slice(0, 12)
+          const carUrls = part.car_id ? (await photoUrls('car', part.car_id)).slice(0, carMax) : []
+          const marketingUrls = marketingImages.slice(0, marketingMax)
+          let imageUrls = [...new Set([...partUrls, ...carUrls, ...marketingUrls])].slice(0, EBAY_MAX_IMAGES)
           const aspects: Record<string, string[]> = {}
           if (part.make)  aspects['Make']  = [part.make]
           if (part.model) aspects['Model'] = [part.model]

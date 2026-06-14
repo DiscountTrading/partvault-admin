@@ -4,6 +4,7 @@ import { sb } from '../lib/supabase'
 import { buildSkuPreview, SKU_TOKENS, DEFAULT_SKU_TEMPLATE, DEFAULT_SKU_PAD } from '../lib/sku'
 import TeamAccess from './TeamAccess'
 import Activity from './Activity'
+import { compressImage } from '../lib/image'
 
 const DEFAULT_FOOTER = `At Cloud9 Auto Parts, we aim to make your buying experience as simple and reliable as possible. All photos shown are of the exact part you will receive, no stock images. We clearly list the compatible models and year ranges in each title, but we always recommend double checking fitment by comparing photos, part numbers, and your own research.
 All parts are genuine used OEM components unless stated otherwise. As they are pre-owned, some items may show minor wear, which we highlight clearly in the photos. Everything we have in stock is listed here on our eBay store.
@@ -103,6 +104,11 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
   const [skuSaving, setSkuSaving] = useState(false)
   const [skuSaved, setSkuSaved] = useState(false)
 
+  // Marketing images — store-wide standard images added to every eBay listing
+  const [marketingImages, setMarketingImages] = useState([])
+  const [mktUploading, setMktUploading] = useState(false)
+  const mktFileRef = useRef()
+
   // eBay state
   // (App ID / Cert ID / RuName are platform-level config held server-side in the
   //  edge function — not customer-editable, so no credential state lives here.)
@@ -185,6 +191,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
     setEbayTestResult(null)
     setSkuTemplate(DEFAULT_SKU_TEMPLATE)
     setSkuPad(DEFAULT_SKU_PAD)
+    setMarketingImages([])
     try {
       const { data } = await sb.from('stores').select('settings, sku_format_config').eq('id', storeId).single()
       if (data?.sku_format_config) {
@@ -198,6 +205,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
         if (data.settings.shipAddress) setShipAddress(a => ({ ...a, ...data.settings.shipAddress }))
         if (data.settings.ebayLocationKey) setEbayLocationKey(data.settings.ebayLocationKey)
         if (data.settings.ebayUsername) setEbayUsername(data.settings.ebayUsername) // persisted — shows immediately
+        if (Array.isArray(data.settings.marketingImages)) setMarketingImages(data.settings.marketingImages)
       }
       // eBay connection status — the keyset is server-side; we only need to know
       // whether this store has connected (i.e. has a valid token expiry).
@@ -259,6 +267,40 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
       alert(`Failed to save SKU format: ${e.message}`)
     }
     setSkuSaving(false)
+  }
+
+  const persistMarketing = async (arr) => {
+    const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
+    await sb.from('stores').update({ settings: { ...(current?.settings || {}), marketingImages: arr } }).eq('id', storeId)
+  }
+
+  const uploadMarketing = async (e) => {
+    const files = Array.from(e.target.files || [])
+    e.target.value = ''
+    if (!files.length) return
+    setMktUploading(true)
+    try {
+      const added = []
+      for (const file of files) {
+        const blob = await compressImage(file, 1400, 0.82)
+        const path = `marketing/${storeId}/${Date.now()}-${Math.random().toString(36).slice(2, 7)}.jpg`
+        const { error } = await sb.storage.from('part-photos').upload(path, blob, { contentType: 'image/jpeg' })
+        if (error) throw error
+        added.push(sb.storage.from('part-photos').getPublicUrl(path).data.publicUrl)
+      }
+      const next = [...marketingImages, ...added]
+      setMarketingImages(next)
+      await persistMarketing(next)
+    } catch (err) {
+      alert(`Upload failed: ${err.message}`)
+    }
+    setMktUploading(false)
+  }
+
+  const removeMarketing = async (url) => {
+    const next = marketingImages.filter(u => u !== url)
+    setMarketingImages(next)
+    await persistMarketing(next)
   }
 
   const handleOAuthCallback = async (code) => {
@@ -1358,6 +1400,24 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
                   {tok}
                 </button>
               ))}
+            </div>
+          </Section>
+          <Section title="Marketing Images">
+            <div style={{ fontSize: 13, color: C.muted, marginBottom: 12, lineHeight: 1.5 }}>
+              Standard images added to the end of every eBay listing (e.g. store info, warranty, shipping). They're appended after the part and car photos, up to eBay's 24-image limit.
+            </div>
+            <input ref={mktFileRef} type="file" accept="image/*" multiple onChange={uploadMarketing} style={{ display: 'none' }} />
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+              {marketingImages.map(url => (
+                <div key={url} style={{ position: 'relative', width: 90, height: 90, borderRadius: 8, overflow: 'hidden', border: `1px solid ${C.border}` }}>
+                  <img src={url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  <button onClick={() => removeMarketing(url)} style={{ position: 'absolute', top: 3, right: 3, background: 'rgba(0,0,0,0.6)', color: '#fff', border: 'none', borderRadius: '50%', width: 22, height: 22, fontSize: 13, cursor: 'pointer', padding: 0, lineHeight: '22px' }}>×</button>
+                </div>
+              ))}
+              <button onClick={() => mktFileRef.current?.click()} disabled={mktUploading}
+                style={{ width: 90, height: 90, borderRadius: 8, border: `2px dashed ${C.border}`, background: '#fafaf9', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, fontSize: 12, color: C.muted, fontWeight: 600 }}>
+                <span style={{ fontSize: 22 }}>{mktUploading ? '⏳' : '＋'}</span>{mktUploading ? '' : 'Add'}
+              </button>
             </div>
           </Section>
           <Section title="Supabase Connection">
