@@ -4,7 +4,7 @@ import { C, S, fmt } from '../lib/constants'
 
 const EDGE_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import'
 
-export default function Publish({ storeId }) {
+export default function Publish({ storeId, onChanged }) {
   const [parts, setParts] = useState([])
   const [loading, setLoading] = useState(true)
   const [sel, setSel] = useState(() => new Set())
@@ -80,6 +80,7 @@ export default function Publish({ storeId }) {
       setResult(d)
       setReview(false)
       await load()
+      onChanged?.() // refresh the inventory/parts list so statuses stay in sync
     } catch (e) {
       setResult({ error: e.message })
     }

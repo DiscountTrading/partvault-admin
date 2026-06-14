@@ -208,7 +208,7 @@ export default function App() {
             aiSettings={aiSettings} footer={footer}
           />
         )}
-        {tab === 'publish' && <Publish storeId={storeId} />}
+        {tab === 'publish' && <Publish storeId={storeId} onChanged={refetch} />}
         {tab === 'insights' && <Insights storeId={storeId} />}
         {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores} />}
       </main>
