@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.10.2-edge'
+const EDGE_FN_VERSION         = '3.10.3-edge'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 25 * 1000
@@ -1283,6 +1283,22 @@ async function handleRequest(req: Request): Promise<Response> {
         return (data || []).map((r: any) => r.url || r.ebay_url).filter(Boolean)
       }
 
+      // eBay requires a LEAF category. Ask the Taxonomy API for the best leaf from
+      // the part's title; the static map (often parent categories) is only a fallback.
+      let categoryTreeId = '15' // EBAY_AU default
+      try {
+        const tRes = await fetch('https://api.ebay.com/commerce/taxonomy/v1/get_default_category_tree_id?marketplace_id=EBAY_AU', { headers: ebayHeaders })
+        if (tRes.ok) categoryTreeId = (await tRes.json()).categoryTreeId || '15'
+      } catch (_) { /* keep default */ }
+      const leafCategoryFor = async (query: string): Promise<string | null> => {
+        try {
+          const r = await fetch(`https://api.ebay.com/commerce/taxonomy/v1/category_tree/${categoryTreeId}/get_category_suggestions?q=${encodeURIComponent(query || 'car part')}`, { headers: ebayHeaders })
+          if (!r.ok) return null
+          const d = await r.json()
+          return d.categorySuggestions?.[0]?.category?.categoryId || null
+        } catch (_) { return null }
+      }
+
       let published = 0
       let failed = 0
       const errors: any[] = []
@@ -1300,7 +1316,7 @@ async function handleRequest(req: Request): Promise<Response> {
           }
 
           const condition  = CONDITION_MAP[part.condition] || 'USED_GOOD'
-          const categoryId = CATEGORY_ID[part.category]    || '9886'
+          const categoryId = (await leafCategoryFor(part.title)) || CATEGORY_ID[part.category] || '9886'
           // Compose images: the part's own photos first (eBay's gallery image),
           // then up to carMax donor-car photos, then up to marketingMax store
           // marketing images. Deduped and capped at eBay's 24.
