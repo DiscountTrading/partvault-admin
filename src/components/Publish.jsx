@@ -31,6 +31,11 @@ export default function Publish({ storeId }) {
     if (!storeId) return
     load()
     sb.rpc('has_permission', { p_store_id: storeId, p_capability: 'publish' }).then(({ data }) => setCanPublish(!!data))
+    // Live updates — new parts captured in the field app appear without a refresh
+    const channel = sb.channel(`publish-parts-${storeId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'parts', filter: `store_id=eq.${storeId}` }, () => load())
+      .subscribe()
+    return () => sb.removeChannel(channel)
   }, [storeId])
 
   const q = search.trim().toLowerCase()
@@ -110,6 +115,7 @@ export default function Publish({ storeId }) {
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search title, SKU, make, model…" style={{ ...S.input, flex: '1 1 280px', minWidth: 0, marginBottom: 0 }} />
+        <button onClick={load} style={{ ...S.btn('secondary'), padding: '10px 14px' }} title="Refresh">↻</button>
         <button onClick={() => setReview(true)} disabled={sel.size === 0 || canPublish === false}
           style={{ ...S.btn('primary'), padding: '10px 18px', opacity: (sel.size === 0 || canPublish === false) ? 0.5 : 1 }}>
           List {sel.size || ''} to eBay
