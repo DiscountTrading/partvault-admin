@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.10.3-edge'
+const EDGE_FN_VERSION         = '3.10.4-edge'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 25 * 1000
@@ -1316,7 +1316,10 @@ async function handleRequest(req: Request): Promise<Response> {
           }
 
           const condition  = CONDITION_MAP[part.condition] || 'USED_GOOD'
-          const categoryId = (await leafCategoryFor(part.title)) || CATEGORY_ID[part.category] || '9886'
+          // Bias the category lookup toward auto parts (make/model/category, not
+          // just the title) so a vague title doesn't match a media category.
+          const catQuery = [part.make, part.model, part.year, part.category, part.title].filter(Boolean).join(' ')
+          const categoryId = (await leafCategoryFor(catQuery)) || CATEGORY_ID[part.category] || '9886'
           // Compose images: the part's own photos first (eBay's gallery image),
           // then up to carMax donor-car photos, then up to marketingMax store
           // marketing images. Deduped and capped at eBay's 24.
@@ -1335,6 +1338,23 @@ async function handleRequest(req: Request): Promise<Response> {
           if (part.make)  aspects['Make']  = [part.make]
           if (part.model) aspects['Model'] = [part.model]
           if (part.year)  aspects['Year']  = [String(part.year)]
+          // Fill any REQUIRED item specifics the category demands, with a valid
+          // value (first allowed value for constrained aspects, else a sensible default).
+          try {
+            const aRes = await fetch(`https://api.ebay.com/commerce/taxonomy/v1/category_tree/${categoryTreeId}/get_item_aspects_for_category?category_id=${categoryId}`, { headers: ebayHeaders })
+            if (aRes.ok) {
+              const aData = await aRes.json()
+              for (const a of (aData.aspects || [])) {
+                const name = a.localizedAspectName
+                if (!a.aspectConstraint?.aspectRequired || aspects[name]) continue
+                const allowed = a.aspectValues?.[0]?.localizedValue
+                if (allowed) aspects[name] = [allowed]
+                else if (/brand|manufacturer/i.test(name)) aspects[name] = [part.make || 'Unbranded']
+                else if (/part\s*number|mpn/i.test(name)) aspects[name] = [part.part_number || 'Does Not Apply']
+                else aspects[name] = ['Unbranded']
+              }
+            }
+          } catch (_) { /* best effort */ }
 
           // eBay (calculated shipping) requires package weight + dimensions.
           // Use the part's weight, else store default, else 1000g; dimensions
