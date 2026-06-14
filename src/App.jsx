@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useAuth } from './hooks/useAuth'
 import { useParts } from './hooks/useParts'
 import { sb } from './lib/supabase'
@@ -139,6 +139,13 @@ export default function App() {
   const { parts, loading, syncStatus, totalCount, addPart, editPart, softDelete, softDeleteCar, refetch } = useParts(storeId)
   const [tab, setTab] = useState('dashboard')
   const [toast, setToast] = useState(null)
+  const lastFetchRef = useRef(Date.now())
+  const smartRefetch = useCallback(() => { lastFetchRef.current = Date.now(); refetch() }, [refetch])
+  // Refresh on opening Inventory only if the data has gone stale (>60s) — avoids
+  // re-downloading a big catalogue on every tab click while realtime keeps it warm.
+  useEffect(() => {
+    if (tab === 'inventory' && Date.now() - lastFetchRef.current > 60000) smartRefetch()
+  }, [tab, smartRefetch])
   const [aiSettings, setAiSettings] = useState(DEFAULT_AI_SETTINGS)
   const [footer, setFooter] = useState(DEFAULT_FOOTER)
   const [cars, setCars] = useState([])
@@ -208,7 +215,7 @@ export default function App() {
             aiSettings={aiSettings} footer={footer}
           />
         )}
-        {tab === 'publish' && <Publish storeId={storeId} onChanged={refetch} />}
+        {tab === 'publish' && <Publish storeId={storeId} onChanged={smartRefetch} />}
         {tab === 'insights' && <Insights storeId={storeId} />}
         {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores} />}
       </main>
