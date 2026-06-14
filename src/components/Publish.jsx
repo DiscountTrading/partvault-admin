@@ -16,7 +16,12 @@ export default function Publish({ storeId }) {
 
   const load = async () => {
     setLoading(true)
-    const { data } = await sb.from('parts_for_listing').select('*').eq('store_id', storeId).eq('status', 'in_stock').is('deleted_at', null).order('created_at', { ascending: false })
+    // Prefer the view (gives primary_photo from the photos table); fall back to
+    // the base table if the migration hasn't run yet.
+    let { data, error } = await sb.from('parts_for_listing').select('*').eq('store_id', storeId).eq('status', 'in_stock').is('deleted_at', null).order('created_at', { ascending: false })
+    if (error) {
+      ({ data } = await sb.from('parts').select('*').eq('store_id', storeId).eq('status', 'in_stock').is('deleted_at', null).order('created_at', { ascending: false }))
+    }
     setParts(data || [])
     setSel(new Set())
     setLoading(false)
