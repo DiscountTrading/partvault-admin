@@ -18,6 +18,7 @@ export default function ShippingSettings({ storeId }) {
   const [defW, setDefW] = useState('')
   const [defDims, setDefDims] = useState({ l: '', w: '', h: '' })
   const [cats, setCats] = useState({}) // cat -> { weightG, l, w, h }
+  const [allowOffers, setAllowOffers] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -30,6 +31,7 @@ export default function ShippingSettings({ storeId }) {
       setDefW(s.defaultWeightG ?? '')
       setDefDims({ l: s.defaultDimsCm?.l ?? '', w: s.defaultDimsCm?.w ?? '', h: s.defaultDimsCm?.h ?? '' })
       setCats(s.categories || {})
+      setAllowOffers(!!data?.settings?.allowOffers)
       setLoading(false)
     })
   }, [storeId])
@@ -55,7 +57,7 @@ export default function ShippingSettings({ storeId }) {
         categories: cleanCats,
       }
       const { data: cur } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      await sb.from('stores').update({ settings: { ...(cur?.settings || {}), shipping } }).eq('id', storeId)
+      await sb.from('stores').update({ settings: { ...(cur?.settings || {}), shipping, allowOffers } }).eq('id', storeId)
       setSaved(true); setTimeout(() => setSaved(false), 2000)
     } catch (e) { alert(`Save failed: ${e.message}`) }
     setSaving(false)
@@ -65,6 +67,13 @@ export default function ShippingSettings({ storeId }) {
 
   return (
     <>
+      <Section title="Listing defaults" hint="Defaults applied to new eBay listings.">
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, color: C.text, cursor: 'pointer' }}>
+          <input type="checkbox" checked={allowOffers} onChange={e => setAllowOffers(e.target.checked)} style={{ width: 18, height: 18 }} />
+          Allow buyers to make offers (Best Offer)
+        </label>
+      </Section>
+
       <Section title="Default package" hint="Used for any part without its own weight or a category preset. Weight in grams, dimensions in cm. eBay uses these to calculate the buyer's shipping cost.">
         <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'center' }}>
           <label style={{ fontSize: 13, color: C.text, display: 'flex', alignItems: 'center', gap: 8 }}>

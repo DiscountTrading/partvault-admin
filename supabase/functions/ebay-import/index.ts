@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.12.0-edge'
+const EDGE_FN_VERSION         = '3.13.0-edge'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 25 * 1000
@@ -1342,36 +1342,67 @@ async function handleRequest(req: Request): Promise<Response> {
           const marketingUrls = marketingImages.slice(0, marketingMax)
           let imageUrls = [...new Set([...partUrls, ...carUrls, ...marketingUrls])].slice(0, EBAY_MAX_IMAGES)
           const aspects: Record<string, string[]> = {}
-          if (part.make)  aspects['Make']  = [part.make]
-          if (part.model) aspects['Model'] = [part.model]
-          if (part.year)  aspects['Year']  = [String(part.year)]
-          // Fill any REQUIRED item specifics the category demands. Prefer sensible
-          // values (make for Brand, part number for MPN, neutral "Unknown"/"Unbranded"
-          // rather than asserting a specific country/value).
+          // Derive an item-specific value from the part/car data by aspect name —
+          // this is what populates the previously-blank fields (Compatible Make/
+          // Model/Year, Placement, OE/Interchange/Superseded number, Type, Brand).
+          const titleLc = (part.title || '').toLowerCase()
+          const placement = () => {
+            const out: string[] = []
+            if (/\bfront\b/.test(titleLc)) out.push('Front')
+            if (/\b(rear|back)\b/.test(titleLc)) out.push('Rear')
+            if (/\b(left|lh|l\/h|driver)\b/.test(titleLc)) out.push('Left')
+            if (/\b(right|rh|r\/h|passenger)\b/.test(titleLc)) out.push('Right')
+            return out.length ? out.join(', ') : null
+          }
+          const derive = (name: string): string | null => {
+            const n = name.toLowerCase()
+            if (/\b(brand|manufacturer)\b/.test(n) && !/part/.test(n)) return part.make || null
+            if (/make/.test(n)) return part.make || null
+            if (/model/.test(n)) return part.model || null
+            if (/year/.test(n)) return part.year ? String(part.year) : null
+            if (/(part\s*number|^mpn$|oe[\/\s]?oem|reference|interchange|supersed)/.test(n)) return part.part_number || null
+            if (/placement/.test(n)) return placement()
+            if (/^type$/.test(n)) return part.subcategory || part.category || null
+            return null
+          }
           try {
             const aRes = await fetch(`https://api.ebay.com/commerce/taxonomy/v1/category_tree/${categoryTreeId}/get_item_aspects_for_category?category_id=${categoryId}`, { headers: ebayHeaders })
             if (aRes.ok) {
               const aData = await aRes.json()
               const NEUTRAL = ['unbranded', 'does not apply', 'unknown', 'not specified', 'unspecified', 'other', 'na', 'n/a']
-              const pick = (allowed: string[], prefer: string[]) => {
-                for (const p of prefer) { const m = allowed.find(v => v.toLowerCase() === String(p || '').toLowerCase()); if (m) return m }
-                const n = allowed.find(v => NEUTRAL.includes(v.toLowerCase()))
-                return n || allowed[0]
-              }
               for (const a of (aData.aspects || [])) {
                 const name = a.localizedAspectName
-                if (!a.aspectConstraint?.aspectRequired || aspects[name]) continue
+                if (aspects[name]) continue
+                const required = !!a.aspectConstraint?.aspectRequired
+                const selectionOnly = a.aspectConstraint?.aspectMode === 'SELECTION_ONLY'
                 const allowed = (a.aspectValues || []).map((v: any) => v.localizedValue).filter(Boolean)
-                let value: string
-                if (/^brand$|manufacturer$/i.test(name)) value = allowed.length ? pick(allowed, [part.make, 'Unbranded']) : (part.make || 'Unbranded')
-                else if (/part\s*number|mpn/i.test(name)) value = part.part_number || 'Does Not Apply'
-                else if (/type/i.test(name)) value = allowed.length ? pick(allowed, [part.subcategory, part.category]) : (part.subcategory || part.category || 'Unbranded')
-                else if (/country|region/i.test(name)) value = allowed.length ? pick(allowed, ['Unknown', 'Not Specified']) : 'Unknown'
-                else value = allowed.length ? pick(allowed, []) : 'Unbranded'
-                aspects[name] = [value]
+                const inAllowed = (val: string) => allowed.find((v: string) => v.toLowerCase() === val.toLowerCase())
+
+                // 1. Fill from our data wherever we can (required OR recommended)
+                const d = derive(name)
+                if (d) {
+                  if (!selectionOnly || !allowed.length) { aspects[name] = [d]; continue }
+                  const m = inAllowed(d)
+                  if (m) { aspects[name] = [m]; continue }
+                }
+                // 2. Required-but-underivable → a sensible/neutral value
+                if (!required) continue
+                if (/\b(brand|manufacturer)\b/.test(name.toLowerCase()) && !/part/.test(name.toLowerCase()))
+                  aspects[name] = [allowed.length ? (inAllowed('Unbranded') || allowed[0]) : (part.make || 'Unbranded')]
+                else if (/part\s*number|mpn/i.test(name)) aspects[name] = [part.part_number || 'Does Not Apply']
+                else if (allowed.length) aspects[name] = [allowed.find((v: string) => NEUTRAL.includes(v.toLowerCase())) || allowed[0]]
+                else aspects[name] = ['Unbranded']
               }
             }
           } catch (_) { /* best effort */ }
+
+          // Full listing description: the part's description (or notes) + the
+          // store's standard footer from settings.
+          const esc = (s: string) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          const descBody = part.description || part.notes || part.title || ''
+          const footer = storeRow?.settings?.footer || ''
+          const fullDescription = [descBody, footer].filter(Boolean).map((s: string) => esc(s).replace(/\n/g, '<br>')).join('<br><br>') || (part.title || sku)
+          const allowOffers = !!storeRow?.settings?.allowOffers
 
           // eBay (calculated shipping) requires package weight + dimensions.
           // part weight > category preset > store default > hardcoded.
@@ -1385,7 +1416,7 @@ async function handleRequest(req: Request): Promise<Response> {
           const invRes = await fetch(`https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, {
             method: 'PUT', headers: ebayHeaders,
             body: JSON.stringify({
-              product: { title: part.title, description: part.notes || part.title, aspects, ...(imageUrls.length ? { imageUrls } : {}) },
+              product: { title: part.title, description: fullDescription, aspects, ...(imageUrls.length ? { imageUrls } : {}) },
               condition,
               availability: { shipToLocationAvailability: { quantity: 1 } },
               packageWeightAndSize: {
@@ -1401,10 +1432,10 @@ async function handleRequest(req: Request): Promise<Response> {
           // 2. Create the offer — or reuse an existing one for this SKU
           const offerBody = {
             sku, marketplaceId: 'EBAY_AU', format: 'FIXED_PRICE',
-            listingDescription: part.notes || part.title,
+            listingDescription: fullDescription,
             pricingSummary: { price: { value: String(part.list_price), currency: 'AUD' } },
             categoryId, merchantLocationKey,
-            listingPolicies: { fulfillmentPolicyId, paymentPolicyId, returnPolicyId },
+            listingPolicies: { fulfillmentPolicyId, paymentPolicyId, returnPolicyId, ...(allowOffers ? { bestOfferTerms: { bestOfferEnabled: true } } : {}) },
             quantityLimitPerBuyer: 1,
           }
           let offerId: string | undefined
