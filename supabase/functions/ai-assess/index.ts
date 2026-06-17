@@ -65,14 +65,23 @@ serve(async (req) => {
     }
 
     // Mode: assess a part from its photo (default).
-    const { photoBase64, car, categories } = body
-    if (!photoBase64) return json({ error: 'photoBase64 required' }, 400)
+    const { photoBase64, photoUrl, car, categories, partId, existingTitle, existingPrice } = body
+    let b64 = photoBase64
+    if (!b64 && photoUrl) {
+      const imgRes = await fetch(photoUrl)
+      if (!imgRes.ok) return json({ error: `Could not fetch photo (${imgRes.status})` }, 400)
+      const bytes = new Uint8Array(await imgRes.arrayBuffer())
+      let bin = ''
+      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i])
+      b64 = btoa(bin)
+    }
+    if (!b64) return json({ error: 'photoBase64 or photoUrl required' }, 400)
     const cats = Array.isArray(categories) && categories.length ? categories.join(', ') : 'Other Car & Truck Parts'
     const sys = `You are an expert Australian used car parts eBay seller. Return JSON only.\nCategories: ${cats}\nReturn: {"title":"max 80 chars","category":"exact","subcategory":"exact","condition":"Used – Good","description":"3-4 sentences","partNumber":"OEM or empty","listPrice":number,"weight":number,"notes":""}`
     const aiRes = await callAnthropic({
       model: 'claude-sonnet-4-6', max_tokens: 800, system: sys,
       messages: [{ role: 'user', content: [
-        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: photoBase64 } },
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
         { type: 'text', text: `Vehicle: ${car?.make || ''} ${car?.model || ''} ${car?.year || ''}. Identify this car part.` },
       ] }],
     })
@@ -80,7 +89,30 @@ serve(async (req) => {
     if (data.error) return json({ error: data.error.message || 'AI error' }, 400)
     const parsed = parseJson(textOf(data))
     if (!parsed) return json({ error: 'Could not parse AI response' }, 502)
-    return json({ ok: true, result: parsed })
+
+    // If a partId is given (mobile background flow), write the result back
+    // server-side with the service role so it doesn't depend on the caller's
+    // RLS update rights or the app staying open.
+    let applied = false
+    if (partId) {
+      const service = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aiPrice = +parsed.listPrice || 0
+      const update: Record<string, unknown> = {
+        subcategory: parsed.subcategory || '',
+        condition: parsed.condition || 'Used – Good',
+        description: parsed.description || null,
+        part_number: parsed.partNumber || null,
+        weight: parsed.weight || null,
+        list_price: (+existingPrice > 0) ? +existingPrice : aiPrice,
+        ai_assessed: true,
+      }
+      if (parsed.title || existingTitle) update.title = parsed.title || existingTitle
+      if (parsed.category) update.category = parsed.category
+      const { error: upErr } = await service.from('parts').update(update).eq('id', partId).eq('store_id', storeId)
+      if (upErr) return json({ error: `AI ran but saving failed: ${upErr.message}`, result: parsed }, 500)
+      applied = true
+    }
+    return json({ ok: true, result: parsed, applied })
   } catch (e) {
     return json({ error: (e as Error).message }, 500)
   }
