@@ -488,6 +488,8 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
   const [filterCond, setFilterCond] = useState('')
   const [hideSold, setHideSold] = useState(false)
   const [showDeleted, setShowDeleted] = useState(false)
+  const [newOnly, setNewOnly] = useState(false)
+  const [newWindow, setNewWindow] = useState(24) // hours; default last 24h
   const [showForm, setShowForm] = useState(false)
   const [editingPart, setEditingPart] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
@@ -511,8 +513,9 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
     if (filterCat&&p.category!==filterCat) return false
     if (filterStatus&&p.status!==filterStatus) return false
     if (filterCond&&p.condition!==filterCond) return false
+    if (newOnly && (!p.createdAt || new Date(p.createdAt).getTime() < Date.now() - newWindow*3600*1000)) return false
     return true
-  }), [parts,search,filterMake,filterModel,filterYear,filterCat,filterStatus,filterCond,hideSold,showDeleted])
+  }), [parts,search,filterMake,filterModel,filterYear,filterCat,filterStatus,filterCond,hideSold,showDeleted,newOnly,newWindow])
 
   const carGroups = useMemo(() => {
     const g={}
@@ -641,6 +644,18 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
             />
             Hide Sold
           </label>
+          <label style={{ display:'flex', alignItems:'center', gap:6, fontSize:12, color:C.muted, cursor:'pointer', userSelect:'none' }}>
+            <input type="checkbox" checked={newOnly} onChange={e => { setNewOnly(e.target.checked); setPage(0) }} style={{ cursor:'pointer' }} />
+            🆕 New only
+          </label>
+          {newOnly && (
+            <select style={{ ...selSm, minWidth:120 }} value={newWindow} onChange={e => { setNewWindow(+e.target.value); setPage(0) }}>
+              <option value={24}>Last 24 hours</option>
+              <option value={72}>Last 3 days</option>
+              <option value={168}>Last 7 days</option>
+              <option value={720}>Last 30 days</option>
+            </select>
+          )}
         </div>
       </div>
 
