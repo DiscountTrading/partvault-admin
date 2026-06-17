@@ -13,3 +13,9 @@ verify_jwt = false
 # code), and JWT-at-gateway would reject the browser's CORS preflight. Off.
 [functions.admin-users]
 verify_jwt = false
+
+# ai-assess holds the platform ANTHROPIC_API_KEY secret and does the AI part
+# assessment server-side. It verifies the caller is a store member in code
+# (is_store_member); JWT-at-gateway would reject the CORS preflight. Off.
+[functions.ai-assess]
+verify_jwt = false

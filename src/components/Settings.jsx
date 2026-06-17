@@ -38,7 +38,6 @@ const DESCRIPTION_LENGTH_OPTIONS = [
 const EBAY_CLIENT_ID = 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const EBAY_RUNAME = 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
 const EBAY_OAUTH_URL = `https://auth.ebay.com/oauth2/authorize?client_id=${EBAY_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(EBAY_RUNAME)}&prompt=login&scope=${encodeURIComponent('https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.inventory.readonly https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly https://api.ebay.com/oauth/api_scope/sell.finances https://api.ebay.com/oauth/api_scope/sell.account.readonly')}`
-const CLOUDFLARE_PROXY = 'https://partvault-proxy.leap00.workers.dev'
 const EDGE_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import'
 
 function Section({ title, children }) {
@@ -93,11 +92,6 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(true)
 
-  // Anthropic API key (store-wide, used for AI parsing)
-  const [anthropicKey, setAnthropicKey] = useState('')
-  const [showAnthropicKey, setShowAnthropicKey] = useState(false)
-  const [anthropicKeySaving, setAnthropicKeySaving] = useState(false)
-  const [anthropicKeySaved, setAnthropicKeySaved] = useState(false)
 
   // SKU format (stored in stores.sku_format_config, NOT settings)
   const [skuTemplate, setSkuTemplate] = useState(DEFAULT_SKU_TEMPLATE)
@@ -180,7 +174,6 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
     // through when switching stores (the load below only sets values that exist).
     setFooter(DEFAULT_FOOTER)
     setAiSettings(DEFAULT_AI_SETTINGS)
-    setAnthropicKey('')
     setShipAddress({ addressLine1: '', city: '', stateOrProvince: '', postalCode: '', country: 'AU' })
     setEbayLocationKey(null)
     setEbayConnected(false)
@@ -202,7 +195,6 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
       if (data?.settings) {
         if (data.settings.footer) setFooter(data.settings.footer)
         if (data.settings.aiDescription) setAiSettings(s => ({ ...s, ...data.settings.aiDescription }))
-        if (data.settings.anthropicKey) setAnthropicKey(data.settings.anthropicKey)
         if (data.settings.shipAddress) setShipAddress(a => ({ ...a, ...data.settings.shipAddress }))
         if (data.settings.ebayLocationKey) setEbayLocationKey(data.settings.ebayLocationKey)
         if (data.settings.ebayUsername) setEbayUsername(data.settings.ebayUsername) // persisted — shows immediately
@@ -237,21 +229,6 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
     setSaving(false)
   }
 
-  const saveAnthropicKey = async () => {
-    if (!storeId) return
-    setAnthropicKeySaving(true)
-    try {
-      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const merged = { ...(current?.settings || {}), anthropicKey }
-      await sb.from('stores').update({ settings: merged }).eq('id', storeId)
-      setAnthropicKeySaved(true)
-      setTimeout(() => setAnthropicKeySaved(false), 2000)
-    } catch (e) {
-      console.error('Save Anthropic key failed', e)
-      alert(`Failed to save: ${e.message}`)
-    }
-    setAnthropicKeySaving(false)
-  }
 
   const saveSkuFormat = async () => {
     if (!storeId) return
@@ -907,10 +884,6 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
   }, [])
 
   const parseMakeModelYear = async () => {
-    if (!anthropicKey) {
-      alert('No Anthropic API key saved. Add it in the Account tab and click Save.')
-      return
-    }
     if (window.__partvaultParse?.running) {
       alert('A parse is already running.')
       return
@@ -951,18 +924,15 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
         job.progress = { processed, total, failed, current: part.title?.slice(0, 60) || '' }
         broadcast()
         try {
-          const res = await fetch(CLOUDFLARE_PROXY, {
+          const { data: { session } } = await sb.auth.getSession()
+          const res = await fetch('https://mtpektsxaklhedknincs.supabase.co/functions/v1/ai-assess', {
             method: 'POST',
-            headers: { 'x-api-key': anthropicKey, 'content-type': 'application/json' },
-            body: JSON.stringify({
-              model: 'claude-haiku-4-5-20251001', max_tokens: 200,
-              messages: [{ role: 'user', content: `Extract make, model, and year range from this eBay car parts listing title. Return JSON only: {"make":"","model":"","year":""}\n\nThe "year" field should be a string like "2011-2017" for a range, or "2014" for a single year, or empty if unknown.\n\nTitle: ${part.title}` }]
-            })
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+            body: JSON.stringify({ storeId, mode: 'parse-title', title: part.title }),
           })
-          if (!res.ok) throw new Error(`HTTP ${res.status}`)
           const d = await res.json()
-          const text = d.content?.[0]?.text || '{}'
-          const parsed = JSON.parse(text.replace(/```json|```/g, '').trim())
+          if (!res.ok || d.error) throw new Error(d.error || `HTTP ${res.status}`)
+          const parsed = d.result || {}
           await sb.from('parts').update({
             make: parsed.make || null,
             model: parsed.model || null,
@@ -1332,36 +1302,9 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
             </div>
             <button style={{ ...S.btn('danger'), padding: '10px 24px' }} onClick={onSignOut}>Sign Out</button>
           </Section>
-          <Section title="Anthropic API Key">
-            <div style={{ fontSize: 13, color: C.muted, marginBottom: 12, lineHeight: 1.5 }}>
-              Used for AI-powered parsing of make / model / year from listing titles. Stored against your store, so workers don't need to set it on each device. Get a key at <a href="https://console.anthropic.com/" target="_blank" rel="noopener" style={{ color: C.accent }}>console.anthropic.com</a>.
-            </div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'stretch', flexWrap: 'wrap' }}>
-              <div style={{ position: 'relative', flex: '1 1 320px', minWidth: 0 }}>
-                <input
-                  type={showAnthropicKey ? 'text' : 'password'}
-                  value={anthropicKey}
-                  onChange={e => setAnthropicKey(e.target.value)}
-                  placeholder="sk-ant-api03-..."
-                  style={{ ...S.input, width: '100%', paddingRight: 70, fontFamily: 'monospace', fontSize: 13 }}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowAnthropicKey(s => !s)}
-                  style={{
-                    position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
-                    background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer',
-                    fontSize: 12, padding: '4px 8px',
-                  }}
-                >{showAnthropicKey ? 'Hide' : 'Show'}</button>
-              </div>
-              <button
-                onClick={saveAnthropicKey}
-                disabled={anthropicKeySaving || !anthropicKey}
-                style={{ ...S.btn(anthropicKeySaved ? 'success' : 'primary'), padding: '0 20px', whiteSpace: 'nowrap' }}
-              >
-                {anthropicKeySaving ? 'Saving…' : anthropicKeySaved ? '✓ Saved' : 'Save'}
-              </button>
+          <Section title="AI">
+            <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.5 }}>
+              AI assessment and title parsing are provided by PartVault — there's no key to configure. Requests run server-side so your credentials are never exposed in the browser.
             </div>
           </Section>
           <Section title="SKU Format">
@@ -1626,7 +1569,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
           {/* Parse with AI */}
           <Section title="🤖 Parse with AI">
             <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
-              Extracts make, model and year from listing titles using Claude Haiku. Processes all unparsed listings in one run. Requires your Anthropic API key saved in the Account tab.
+              Extracts make, model and year from listing titles using Claude Haiku. Processes all unparsed listings in one run. AI is provided by PartVault — no key needed.
             </p>
 
             {parsing && parseProgress && (

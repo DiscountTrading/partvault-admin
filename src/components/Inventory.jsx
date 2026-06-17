@@ -2,8 +2,6 @@ import { useState, useMemo, useRef } from 'react'
 import { C, S, fmt, pct, totalCost, CATEGORY_NAMES, EBAY_AU_CATEGORIES, PART_CONDITIONS, STATUS_COLORS, STATUS_LABELS } from '../lib/constants'
 import { sb } from '../lib/supabase'
 
-const AI_PROXY = 'https://partvault-proxy.leap00.workers.dev'
-
 const MAKES = ['Toyota','Ford','Holden','Mazda','Hyundai','Kia','Mitsubishi','Nissan','Subaru','Honda','Volkswagen','BMW','Mercedes-Benz','Audi','Land Rover','Isuzu','Suzuki','Lexus','Jeep','Volvo','Other']
 const MODEL_SUGS = {Toyota:['Hilux','Camry','Corolla','RAV4','LandCruiser','LandCruiser 200','Prado','HiAce','Kluger','Yaris','Aurion'],Ford:['Ranger','Falcon','Territory','Focus','Fiesta','Escape','Explorer','Mustang','Transit'],Holden:['Commodore','Colorado','Trax','Captiva','Cruze','Astra','Barina','Trailblazer'],Mazda:['CX-5','CX-3','CX-9','CX-7','Mazda3','Mazda6','BT-50','MX-5','RX-7','RX-8'],Hyundai:['i30','Tucson','Santa Fe','i20','Accent','Elantra','Sonata','ix35','Kona'],Kia:['Sportage','Cerato','Rio','Sorento','Carnival','Stinger','Seltos'],Mitsubishi:['Triton','ASX','Outlander','Eclipse Cross','Pajero','Lancer'],Nissan:['Navara','X-Trail','Patrol','Pathfinder','Qashqai','Pulsar','Skyline'],Subaru:['Forester','Outback','Impreza','Liberty','WRX','BRZ','XV'],Honda:['CR-V','HR-V','Jazz','Civic','Accord'],Volkswagen:['Golf','Polo','Tiguan','Passat','Amarok'],BMW:['3 Series','5 Series','7 Series','X3','X5','X1'],'Mercedes-Benz':['C-Class','E-Class','S-Class','GLC','GLE','A-Class'],'Land Rover':['Discovery','Range Rover','Defender'],Isuzu:['D-Max','MU-X'],Suzuki:['Swift','Vitara','Jimny'],Lexus:['RX','NX','GX','IS'],Jeep:['Wrangler','Cherokee','Grand Cherokee'],Volvo:['XC90','XC60','XC40']}
 
@@ -65,17 +63,18 @@ async function generateAIDescription(part, aiSettings, footer) {
   return (data.content?.map(b => b.text || '').join('') || '').trim()
 }
 
-async function analysePartPhoto(photoBase64, car) {
-  const apiKey = localStorage.getItem('pv_anthropic_key') || ''
-  if (!apiKey || apiKey.length < 20) throw new Error('No API key — add it in Settings > Account')
-  const sys = `You are an expert Australian used car parts eBay seller. Return JSON only.\nCategories: ${CATEGORY_NAMES.join(', ')}\nReturn: {"title":"max 80 chars","category":"exact","subcategory":"exact","condition":"Used – Good","description":"3-4 sentences","partNumber":"OEM or empty","sizeTier":"small|medium|large|bulky","listPrice":number,"weight":number,"shippingOption":"Standard Post|Express Post|Courier|Collect Only","confidence":"high|medium|low","notes":"any notes"}`
-  const res = await fetch(AI_PROXY, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 800, system: sys, messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: photoBase64 } }, { type: 'text', text: `Vehicle: ${car?.make||''} ${car?.model||''} ${car?.year||''}. Identify this car part.` }] }] }) })
+// Calls the ai-assess edge function, which holds the platform Anthropic key as
+// a secret. No key lives in the browser.
+async function analysePartPhoto(photoBase64, car, storeId) {
+  const { data: { session } } = await sb.auth.getSession()
+  const res = await fetch('https://mtpektsxaklhedknincs.supabase.co/functions/v1/ai-assess', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+    body: JSON.stringify({ storeId, photoBase64, car, categories: CATEGORY_NAMES }),
+  })
   const data = await res.json()
-  if (data.error) throw new Error(data.error.message)
-  const raw = data.content?.filter(b => b.type === 'text').map(b => b.text).join('').trim()
-  let parsed; try { parsed = JSON.parse(raw) } catch { const m = raw?.match(/\{[\s\S]*\}/); if (m) parsed = JSON.parse(m[0]) }
-  if (!parsed) throw new Error('Could not parse AI response')
-  return parsed
+  if (!res.ok || data.error) throw new Error(data.error || 'AI assessment failed')
+  return data.result
 }
 
 function compressImg(file, callback) {
@@ -230,7 +229,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
     setAnalysing(true); setAiError('')
     try {
       const car = cars?.find(c => c.id === form.car_id)
-      const parsed = await analysePartPhoto(aiPhotos[0].split(',')[1], car||form)
+      const parsed = await analysePartPhoto(aiPhotos[0].split(',')[1], car||form, storeId)
       setForm(f => ({ ...f, title:parsed.title||f.title, category:parsed.category||f.category, subcategory:parsed.subcategory||f.subcategory, condition:parsed.condition||f.condition, description:parsed.description||f.description, partNumber:parsed.partNumber||f.partNumber, listPrice:parsed.listPrice||f.listPrice, weight:parsed.weight||f.weight, costs:parsed.sizeTier?COST_TIERS[parsed.sizeTier]||f.costs:f.costs, ai_assessed:true }))
     } catch(e) { setAiError(e.message) }
     setAnalysing(false)
