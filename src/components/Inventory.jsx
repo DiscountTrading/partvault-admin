@@ -69,6 +69,18 @@ async function generateAIDescription(part, aiSettings, footer, storeId) {
   return (data.text || '').trim()
 }
 
+// Extract a usable URL from a stored photo value (string, JSON string, or object).
+function urlFrom(v) {
+  if (!v) return null
+  if (typeof v === 'object') return v.url || v.ebay_url || null
+  try { const o = JSON.parse(v); return o.url || o.ebay_url || v } catch { return v }
+}
+
+async function urlToBase64(url) {
+  const blob = await (await fetch(url)).blob()
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(blob) })
+}
+
 // Calls the ai-assess edge function, which holds the platform Anthropic key as
 // a secret. No key lives in the browser.
 async function analysePartPhoto(photoBase64, car, storeId) {
@@ -241,6 +253,21 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
     setAnalysing(false)
   }
 
+  // Full AI assessment for an existing part using its own saved photo (for
+  // parts captured on mobile without AI, or to re-run). Fills all listing fields.
+  const partPhotoUrl = urlFrom((form.photos || [])[0])
+  const handleFullAI = async () => {
+    if (!partPhotoUrl) { setAiError('This part has no photo to assess'); return }
+    setAnalysing(true); setAiError('')
+    try {
+      const car = cars?.find(c => c.id === form.car_id)
+      const b64 = await urlToBase64(partPhotoUrl)
+      const parsed = await analysePartPhoto(b64, car||form, storeId)
+      setForm(f => ({ ...f, title:parsed.title||f.title, category:parsed.category||f.category, subcategory:parsed.subcategory||f.subcategory, condition:parsed.condition||f.condition, description:parsed.description||f.description, partNumber:parsed.partNumber||f.partNumber, listPrice:parsed.listPrice||f.listPrice, weight:parsed.weight||f.weight, costs:parsed.sizeTier?COST_TIERS[parsed.sizeTier]||f.costs:f.costs, ai_assessed:true }))
+    } catch(e) { setAiError(e.message) }
+    setAnalysing(false)
+  }
+
   const handleSave = () => onSave({ ...form, list_price:+form.listPrice||0, sold_price:form.soldPrice?+form.soldPrice:null })
   const handleSaveAndAdd = () => onSaveAndAdd({ ...form, list_price:+form.listPrice||0, sold_price:form.soldPrice?+form.soldPrice:null })
 
@@ -296,6 +323,23 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
               {analysing ? '⏳ Analysing…' : '✨ Analyse & fill details'}
             </button>
           )}
+        </Section>
+      )}
+
+      {/* Full AI assessment for an existing part (e.g. captured on mobile without AI) */}
+      {part && partPhotoUrl && (
+        <Section title="AI assessment" accent="#7c3aed"
+          hint={form.ai_assessed ? 'Already assessed. Re-run to regenerate all details from the photo.' : 'Not yet assessed. Run the full AI to fill title, category, condition, description, part number, price and weight from the part photo.'}
+          action={form.ai_assessed
+            ? <span style={{ fontSize:12, fontWeight:700, color:'#16a34a' }}>✓ Assessed</span>
+            : <span style={{ fontSize:12, fontWeight:700, color:'#d97706' }}>Needs AI</span>}>
+          <div style={{ display:'flex', gap:12, alignItems:'center', flexWrap:'wrap' }}>
+            <img src={partPhotoUrl} style={{ width:72, height:72, borderRadius:8, objectFit:'cover', border:`1px solid ${C.border}` }} />
+            <button style={{ ...ebayBtn('secondary'), padding:'8px 18px', fontSize:13, borderColor:'#7c3aed', color:'#7c3aed', opacity:analysing?0.6:1 }} onClick={handleFullAI} disabled={analysing}>
+              {analysing ? '⏳ Assessing…' : (form.ai_assessed ? '✨ Re-run full AI assessment' : '✨ Run full AI assessment')}
+            </button>
+          </div>
+          {aiError && <div style={{ fontSize:12, color:C.red, marginTop:10 }}>{aiError}</div>}
         </Section>
       )}
 
