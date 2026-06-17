@@ -36,6 +36,19 @@ serve(async (req) => {
     const textOf = (data: any) => (data.content || []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('').trim()
     const parseJson = (raw: string) => { try { return JSON.parse(raw) } catch { const m = raw?.match(/\{[\s\S]*\}/); return m ? JSON.parse(m[0]) : null } }
 
+    // Mode: write an eBay listing description from a prebuilt prompt.
+    if (mode === 'describe') {
+      const { prompt } = body
+      if (!prompt) return json({ error: 'prompt required' }, 400)
+      const aiRes = await callAnthropic({
+        model: 'claude-sonnet-4-20250514', max_tokens: 1000,
+        messages: [{ role: 'user', content: prompt }],
+      })
+      const data = await aiRes.json()
+      if (data.error) return json({ error: data.error.message || 'AI error' }, 400)
+      return json({ ok: true, text: textOf(data) })
+    }
+
     // Mode: parse make/model/year from a listing title (cheap, Haiku).
     if (mode === 'parse-title') {
       const { title } = body

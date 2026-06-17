@@ -47,7 +47,7 @@ function AutoInput({ value, onChange, suggestions, placeholder, style }) {
   )
 }
 
-async function generateAIDescription(part, aiSettings, footer) {
+async function generateAIDescription(part, aiSettings, footer, storeId) {
   const lengthGuide = { short: '2-3 sentences covering key facts', medium: '1-2 paragraphs with good detail', long: 'comprehensive description with full fitment and condition detail' }[aiSettings?.descriptionLength || 'medium']
   const fields = []
   if (aiSettings?.includeMake) fields.push('make')
@@ -58,9 +58,15 @@ async function generateAIDescription(part, aiSettings, footer) {
   if (aiSettings?.includeConditionDetail) fields.push('condition detail')
   if (aiSettings?.includeInstallLink && aiSettings?.installLinkUrl) fields.push(`install guide: ${aiSettings.installLinkUrl} with mechanic disclaimer`)
   const prompt = `You are writing an eBay listing description for a used Australian auto part.\nPart: ${part.title||'Unknown'}\nMake: ${part.make||''} Model: ${part.model||''} Year: ${part.year||''}\nCategory: ${part.category||''} > ${part.subcategory||''}\nCondition: ${part.condition||'Used – Good'}\nOEM Part#: ${part.partNumber||'Not specified'}\nNotes: ${part.notes||'None'}\nWrite a ${lengthGuide}. Include: ${fields.join(', ')}.\n${aiSettings?.customPromptNotes||''}\nDo NOT include a store footer. Plain text only. Return ONLY the description text.`
-  const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 1000, messages: [{ role: 'user', content: prompt }] }) })
+  const { data: { session } } = await sb.auth.getSession()
+  const resp = await fetch('https://mtpektsxaklhedknincs.supabase.co/functions/v1/ai-assess', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+    body: JSON.stringify({ storeId, mode: 'describe', prompt }),
+  })
   const data = await resp.json()
-  return (data.content?.map(b => b.text || '').join('') || '').trim()
+  if (!resp.ok || data.error) throw new Error(data.error || 'AI description failed')
+  return (data.text || '').trim()
 }
 
 // Calls the ai-assess edge function, which holds the platform Anthropic key as
@@ -219,7 +225,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
 
   const handleGenerateDesc = async () => {
     setGenerating(true); setAiError('')
-    try { const desc = await generateAIDescription(form, aiSettings, footer); set('description', desc); set('ai_assessed', true) }
+    try { const desc = await generateAIDescription(form, aiSettings, footer, storeId); set('description', desc); set('ai_assessed', true) }
     catch(e) { setAiError(e.message) }
     setGenerating(false)
   }
@@ -429,7 +435,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
 }
 
 // ─── Bulk AI Panel ─────────────────────────────────────────────────────────
-function BulkAIPanel({ group, onComplete, aiSettings, footer }) {
+function BulkAIPanel({ group, onComplete, aiSettings, footer, storeId }) {
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState({ done:0, total:0, current:'' })
   const [done, setDone] = useState(false)
@@ -442,7 +448,7 @@ function BulkAIPanel({ group, onComplete, aiSettings, footer }) {
       const part = needsAI[i]
       setProgress({ done:i, total:needsAI.length, current:part.title||'Part' })
       try {
-        const desc = await generateAIDescription(part, aiSettings, footer)
+        const desc = await generateAIDescription(part, aiSettings, footer, storeId)
         await sb.from('parts').update({ description:desc, ai_assessed:true }).eq('id', part.id)
       } catch(e) { console.error('Failed for part', part.id, e) }
       await new Promise(r => setTimeout(r, 500))
@@ -665,7 +671,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
             <button onClick={() => setExpandedCars(new Set(carGroups.map(g=>g.make+'|'+g.model+'|'+g.year+'|'+(g.carId||''))))} style={{ ...S.btn('secondary'), padding:'3px 10px', fontSize:11 }}>Expand All</button>
             <button onClick={() => setExpandedCars(new Set())} style={{ ...S.btn('secondary'), padding:'3px 10px', fontSize:11 }}>Collapse All</button>
           </div>
-          {bulkAIGroup && <BulkAIPanel group={bulkAIGroup} aiSettings={aiSettings} footer={footer} onComplete={() => setBulkAIGroup(null)} />}
+          {bulkAIGroup && <BulkAIPanel group={bulkAIGroup} aiSettings={aiSettings} footer={footer} storeId={storeId} onComplete={() => setBulkAIGroup(null)} />}
           {carGroups.map(g => {
             const key=g.make+'|'+g.model+'|'+g.year+'|'+(g.carId||'')
             const isOpen=expandedCars.has(key)
