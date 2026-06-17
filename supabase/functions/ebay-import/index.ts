@@ -1407,7 +1407,12 @@ async function handleRequest(req: Request): Promise<Response> {
           // eBay (calculated shipping) requires package weight + dimensions.
           // part weight > category preset > store default > hardcoded.
           const preset = shipCats[part.category] || {}
-          const weightG = Math.round(+part.weight > 0 ? +part.weight : (+preset.weightG > 0 ? +preset.weightG : shipDefW))
+          // part.weight is stored in grams (matching the import path). Guard against
+          // missing / zero / sub-gram values that eBay rejects ("Invalid value for
+          // weight.value") by falling back to the category preset or store default.
+          const presetOrDefaultG = +preset.weightG > 0 ? +preset.weightG : shipDefW
+          let weightG = Math.round(+part.weight > 0 ? +part.weight : presetOrDefaultG)
+          if (!Number.isFinite(weightG) || weightG < 2) weightG = Math.round(presetOrDefaultG)
           const dimL = +preset.l > 0 ? +preset.l : (+shipDefDims.l > 0 ? +shipDefDims.l : 30)
           const dimW = +preset.w > 0 ? +preset.w : (+shipDefDims.w > 0 ? +shipDefDims.w : 20)
           const dimH = +preset.h > 0 ? +preset.h : (+shipDefDims.h > 0 ? +shipDefDims.h : 15)

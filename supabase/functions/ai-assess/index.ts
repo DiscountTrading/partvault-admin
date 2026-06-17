@@ -77,7 +77,7 @@ serve(async (req) => {
     }
     if (!b64) return json({ error: 'photoBase64 or photoUrl required' }, 400)
     const cats = Array.isArray(categories) && categories.length ? categories.join(', ') : 'Other Car & Truck Parts'
-    const sys = `You are an expert Australian used car parts eBay seller. Return JSON only.\nCategories: ${cats}\nReturn: {"title":"max 80 chars","category":"exact","subcategory":"exact","condition":"Used – Good","description":"3-4 sentences","partNumber":"OEM or empty","listPrice":number,"weight":number,"notes":""}`
+    const sys = `You are an expert Australian used car parts eBay seller. Return JSON only.\nCategories: ${cats}\nReturn: {"title":"max 80 chars","category":"exact","subcategory":"exact","condition":"Used – Good","description":"3-4 sentences","partNumber":"OEM or empty","listPrice":number,"weight":number,"notes":""}\nweight is the estimated packed shipping weight in GRAMS (whole number, e.g. 1500 for 1.5kg). Never return kilograms or a value below 50.`
     const aiRes = await callAnthropic({
       model: 'claude-sonnet-4-6', max_tokens: 800, system: sys,
       messages: [{ role: 'user', content: [

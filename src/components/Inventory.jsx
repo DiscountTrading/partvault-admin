@@ -440,7 +440,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
           <Field label="List Price ($)"><input style={{ ...S.input, fontWeight:700, fontSize:16 }} type="number" value={form.listPrice||''} onChange={e => set('listPrice', e.target.value)} /></Field>
           <Field label="Sold Price ($)"><input style={S.input} type="number" value={form.soldPrice||''} onChange={e => set('soldPrice', e.target.value)} /></Field>
-          <Field label="Weight (kg)"><input style={S.input} type="number" value={form.weight||''} onChange={e => set('weight', e.target.value)} /></Field>
+          <Field label="Weight (g)"><input style={S.input} type="number" value={form.weight||''} onChange={e => set('weight', e.target.value)} /></Field>
         </div>
         <div style={{ background:'#f9f8f5', border:`1px solid ${C.border}`, borderRadius:10, padding:'14px 16px', marginTop:6 }}>
           <div style={{ fontSize:13, fontWeight:700, color:C.text, marginBottom:12 }}>Cost breakdown (AUD)</div>
