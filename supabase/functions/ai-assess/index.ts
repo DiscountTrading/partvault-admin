@@ -41,7 +41,7 @@ serve(async (req) => {
       const { prompt } = body
       if (!prompt) return json({ error: 'prompt required' }, 400)
       const aiRes = await callAnthropic({
-        model: 'claude-sonnet-4-20250514', max_tokens: 1000,
+        model: 'claude-sonnet-4-6', max_tokens: 1000,
         messages: [{ role: 'user', content: prompt }],
       })
       const data = await aiRes.json()
@@ -70,7 +70,7 @@ serve(async (req) => {
     const cats = Array.isArray(categories) && categories.length ? categories.join(', ') : 'Other Car & Truck Parts'
     const sys = `You are an expert Australian used car parts eBay seller. Return JSON only.\nCategories: ${cats}\nReturn: {"title":"max 80 chars","category":"exact","subcategory":"exact","condition":"Used – Good","description":"3-4 sentences","partNumber":"OEM or empty","listPrice":number,"weight":number,"notes":""}`
     const aiRes = await callAnthropic({
-      model: 'claude-sonnet-4-20250514', max_tokens: 800, system: sys,
+      model: 'claude-sonnet-4-6', max_tokens: 800, system: sys,
       messages: [{ role: 'user', content: [
         { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: photoBase64 } },
         { type: 'text', text: `Vehicle: ${car?.make || ''} ${car?.model || ''} ${car?.year || ''}. Identify this car part.` },
