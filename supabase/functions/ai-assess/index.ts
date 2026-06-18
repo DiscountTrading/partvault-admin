@@ -64,26 +64,24 @@ serve(async (req) => {
       return json({ ok: true, result: parsed })
     }
 
-    // Mode: assess a part from its photo (default).
-    const { photoBase64, photoUrl, car, categories, partId, existingTitle, existingPrice } = body
-    let b64 = photoBase64
-    if (!b64 && photoUrl) {
-      const imgRes = await fetch(photoUrl)
-      if (!imgRes.ok) return json({ error: `Could not fetch photo (${imgRes.status})` }, 400)
-      const bytes = new Uint8Array(await imgRes.arrayBuffer())
-      let bin = ''
-      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i])
-      b64 = btoa(bin)
-    }
-    if (!b64) return json({ error: 'photoBase64 or photoUrl required' }, 400)
+    // Mode: assess a part from its photos (default). Uses every photo (angles,
+    // label close-ups, part-number stamps) for a more accurate assessment.
+    const { photoBase64, photoBase64s, photoUrl, photoUrls, car, categories, partId, existingTitle, existingPrice } = body
+    const urls = (Array.isArray(photoUrls) ? photoUrls : (photoUrl ? [photoUrl] : [])).filter(Boolean).slice(0, 8)
+    const b64s = (Array.isArray(photoBase64s) ? photoBase64s : (photoBase64 ? [photoBase64] : [])).filter(Boolean).slice(0, 8)
+    const imageBlocks: any[] = [
+      ...urls.map((u: string) => ({ type: 'image', source: { type: 'url', url: u } })),
+      ...b64s.map((b: string) => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b } })),
+    ]
+    if (!imageBlocks.length) return json({ error: 'At least one photo is required' }, 400)
     const cats = Array.isArray(categories) && categories.length ? categories.join(', ') : 'Other Car & Truck Parts'
     const sys = `You are an expert Australian used car parts eBay seller. Return JSON only.\nCategories: ${cats}\nReturn: {"title":"max 80 chars","category":"exact","subcategory":"exact","condition":"Used – Good","description":"3-4 sentences","partNumber":"OEM or empty","listPrice":number,"weight":number,"notes":""}\nweight is the estimated packed shipping weight in GRAMS (whole number, e.g. 1500 for 1.5kg). Never return kilograms or a value below 50.`
+    const askText = imageBlocks.length > 1
+      ? `Vehicle: ${car?.make || ''} ${car?.model || ''} ${car?.year || ''}. These ${imageBlocks.length} photos are all of the SAME part from different angles/close-ups. Use all of them together — especially any part numbers, labels or stampings — to identify it accurately.`
+      : `Vehicle: ${car?.make || ''} ${car?.model || ''} ${car?.year || ''}. Identify this car part.`
     const aiRes = await callAnthropic({
       model: 'claude-sonnet-4-6', max_tokens: 800, system: sys,
-      messages: [{ role: 'user', content: [
-        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
-        { type: 'text', text: `Vehicle: ${car?.make || ''} ${car?.model || ''} ${car?.year || ''}. Identify this car part.` },
-      ] }],
+      messages: [{ role: 'user', content: [...imageBlocks, { type: 'text', text: askText }] }],
     })
     const data = await aiRes.json()
     if (data.error) return json({ error: data.error.message || 'AI error' }, 400)

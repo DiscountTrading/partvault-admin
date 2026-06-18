@@ -76,19 +76,15 @@ function urlFrom(v) {
   try { const o = JSON.parse(v); return o.url || o.ebay_url || v } catch { return v }
 }
 
-async function urlToBase64(url) {
-  const blob = await (await fetch(url)).blob()
-  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(blob) })
-}
-
-// Calls the ai-assess edge function, which holds the platform Anthropic key as
-// a secret. No key lives in the browser.
-async function analysePartPhoto(photoBase64, car, storeId) {
+// Calls the ai-assess edge function (holds the platform Anthropic key as a
+// secret — no key in the browser). Pass all the part's photos so the AI can
+// assess across every angle / label / part-number close-up.
+async function analysePart({ photoBase64s, photoUrls }, car, storeId) {
   const { data: { session } } = await sb.auth.getSession()
   const res = await fetch('https://mtpektsxaklhedknincs.supabase.co/functions/v1/ai-assess', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-    body: JSON.stringify({ storeId, photoBase64, car, categories: CATEGORY_NAMES }),
+    body: JSON.stringify({ storeId, photoBase64s, photoUrls, car, categories: CATEGORY_NAMES }),
   })
   const data = await res.json()
   if (!res.ok || data.error) throw new Error(data.error || 'AI assessment failed')
@@ -247,7 +243,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
     setAnalysing(true); setAiError('')
     try {
       const car = cars?.find(c => c.id === form.car_id)
-      const parsed = await analysePartPhoto(aiPhotos[0].split(',')[1], car||form, storeId)
+      const parsed = await analysePart({ photoBase64s: aiPhotos.map(p => p.split(',')[1]) }, car||form, storeId)
       setForm(f => ({ ...f, title:parsed.title||f.title, category:parsed.category||f.category, subcategory:parsed.subcategory||f.subcategory, condition:parsed.condition||f.condition, description:parsed.description||f.description, partNumber:parsed.partNumber||f.partNumber, listPrice:parsed.listPrice||f.listPrice, weight:parsed.weight||f.weight, costs:parsed.sizeTier?COST_TIERS[parsed.sizeTier]||f.costs:f.costs, ai_assessed:true }))
     } catch(e) { setAiError(e.message) }
     setAnalysing(false)
@@ -255,14 +251,14 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
 
   // Full AI assessment for an existing part using its own saved photo (for
   // parts captured on mobile without AI, or to re-run). Fills all listing fields.
-  const partPhotoUrl = urlFrom((form.photos || [])[0])
+  const partPhotoUrls = (form.photos || []).map(urlFrom).filter(Boolean)
+  const partPhotoUrl = partPhotoUrls[0]
   const handleFullAI = async () => {
-    if (!partPhotoUrl) { setAiError('This part has no photo to assess'); return }
+    if (!partPhotoUrls.length) { setAiError('This part has no photo to assess'); return }
     setAnalysing(true); setAiError('')
     try {
       const car = cars?.find(c => c.id === form.car_id)
-      const b64 = await urlToBase64(partPhotoUrl)
-      const parsed = await analysePartPhoto(b64, car||form, storeId)
+      const parsed = await analysePart({ photoUrls: partPhotoUrls }, car||form, storeId)
       setForm(f => ({ ...f, title:parsed.title||f.title, category:parsed.category||f.category, subcategory:parsed.subcategory||f.subcategory, condition:parsed.condition||f.condition, description:parsed.description||f.description, partNumber:parsed.partNumber||f.partNumber, listPrice:parsed.listPrice||f.listPrice, weight:parsed.weight||f.weight, costs:parsed.sizeTier?COST_TIERS[parsed.sizeTier]||f.costs:f.costs, ai_assessed:true }))
     } catch(e) { setAiError(e.message) }
     setAnalysing(false)

@@ -1393,23 +1393,23 @@ async function handleRequest(req: Request): Promise<Response> {
               // Pass 2 — let the AI fill the remaining specifics from the part photo
               // (Colour, Material, Surface Finish, Placement, Fitment, Warranty, …).
               // Best-effort: never block a publish if the AI call fails.
-              const photoForAi = partUrls[0] || imageUrls[0]
+              const aiPhotos = (partUrls.length ? partUrls : imageUrls).slice(0, 6)
               const todo = specs.filter((s: any) => !aspects[s.name]).slice(0, 30)
               const ANTHROPIC = Deno.env.get('ANTHROPIC_API_KEY')
-              if (ANTHROPIC && photoForAi && todo.length) {
+              if (ANTHROPIC && aiPhotos.length && todo.length) {
                 try {
                   const aspList = todo.map((s: any) => s.selectionOnly && s.allowed.length
                     ? `- ${s.name} (choose exactly one, verbatim: ${s.allowed.slice(0, 40).join(' | ')})`
                     : `- ${s.name} (free text, max 60 chars)`).join('\n')
                   const sys = `You are an expert Australian auto-parts eBay lister. Look at the part photo and the known vehicle, and fill in eBay item specifics. Return JSON only: an object mapping each aspect name to ONE string value. Only include an aspect if you can determine it with reasonable confidence from the photo or the known part/vehicle. For "choose one" aspects you MUST return one of the listed options verbatim, otherwise omit it. Never invent a colour, material or measurement you cannot actually see.`
-                  const usr = `Part: ${part.title || ''}\nVehicle: ${part.make || ''} ${part.model || ''} ${part.year || ''}\nCategory: ${part.category || ''}\nPart number: ${part.part_number || 'unknown'}\n\nAspects to fill:\n${aspList}`
+                  const usr = `Part: ${part.title || ''}\nVehicle: ${part.make || ''} ${part.model || ''} ${part.year || ''}\nCategory: ${part.category || ''}\nPart number: ${part.part_number || 'unknown'}\n${aiPhotos.length > 1 ? `\nThe ${aiPhotos.length} photos are all of the SAME part from different angles/close-ups — use them together.` : ''}\nAspects to fill:\n${aspList}`
                   const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
                     method: 'POST',
                     headers: { 'x-api-key': ANTHROPIC, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
                     body: JSON.stringify({
                       model: 'claude-sonnet-4-6', max_tokens: 700, system: sys,
                       messages: [{ role: 'user', content: [
-                        { type: 'image', source: { type: 'url', url: photoForAi } },
+                        ...aiPhotos.map((u: string) => ({ type: 'image', source: { type: 'url', url: u } })),
                         { type: 'text', text: usr },
                       ] }],
                     }),
