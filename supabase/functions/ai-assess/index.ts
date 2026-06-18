@@ -64,24 +64,52 @@ serve(async (req) => {
       return json({ ok: true, result: parsed })
     }
 
-    // Mode: assess a part from its photos (default). Uses every photo (angles,
-    // label close-ups, part-number stamps) for a more accurate assessment.
-    const { photoBase64, photoBase64s, photoUrl, photoUrls, car, categories, partId, existingTitle, existingPrice } = body
+    // Mode: assess a part from its photos (default). Uses every part photo
+    // (angles, label close-ups, part-number stamps) plus the donor car's photos
+    // and details as context for a more accurate assessment.
+    const { photoBase64, photoBase64s, photoUrl, photoUrls, car, carId, categories, partId, existingTitle, existingPrice } = body
     const urls = (Array.isArray(photoUrls) ? photoUrls : (photoUrl ? [photoUrl] : [])).filter(Boolean).slice(0, 8)
     const b64s = (Array.isArray(photoBase64s) ? photoBase64s : (photoBase64 ? [photoBase64] : [])).filter(Boolean).slice(0, 8)
-    const imageBlocks: any[] = [
+    const partBlocks: any[] = [
       ...urls.map((u: string) => ({ type: 'image', source: { type: 'url', url: u } })),
       ...b64s.map((b: string) => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b } })),
     ]
-    if (!imageBlocks.length) return json({ error: 'At least one photo is required' }, 400)
+    if (!partBlocks.length) return json({ error: 'At least one photo is required' }, 400)
+
+    // Authoritative donor-car details + photos (best-effort context).
+    const urlOf = (v: any) => { if (!v) return null; if (typeof v === 'object') return v.url || v.ebay_url || null; try { const o = JSON.parse(v); return o.url || o.ebay_url || v } catch { return v } }
+    let carInfo: any = car || {}
+    const carBlocks: any[] = []
+    if (carId) {
+      try {
+        const service = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+        const { data: c } = await service.from('cars').select('make,model,year,notes,photos').eq('id', carId).single()
+        if (c) {
+          carInfo = { make: c.make || carInfo.make, model: c.model || carInfo.model, year: c.year || carInfo.year, notes: c.notes }
+          const { data: ph } = await service.from('photos').select('url').eq('parent_type', 'car').eq('parent_id', carId).order('display_order').limit(4)
+          let carPhotos: string[] = (ph || []).map((p: any) => p.url).filter(Boolean)
+          if (!carPhotos.length && Array.isArray(c.photos)) carPhotos = c.photos.map(urlOf).filter(Boolean)
+          for (const u of carPhotos.slice(0, 3)) carBlocks.push({ type: 'image', source: { type: 'url', url: u } })
+        }
+      } catch (_) { /* context is best-effort */ }
+    }
+
     const cats = Array.isArray(categories) && categories.length ? categories.join(', ') : 'Other Car & Truck Parts'
     const sys = `You are an expert Australian used car parts eBay seller. Return JSON only.\nCategories: ${cats}\nReturn: {"title":"max 80 chars","category":"exact","subcategory":"exact","condition":"Used – Good","description":"3-4 sentences","partNumber":"OEM or empty","listPrice":number,"weight":number,"notes":""}\nweight is the estimated packed shipping weight in GRAMS (whole number, e.g. 1500 for 1.5kg). Never return kilograms or a value below 50.`
-    const askText = imageBlocks.length > 1
-      ? `Vehicle: ${car?.make || ''} ${car?.model || ''} ${car?.year || ''}. These ${imageBlocks.length} photos are all of the SAME part from different angles/close-ups. Use all of them together — especially any part numbers, labels or stampings — to identify it accurately.`
-      : `Vehicle: ${car?.make || ''} ${car?.model || ''} ${car?.year || ''}. Identify this car part.`
+    const vehicleLine = `Donor vehicle: ${carInfo.make || ''} ${carInfo.model || ''} ${carInfo.year || ''}${carInfo.notes ? ` (notes: ${String(carInfo.notes).slice(0, 200)})` : ''}`.trim()
+    const content: any[] = [
+      { type: 'text', text: `PART photos (${partBlocks.length}) — identify THIS part:` },
+      ...partBlocks,
+    ]
+    if (carBlocks.length) {
+      content.push({ type: 'text', text: `DONOR VEHICLE photos (${carBlocks.length}) — context only, to confirm the make/model/variant. Do NOT describe the car; identify the PART above.` })
+      content.push(...carBlocks)
+    }
+    const multi = partBlocks.length > 1 ? 'The part photos are the same part from different angles/close-ups — read any part numbers, labels or stampings.' : ''
+    content.push({ type: 'text', text: `${vehicleLine}\n${multi}\nIdentify the part and return the JSON.` })
     const aiRes = await callAnthropic({
       model: 'claude-sonnet-4-6', max_tokens: 800, system: sys,
-      messages: [{ role: 'user', content: [...imageBlocks, { type: 'text', text: askText }] }],
+      messages: [{ role: 'user', content }],
     })
     const data = await aiRes.json()
     if (data.error) return json({ error: data.error.message || 'AI error' }, 400)

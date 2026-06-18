@@ -79,12 +79,12 @@ function urlFrom(v) {
 // Calls the ai-assess edge function (holds the platform Anthropic key as a
 // secret — no key in the browser). Pass all the part's photos so the AI can
 // assess across every angle / label / part-number close-up.
-async function analysePart({ photoBase64s, photoUrls }, car, storeId) {
+async function analysePart({ photoBase64s, photoUrls, carId }, car, storeId) {
   const { data: { session } } = await sb.auth.getSession()
   const res = await fetch('https://mtpektsxaklhedknincs.supabase.co/functions/v1/ai-assess', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-    body: JSON.stringify({ storeId, photoBase64s, photoUrls, car, categories: CATEGORY_NAMES }),
+    body: JSON.stringify({ storeId, photoBase64s, photoUrls, car, carId, categories: CATEGORY_NAMES }),
   })
   const data = await res.json()
   if (!res.ok || data.error) throw new Error(data.error || 'AI assessment failed')
@@ -243,7 +243,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
     setAnalysing(true); setAiError('')
     try {
       const car = cars?.find(c => c.id === form.car_id)
-      const parsed = await analysePart({ photoBase64s: aiPhotos.map(p => p.split(',')[1]) }, car||form, storeId)
+      const parsed = await analysePart({ photoBase64s: aiPhotos.map(p => p.split(',')[1]), carId: car?.id }, car||form, storeId)
       setForm(f => ({ ...f, title:parsed.title||f.title, category:parsed.category||f.category, subcategory:parsed.subcategory||f.subcategory, condition:parsed.condition||f.condition, description:parsed.description||f.description, partNumber:parsed.partNumber||f.partNumber, listPrice:parsed.listPrice||f.listPrice, weight:parsed.weight||f.weight, costs:parsed.sizeTier?COST_TIERS[parsed.sizeTier]||f.costs:f.costs, ai_assessed:true }))
     } catch(e) { setAiError(e.message) }
     setAnalysing(false)
@@ -258,7 +258,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
     setAnalysing(true); setAiError('')
     try {
       const car = cars?.find(c => c.id === form.car_id)
-      const parsed = await analysePart({ photoUrls: partPhotoUrls }, car||form, storeId)
+      const parsed = await analysePart({ photoUrls: partPhotoUrls, carId: car?.id }, car||form, storeId)
       setForm(f => ({ ...f, title:parsed.title||f.title, category:parsed.category||f.category, subcategory:parsed.subcategory||f.subcategory, condition:parsed.condition||f.condition, description:parsed.description||f.description, partNumber:parsed.partNumber||f.partNumber, listPrice:parsed.listPrice||f.listPrice, weight:parsed.weight||f.weight, costs:parsed.sizeTier?COST_TIERS[parsed.sizeTier]||f.costs:f.costs, ai_assessed:true }))
     } catch(e) { setAiError(e.message) }
     setAnalysing(false)
