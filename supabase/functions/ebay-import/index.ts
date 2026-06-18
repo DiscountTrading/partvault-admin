@@ -1402,7 +1402,7 @@ async function handleRequest(req: Request): Promise<Response> {
                   const aspList = todo.map((s: any) => s.selectionOnly && s.allowed.length
                     ? `- ${s.name} (choose exactly one, verbatim: ${s.allowed.slice(0, 40).join(' | ')})`
                     : `- ${s.name} (free text, max 60 chars)`).join('\n')
-                  const sys = `You are an expert Australian auto-parts eBay lister. From the part photos and the known donor vehicle, do TWO things and return JSON only:\n{"aspects": {<aspectName>: <value>}, "fitment": [{"make":"","model":"","yearFrom":2012,"yearTo":2017,"trim":""}]}\nASPECTS: only include one you can determine with reasonable confidence from the photo or known part/vehicle. For "choose one" aspects return one listed option verbatim, otherwise omit. Never invent a colour/material/measurement you cannot see.\nFITMENT: list ONLY vehicles you are CONFIDENT share this IDENTICAL part (same OEM / interchange number) — include the donor vehicle plus any platform-shared siblings you are genuinely sure about. OMIT anything uncertain. Use realistic Australian-market year ranges. Return an empty array if unsure. Do not guess to widen coverage — an over-broad fitment causes returns and hurts the seller.`
+                  const sys = `You are an expert Australian auto-parts eBay lister. From the part photos and the known donor vehicle, do TWO things and return JSON only:\n{"aspects": {<aspectName>: <value>}, "fitment": [{"make":"","model":"","yearFrom":2012,"yearTo":2017,"trim":"","engine":""}]}\ntrim and engine are optional — include them only when the part is specific to that trim/engine; leave "" otherwise.\nASPECTS: only include one you can determine with reasonable confidence from the photo or known part/vehicle. For "choose one" aspects return one listed option verbatim, otherwise omit. Never invent a colour/material/measurement you cannot see.\nFITMENT: list ONLY vehicles you are CONFIDENT share this IDENTICAL part (same OEM / interchange number) — include the donor vehicle plus any platform-shared siblings you are genuinely sure about. OMIT anything uncertain. Use realistic Australian-market year ranges. Return an empty array if unsure. Do not guess to widen coverage — an over-broad fitment causes returns and hurts the seller.`
                   const usr = `Part: ${part.title || ''}\nVehicle: ${part.make || ''} ${part.model || ''} ${part.year || ''}\nCategory: ${part.category || ''}\nPart number: ${part.part_number || 'unknown'}\n${aiPhotos.length > 1 ? `\nThe ${aiPhotos.length} photos are all of the SAME part from different angles/close-ups — use them together.` : ''}\nAspects to fill:\n${aspList}`
                   const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
                     method: 'POST',
@@ -1510,6 +1510,39 @@ async function handleRequest(req: Request): Promise<Response> {
           })
           if (!invRes.ok && invRes.status !== 204) {
             throw new Error(`Inventory item ${invRes.status}: ${(await invRes.text()).slice(0, 300)}`)
+          }
+
+          // 1b. eBay Parts Compatibility (the real "fits my vehicle" system).
+          // Best-effort: many non-motors categories don't support it and invalid
+          // catalogue entries are rejected — so we never let it block a publish.
+          if (fitmentList.length) {
+            try {
+              const compatibleProducts: any[] = []
+              for (const f of fitmentList) {
+                if (!f.make || !f.model) continue
+                const yf = +f.yearFrom, yt = +f.yearTo || yf
+                const years: string[] = []
+                if (yf) for (let y = yf; y <= yt && y - yf < 40; y++) years.push(String(y))
+                else years.push('')
+                for (const y of years) {
+                  const props: any[] = [{ name: 'Make', value: String(f.make) }, { name: 'Model', value: String(f.model) }]
+                  if (y) props.push({ name: 'Year', value: y })
+                  if (f.trim) props.push({ name: 'Trim', value: String(f.trim) })
+                  if (f.engine) props.push({ name: 'Engine', value: String(f.engine) })
+                  compatibleProducts.push({ compatibilityProperties: props, ...(part.part_number ? { notes: `Part #: ${part.part_number}` } : {}) })
+                  if (compatibleProducts.length >= 200) break
+                }
+                if (compatibleProducts.length >= 200) break
+              }
+              if (compatibleProducts.length) {
+                const compatRes = await fetch(`https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}/product_compatibility`, {
+                  method: 'PUT', headers: ebayHeaders, body: JSON.stringify({ compatibleProducts }),
+                })
+                if (!compatRes.ok && compatRes.status !== 204) {
+                  console.warn(`Parts compatibility skipped (${compatRes.status}) for ${sku}: ${(await compatRes.text()).slice(0, 200)}`)
+                }
+              }
+            } catch (e) { console.warn('Parts compatibility error', e) }
           }
 
           // 2. Create the offer — or reuse an existing one for this SKU
