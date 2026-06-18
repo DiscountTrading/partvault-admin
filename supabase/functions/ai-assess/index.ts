@@ -95,7 +95,7 @@ serve(async (req) => {
     }
 
     const cats = Array.isArray(categories) && categories.length ? categories.join(', ') : 'Other Car & Truck Parts'
-    const sys = `You are an expert Australian used car parts eBay seller. Return JSON only.\nCategories: ${cats}\nReturn: {"title":"max 80 chars","category":"exact","subcategory":"exact","condition":"Used – Good","description":"3-4 sentences","partNumber":"OEM or empty","listPrice":number,"weight":number,"notes":""}\nweight is the estimated packed shipping weight in GRAMS (whole number, e.g. 1500 for 1.5kg). Never return kilograms or a value below 50.`
+    const sys = `You are an expert Australian used car parts eBay seller. Return JSON only.\nCategories: ${cats}\nReturn: {"title":"max 80 chars","category":"exact","subcategory":"exact","condition":"Used – Good","description":"3-4 sentences","partNumber":"OEM or empty","listPrice":number,"weight":number,"notes":""}\ntitle MUST be optimised for eBay search (Cassini): front-load the exact terms buyers type — Make Model Year(s) PartType — then key qualifiers (side/position, OEM/part number, variant, colour). Use as much of the 80 chars as possible, no filler words, no ALL CAPS. Example: "Holden Commodore VE 2006-2013 Right Front Headlight Halogen 92193575 Genuine".\nweight is the estimated packed shipping weight in GRAMS (whole number, e.g. 1500 for 1.5kg). Never return kilograms or a value below 50.`
     const vehicleLine = `Donor vehicle: ${carInfo.make || ''} ${carInfo.model || ''} ${carInfo.year || ''}${carInfo.notes ? ` (notes: ${String(carInfo.notes).slice(0, 200)})` : ''}`.trim()
     const content: any[] = [
       { type: 'text', text: `PART photos (${partBlocks.length}) — identify THIS part:` },

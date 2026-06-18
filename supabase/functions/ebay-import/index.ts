@@ -1342,6 +1342,7 @@ async function handleRequest(req: Request): Promise<Response> {
           const marketingUrls = marketingImages.slice(0, marketingMax)
           let imageUrls = [...new Set([...partUrls, ...carUrls, ...marketingUrls])].slice(0, EBAY_MAX_IMAGES)
           const aspects: Record<string, string[]> = {}
+          let fitmentList: any[] = [] // confident vehicle fitment from the AI (for compatible specifics + description)
           // Derive an item-specific value from the part/car data by aspect name —
           // this is what populates the previously-blank fields (Compatible Make/
           // Model/Year, Placement, OE/Interchange/Superseded number, Type, Brand).
@@ -1401,13 +1402,13 @@ async function handleRequest(req: Request): Promise<Response> {
                   const aspList = todo.map((s: any) => s.selectionOnly && s.allowed.length
                     ? `- ${s.name} (choose exactly one, verbatim: ${s.allowed.slice(0, 40).join(' | ')})`
                     : `- ${s.name} (free text, max 60 chars)`).join('\n')
-                  const sys = `You are an expert Australian auto-parts eBay lister. Look at the part photo and the known vehicle, and fill in eBay item specifics. Return JSON only: an object mapping each aspect name to ONE string value. Only include an aspect if you can determine it with reasonable confidence from the photo or the known part/vehicle. For "choose one" aspects you MUST return one of the listed options verbatim, otherwise omit it. Never invent a colour, material or measurement you cannot actually see.`
+                  const sys = `You are an expert Australian auto-parts eBay lister. From the part photos and the known donor vehicle, do TWO things and return JSON only:\n{"aspects": {<aspectName>: <value>}, "fitment": [{"make":"","model":"","yearFrom":2012,"yearTo":2017,"trim":""}]}\nASPECTS: only include one you can determine with reasonable confidence from the photo or known part/vehicle. For "choose one" aspects return one listed option verbatim, otherwise omit. Never invent a colour/material/measurement you cannot see.\nFITMENT: list ONLY vehicles you are CONFIDENT share this IDENTICAL part (same OEM / interchange number) — include the donor vehicle plus any platform-shared siblings you are genuinely sure about. OMIT anything uncertain. Use realistic Australian-market year ranges. Return an empty array if unsure. Do not guess to widen coverage — an over-broad fitment causes returns and hurts the seller.`
                   const usr = `Part: ${part.title || ''}\nVehicle: ${part.make || ''} ${part.model || ''} ${part.year || ''}\nCategory: ${part.category || ''}\nPart number: ${part.part_number || 'unknown'}\n${aiPhotos.length > 1 ? `\nThe ${aiPhotos.length} photos are all of the SAME part from different angles/close-ups — use them together.` : ''}\nAspects to fill:\n${aspList}`
                   const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
                     method: 'POST',
                     headers: { 'x-api-key': ANTHROPIC, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
                     body: JSON.stringify({
-                      model: 'claude-sonnet-4-6', max_tokens: 700, system: sys,
+                      model: 'claude-sonnet-4-6', max_tokens: 900, system: sys,
                       messages: [{ role: 'user', content: [
                         ...aiPhotos.map((u: string) => ({ type: 'image', source: { type: 'url', url: u } })),
                         { type: 'text', text: usr },
@@ -1417,18 +1418,39 @@ async function handleRequest(req: Request): Promise<Response> {
                   if (aiRes.ok) {
                     const aiData = await aiRes.json()
                     const raw = (aiData.content || []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('').trim()
-                    let map: Record<string, string> | null = null
+                    let map: any = null
                     try { map = JSON.parse(raw) } catch { const mm = raw.match(/\{[\s\S]*\}/); if (mm) map = JSON.parse(mm[0]) }
-                    if (map) {
-                      for (const s of todo) {
-                        const v = (map as Record<string, string>)[s.name]
-                        if (!v || typeof v !== 'string') continue
-                        if (s.selectionOnly && s.allowed.length) { const m = inAllowedOf(s.allowed, v); if (m) aspects[s.name] = [m] }
-                        else aspects[s.name] = [v.slice(0, 65)]
-                      }
+                    const aspMap = map?.aspects || map || {}
+                    for (const s of todo) {
+                      const v = aspMap[s.name]
+                      if (!v || typeof v !== 'string') continue
+                      if (s.selectionOnly && s.allowed.length) { const m = inAllowedOf(s.allowed, v); if (m) aspects[s.name] = [m] }
+                      else aspects[s.name] = [v.slice(0, 65)]
                     }
+                    if (Array.isArray(map?.fitment)) fitmentList = map.fitment.slice(0, 50)
                   }
                 } catch (_) { /* AI is best-effort */ }
+              }
+
+              // Compatible-vehicle item specifics (multi-value) from the fitment,
+              // for the categories that expose "Compatible Make/Model/Year" — this
+              // is what makes the part surface in eBay's vehicle-filtered searches.
+              if (fitmentList.length) {
+                const uniq = (xs: string[]) => [...new Set(xs.filter(Boolean))]
+                const makes = uniq(fitmentList.map((f: any) => f.make))
+                const models = uniq(fitmentList.map((f: any) => f.model))
+                const years = uniq(fitmentList.flatMap((f: any) => {
+                  const out: string[] = []; const yf = +f.yearFrom, yt = +f.yearTo || yf
+                  if (yf) for (let y = yf; y <= yt && y - yf < 40; y++) out.push(String(y))
+                  return out
+                }))
+                for (const s of specs) {
+                  const nlc = s.name.toLowerCase()
+                  if (!/compat/.test(nlc)) continue
+                  let vals = /make/.test(nlc) ? makes : /model/.test(nlc) ? models : /year/.test(nlc) ? years : []
+                  if (s.allowed.length) vals = vals.map((v) => inAllowedOf(s.allowed, v)).filter(Boolean) as string[]
+                  if (vals.length) aspects[s.name] = uniq([...(aspects[s.name] || []), ...vals]).slice(0, 30)
+                }
               }
 
               // Pass 3 — any REQUIRED aspect still empty gets a sensible/neutral value
@@ -1449,8 +1471,15 @@ async function handleRequest(req: Request): Promise<Response> {
           // store's standard footer from settings.
           const esc = (s: string) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
           const descBody = part.description || part.notes || part.title || ''
+          // "Compatible with" block from the confident fitment — improves buyer
+          // confidence and adds searchable vehicle terms to the listing.
+          const fitsLines = fitmentList.map((f: any) => {
+            const yr = +f.yearFrom ? ` ${f.yearFrom}${+f.yearTo && +f.yearTo !== +f.yearFrom ? `-${f.yearTo}` : ''}` : ''
+            return [`${[f.make, f.model].filter(Boolean).join(' ')}${yr}`, f.trim].filter(Boolean).join(' ').trim()
+          }).filter(Boolean)
+          const fitsBlock = fitsLines.length ? `Compatible with:\n${fitsLines.map((l: string) => `• ${l}`).join('\n')}\nPlease confirm fitment against your part number before purchase.` : ''
           const footer = storeRow?.settings?.footer || ''
-          const fullDescription = [descBody, footer].filter(Boolean).map((s: string) => esc(s).replace(/\n/g, '<br>')).join('<br><br>') || (part.title || sku)
+          const fullDescription = [descBody, fitsBlock, footer].filter(Boolean).map((s: string) => esc(s).replace(/\n/g, '<br>')).join('<br><br>') || (part.title || sku)
           const allowOffers = !!storeRow?.settings?.allowOffers
 
           // eBay (calculated shipping) requires package weight + dimensions.
