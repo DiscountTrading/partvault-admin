@@ -1370,28 +1370,77 @@ async function handleRequest(req: Request): Promise<Response> {
             if (aRes.ok) {
               const aData = await aRes.json()
               const NEUTRAL = ['unbranded', 'does not apply', 'unknown', 'not specified', 'unspecified', 'other', 'na', 'n/a']
-              for (const a of (aData.aspects || [])) {
-                const name = a.localizedAspectName
-                if (aspects[name]) continue
-                const required = !!a.aspectConstraint?.aspectRequired
-                const selectionOnly = a.aspectConstraint?.aspectMode === 'SELECTION_ONLY'
-                const allowed = (a.aspectValues || []).map((v: any) => v.localizedValue).filter(Boolean)
-                const inAllowed = (val: string) => allowed.find((v: string) => v.toLowerCase() === val.toLowerCase())
+              // eBay's Taxonomy API is the source of truth for which item specifics
+              // exist for THIS leaf category — so this works across every category
+              // without hardcoding. We fill them in three passes.
+              const specs = (aData.aspects || []).map((a: any) => ({
+                name: a.localizedAspectName as string,
+                required: !!a.aspectConstraint?.aspectRequired,
+                selectionOnly: a.aspectConstraint?.aspectMode === 'SELECTION_ONLY',
+                allowed: (a.aspectValues || []).map((v: any) => v.localizedValue).filter(Boolean) as string[],
+              }))
+              const inAllowedOf = (allowed: string[], val: string) => allowed.find((v) => v.toLowerCase() === String(val).toLowerCase())
 
-                // 1. Fill from our data wherever we can (required OR recommended)
-                const d = derive(name)
-                if (d) {
-                  if (!selectionOnly || !allowed.length) { aspects[name] = [d]; continue }
-                  const m = inAllowed(d)
-                  if (m) { aspects[name] = [m]; continue }
-                }
-                // 2. Required-but-underivable → a sensible/neutral value
-                if (!required) continue
-                if (/\b(brand|manufacturer)\b/.test(name.toLowerCase()) && !/part/.test(name.toLowerCase()))
-                  aspects[name] = [allowed.length ? (inAllowed('Unbranded') || allowed[0]) : (part.make || 'Unbranded')]
-                else if (/part\s*number|mpn/i.test(name)) aspects[name] = [part.part_number || 'Does Not Apply']
-                else if (allowed.length) aspects[name] = [allowed.find((v: string) => NEUTRAL.includes(v.toLowerCase())) || allowed[0]]
-                else aspects[name] = ['Unbranded']
+              // Pass 1 — fill from our own structured part/car data.
+              for (const s of specs) {
+                if (aspects[s.name]) continue
+                const d = derive(s.name)
+                if (!d) continue
+                if (!s.selectionOnly || !s.allowed.length) aspects[s.name] = [d]
+                else { const m = inAllowedOf(s.allowed, d); if (m) aspects[s.name] = [m] }
+              }
+
+              // Pass 2 — let the AI fill the remaining specifics from the part photo
+              // (Colour, Material, Surface Finish, Placement, Fitment, Warranty, …).
+              // Best-effort: never block a publish if the AI call fails.
+              const photoForAi = partUrls[0] || imageUrls[0]
+              const todo = specs.filter((s: any) => !aspects[s.name]).slice(0, 30)
+              const ANTHROPIC = Deno.env.get('ANTHROPIC_API_KEY')
+              if (ANTHROPIC && photoForAi && todo.length) {
+                try {
+                  const aspList = todo.map((s: any) => s.selectionOnly && s.allowed.length
+                    ? `- ${s.name} (choose exactly one, verbatim: ${s.allowed.slice(0, 40).join(' | ')})`
+                    : `- ${s.name} (free text, max 60 chars)`).join('\n')
+                  const sys = `You are an expert Australian auto-parts eBay lister. Look at the part photo and the known vehicle, and fill in eBay item specifics. Return JSON only: an object mapping each aspect name to ONE string value. Only include an aspect if you can determine it with reasonable confidence from the photo or the known part/vehicle. For "choose one" aspects you MUST return one of the listed options verbatim, otherwise omit it. Never invent a colour, material or measurement you cannot actually see.`
+                  const usr = `Part: ${part.title || ''}\nVehicle: ${part.make || ''} ${part.model || ''} ${part.year || ''}\nCategory: ${part.category || ''}\nPart number: ${part.part_number || 'unknown'}\n\nAspects to fill:\n${aspList}`
+                  const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+                    method: 'POST',
+                    headers: { 'x-api-key': ANTHROPIC, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+                    body: JSON.stringify({
+                      model: 'claude-sonnet-4-6', max_tokens: 700, system: sys,
+                      messages: [{ role: 'user', content: [
+                        { type: 'image', source: { type: 'url', url: photoForAi } },
+                        { type: 'text', text: usr },
+                      ] }],
+                    }),
+                  })
+                  if (aiRes.ok) {
+                    const aiData = await aiRes.json()
+                    const raw = (aiData.content || []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('').trim()
+                    let map: Record<string, string> | null = null
+                    try { map = JSON.parse(raw) } catch { const mm = raw.match(/\{[\s\S]*\}/); if (mm) map = JSON.parse(mm[0]) }
+                    if (map) {
+                      for (const s of todo) {
+                        const v = (map as Record<string, string>)[s.name]
+                        if (!v || typeof v !== 'string') continue
+                        if (s.selectionOnly && s.allowed.length) { const m = inAllowedOf(s.allowed, v); if (m) aspects[s.name] = [m] }
+                        else aspects[s.name] = [v.slice(0, 65)]
+                      }
+                    }
+                  }
+                } catch (_) { /* AI is best-effort */ }
+              }
+
+              // Pass 3 — any REQUIRED aspect still empty gets a sensible/neutral value
+              // so eBay accepts the listing.
+              for (const s of specs) {
+                if (aspects[s.name] || !s.required) continue
+                const nlc = s.name.toLowerCase()
+                if (/\b(brand|manufacturer)\b/.test(nlc) && !/part/.test(nlc))
+                  aspects[s.name] = [s.allowed.length ? (inAllowedOf(s.allowed, 'Unbranded') || s.allowed[0]) : (part.make || 'Unbranded')]
+                else if (/part\s*number|mpn/i.test(nlc)) aspects[s.name] = [part.part_number || 'Does Not Apply']
+                else if (s.allowed.length) aspects[s.name] = [s.allowed.find((v: string) => NEUTRAL.includes(v.toLowerCase())) || s.allowed[0]]
+                else aspects[s.name] = ['Unbranded']
               }
             }
           } catch (_) { /* best effort */ }
