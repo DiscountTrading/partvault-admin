@@ -169,8 +169,28 @@ serve(async (req) => {
       } catch (_) { /* context is best-effort */ }
     }
 
+    // Honour the store's Settings → Descriptions config so the generated
+    // description follows the store's chosen length / inclusions / custom wording.
+    const DESC_DEFAULTS = { includeMake: true, includeModel: true, includeSeries: true, includeYearRange: true, includePartNumber: true, includeConditionDetail: true, descriptionLength: 'medium', includeInstallLink: false, installLinkUrl: '', customPromptNotes: '' }
+    let adcfg: any = DESC_DEFAULTS
+    try {
+      const svc = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const { data: st } = await svc.from('stores').select('settings').eq('id', storeId).single()
+      adcfg = { ...DESC_DEFAULTS, ...(st?.settings?.aiDescription || {}) }
+    } catch (_) { /* defaults */ }
+    const lengthGuide = ({ short: '2-3 sentences', medium: '1-2 short paragraphs', long: 'a thorough, detailed multi-paragraph description' } as any)[adcfg.descriptionLength] || '1-2 short paragraphs'
+    const incld: string[] = []
+    if (adcfg.includeMake) incld.push('make')
+    if (adcfg.includeModel) incld.push('model')
+    if (adcfg.includeSeries) incld.push('series/badge variant')
+    if (adcfg.includeYearRange) incld.push('year-range compatibility')
+    if (adcfg.includePartNumber) incld.push('the OEM part number if known')
+    if (adcfg.includeConditionDetail) incld.push('condition detail')
+    if (adcfg.includeInstallLink && adcfg.installLinkUrl) incld.push(`a line pointing to the install guide at ${adcfg.installLinkUrl}`)
+    const descGuide = `\nThe "description" field must be ${lengthGuide}, written for an eBay buyer.${incld.length ? ` Include where relevant: ${incld.join(', ')}.` : ''}${adcfg.customPromptNotes ? ` Store style notes (follow these exactly): ${adcfg.customPromptNotes}` : ''} Plain text only; do NOT add a store footer (it is appended later).`
+
     const catTree = Object.entries(CATEGORY_TREE).map(([c, subs]) => `${c}: ${subs.join(', ')}`).join('\n')
-    const sys = `You are an expert Australian used car parts eBay seller. Return JSON only.\nReturn: {"title":"max 80 chars","category":"exact","subcategory":"exact","condition":"Used – Good","description":"3-4 sentences","partNumber":"OEM or empty","listPrice":number,"weight":number,"notes":""}\nCATEGORY: choose the single best category, then a subcategory that is EXACTLY one of the options listed under that category. If none fit, use "Other". Do not invent a subcategory. A loose globe/bulb is "Globes & Bulbs" (or the specific light it's for), NOT a "Headlight Assembly" unless it is the whole light unit. The category list (category: allowed subcategories):\n${catTree}\ntitle MUST be optimised for eBay search (Cassini): front-load the exact terms buyers type — Make Model Year(s) PartType — then key qualifiers (side/position, OEM/part number, variant, colour). Use as much of the 80 chars as possible, no filler words, no ALL CAPS. Example: "Holden Commodore VE 2006-2013 Right Front Headlight Halogen 92193575 Genuine".\nweight is the estimated packed shipping weight in GRAMS (whole number, e.g. 1500 for 1.5kg). Never return kilograms or a value below 50.`
+    const sys = `You are an expert Australian used car parts eBay seller. Return JSON only.\nReturn: {"title":"max 80 chars","category":"exact","subcategory":"exact","condition":"Used – Good","description":"see rules below","partNumber":"OEM or empty","listPrice":number,"weight":number,"notes":""}\nCATEGORY: choose the single best category, then a subcategory that is EXACTLY one of the options listed under that category. If none fit, use "Other". Do not invent a subcategory. A loose globe/bulb is "Globes & Bulbs" (or the specific light it's for), NOT a "Headlight Assembly" unless it is the whole light unit. The category list (category: allowed subcategories):\n${catTree}\ntitle MUST be optimised for eBay search (Cassini): front-load the exact terms buyers type — Make Model Year(s) PartType — then key qualifiers (side/position, OEM/part number, variant, colour). Use as much of the 80 chars as possible, no filler words, no ALL CAPS. Example: "Holden Commodore VE 2006-2013 Right Front Headlight Halogen 92193575 Genuine".\nweight is the estimated packed shipping weight in GRAMS (whole number, e.g. 1500 for 1.5kg). Never return kilograms or a value below 50.${descGuide}`
     const vehicleLine = `Donor vehicle: ${carInfo.make || ''} ${carInfo.model || ''} ${carInfo.year || ''}${carInfo.notes ? ` (notes: ${String(carInfo.notes).slice(0, 200)})` : ''}`.trim()
     const content: any[] = [
       { type: 'text', text: `PART photos (${partBlocks.length}) — identify THIS part:` },

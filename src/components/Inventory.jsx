@@ -215,6 +215,8 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
   const [previewErr, setPreviewErr] = useState('')
   const [specEdits, setSpecEdits] = useState({})       // name -> current (possibly edited) value
   const [specBaseline, setSpecBaseline] = useState({}) // name -> value as computed/loaded
+  const [fitEdits, setFitEdits] = useState([])         // editable compatible-vehicle rows
+  const [fitBaseline, setFitBaseline] = useState('[]')
   const [savingSpecs, setSavingSpecs] = useState(false)
   const [specsSaved, setSpecsSaved] = useState(false)
   const photoRef = useRef()
@@ -236,6 +238,8 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
       setPreview(d)
       const base = {}; (d.specifics || []).forEach(s => { base[s.name] = s.value || '' })
       setSpecBaseline(base); setSpecEdits(base)
+      const fit = (d.fitment || []).map(f => ({ make:f.make||'', model:f.model||'', yearFrom:f.yearFrom||'', yearTo:f.yearTo||'', trim:f.trim||'' }))
+      setFitEdits(fit); setFitBaseline(JSON.stringify(fit))
     } catch (e) { setPreviewErr(e.message) }
     setPreviewLoading(false)
   }
@@ -245,7 +249,12 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
     if (next && !preview && !previewLoading) loadPreview()
   }
   const setSpec = (name, val) => setSpecEdits(e => ({ ...e, [name]: val }))
+  const setFit = (i, k, val) => setFitEdits(rows => rows.map((r, j) => j === i ? { ...r, [k]: val } : r))
+  const addFit = () => setFitEdits(rows => [...rows, { make:'', model:'', yearFrom:'', yearTo:'', trim:'' }])
+  const removeFit = (i) => setFitEdits(rows => rows.filter((_, j) => j !== i))
   const specDirty = Object.keys(specEdits).some(n => (specEdits[n] || '') !== (specBaseline[n] || ''))
+  const fitDirty = JSON.stringify(fitEdits) !== fitBaseline
+  const ovDirty = specDirty || fitDirty
   // Persist the user's corrections as per-part overrides (they win at publish).
   const saveSpecs = async () => {
     if (!part?.id) return
@@ -255,10 +264,15 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
       Object.keys(specEdits).forEach(n => { if ((specEdits[n] || '') !== (specBaseline[n] || '')) changed[n] = specEdits[n] })
       const merged = { ...(form.ebayOverrides?.specifics || {}), ...changed }
       const newOv = { ...(form.ebayOverrides || {}), specifics: merged }
+      if (fitDirty) {
+        newOv.fitment = fitEdits
+          .filter(r => r.make && r.model)
+          .map(r => ({ make:r.make, model:r.model, yearFrom:+r.yearFrom||undefined, yearTo:+r.yearTo||+r.yearFrom||undefined, trim:r.trim||'' }))
+      }
       const { error } = await sb.from('parts').update({ ebay_overrides: newOv }).eq('id', part.id)
       if (error) throw error
       setForm(f => ({ ...f, ebayOverrides: newOv }))
-      setSpecBaseline({ ...specEdits })
+      setSpecBaseline({ ...specEdits }); setFitBaseline(JSON.stringify(fitEdits))
       setSpecsSaved(true); setTimeout(() => setSpecsSaved(false), 2000)
     } catch (e) { setPreviewErr(e.message) }
     setSavingSpecs(false)
@@ -413,8 +427,8 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
                   eBay item specifics — {Object.values(specEdits).filter(Boolean).length} of {preview.specifics?.length||0} filled
                   <span style={{ fontWeight:400, color:C.muted }}> · ★ required · 🚩 your override · editable</span>
                 </div>
-                <button onClick={saveSpecs} disabled={savingSpecs || !specDirty}
-                  style={{ ...S.btn(specsSaved?'success':'primary'), padding:'5px 14px', fontSize:12, opacity:(savingSpecs||!specDirty)?0.5:1 }}>
+                <button onClick={saveSpecs} disabled={savingSpecs || !ovDirty}
+                  style={{ ...S.btn(specsSaved?'success':'primary'), padding:'5px 14px', fontSize:12, opacity:(savingSpecs||!ovDirty)?0.5:1 }}>
                   {savingSpecs ? 'Saving…' : specsSaved ? '✓ Saved' : 'Save corrections'}
                 </button>
               </div>
@@ -444,17 +458,22 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
                 )})}
                 {!preview.specifics?.length && <div style={{ fontSize:12, color:C.muted, padding:'8px 10px' }}>No specifics returned (category may not require any).</div>}
               </div>
-              <div style={{ fontSize:12, fontWeight:700, color:C.text, marginBottom:6 }}>Compatible vehicles ({preview.fitment?.length||0})</div>
-              {preview.fitment?.length ? (
-                <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
-                  {preview.fitment.map((f,i) => (
-                    <span key={i} style={{ fontSize:12, background:'#eff6ff', color:'#1d4ed8', borderRadius:20, padding:'3px 10px' }}>
-                      {[f.make, f.model].filter(Boolean).join(' ')}{f.yearFrom ? ` ${f.yearFrom}${f.yearTo&&f.yearTo!==f.yearFrom?`-${f.yearTo}`:''}` : ''}{f.trim?` ${f.trim}`:''}
-                    </span>
-                  ))}
-                </div>
-              ) : <div style={{ fontSize:12, color:C.muted }}>No confident fitment beyond the donor car.</div>}
-              <div style={{ fontSize:11, color:C.muted, marginTop:12 }}>This is a preview — the values are finalised when you publish.</div>
+              <div style={{ fontSize:12, fontWeight:700, color:C.text, marginBottom:6 }}>Compatible vehicles ({fitEdits.length}) — editable</div>
+              <div style={{ display:'flex', flexDirection:'column', gap:6, marginBottom:8 }}>
+                {fitEdits.map((f,i) => (
+                  <div key={i} style={{ display:'flex', gap:6, alignItems:'center' }}>
+                    <input value={f.make} onChange={e=>setFit(i,'make',e.target.value)} placeholder="Make" style={{ ...S.input, flex:'1 1 22%', fontSize:12, padding:'4px 6px' }} />
+                    <input value={f.model} onChange={e=>setFit(i,'model',e.target.value)} placeholder="Model" style={{ ...S.input, flex:'1 1 26%', fontSize:12, padding:'4px 6px' }} />
+                    <input value={f.yearFrom} onChange={e=>setFit(i,'yearFrom',e.target.value)} placeholder="From" type="number" style={{ ...S.input, width:62, fontSize:12, padding:'4px 6px' }} />
+                    <input value={f.yearTo} onChange={e=>setFit(i,'yearTo',e.target.value)} placeholder="To" type="number" style={{ ...S.input, width:62, fontSize:12, padding:'4px 6px' }} />
+                    <input value={f.trim} onChange={e=>setFit(i,'trim',e.target.value)} placeholder="Trim (opt)" style={{ ...S.input, flex:'1 1 18%', fontSize:12, padding:'4px 6px' }} />
+                    <button onClick={()=>removeFit(i)} title="Remove" style={{ background:'none', border:'none', color:C.red, cursor:'pointer', fontSize:16, padding:'0 4px' }}>×</button>
+                  </div>
+                ))}
+                {!fitEdits.length && <div style={{ fontSize:12, color:C.muted }}>No vehicles yet — add the ones this part fits.</div>}
+              </div>
+              <button onClick={addFit} style={{ ...S.btn('secondary'), padding:'5px 12px', fontSize:12 }}>+ Add vehicle</button>
+              <div style={{ fontSize:11, color:C.muted, marginTop:12 }}>Edits here are saved as overrides and win over the AI when you publish.</div>
             </div>
           )}
         </Section>
