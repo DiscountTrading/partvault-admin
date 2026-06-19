@@ -140,6 +140,17 @@ async function fillAspects(
         } catch (_) { /* AI is best-effort */ }
       }
 
+      // Always include the donor vehicle in the fitment (the AI adds extra models
+      // on top). Never let the donor car be dropped.
+      if (part.make && part.model) {
+        const dl = (s: any) => String(s || '').toLowerCase()
+        const hasDonor = fitmentList.some((f: any) => dl(f.make) === dl(part.make) && dl(f.model) === dl(part.model))
+        if (!hasDonor) {
+          const ys = String(part.year || '').match(/\d{4}/g) || []
+          fitmentList.unshift({ make: part.make, model: part.model, yearFrom: ys[0] ? +ys[0] : undefined, yearTo: ys[1] ? +ys[1] : (ys[0] ? +ys[0] : undefined), trim: '', engine: '' })
+        }
+      }
+
       // Compatible-vehicle item specifics (multi-value) from the fitment.
       if (fitmentList.length) {
         const uniq = (xs: string[]) => [...new Set(xs.filter(Boolean))]

@@ -199,7 +199,7 @@ function AddCarModal({ storeId, onSave, onCancel }) {
 // ─── Part Form ─────────────────────────────────────────────────────────────
 function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSettings, footer }) {
   const defCat = CATEGORY_NAMES[4]
-  const [form, setForm] = useState(part ? { ...part, costs: { ...part.costs }, listPrice: part.list_price||part.listPrice||0, ai_assessed: part.ai_assessed??false, acquiredDate: part.acquiredDate || (part.createdAt ? String(part.createdAt).slice(0,10) : '') } : {
+  const [form, setForm] = useState(part ? { ...part, costs: { ...part.costs }, listPrice: part.list_price||part.listPrice||0, ai_assessed: part.ai_assessed??false, acquiredDate: part.acquiredDate ? String(part.acquiredDate).slice(0,10) : (part.createdAt ? String(part.createdAt).slice(0,10) : '') } : {
     title:'', category:defCat, subcategory:EBAY_AU_CATEGORIES[defCat][0], make:'', model:'', year:'', condition:PART_CONDITIONS[1],
     description:'', acquiredDate:new Date().toISOString().slice(0,10), costs:defCosts(), listPrice:'', soldPrice:'', photos:[], weight:'', status:'in_stock',
     partNumber:'', notes:'', ai_assessed:false, car_id:null,
