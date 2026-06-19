@@ -11,6 +11,15 @@ const cors = {
 }
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...cors, 'Content-Type': 'application/json' } })
 
+// Mirrors CATEGORY_NAMES in the front-end constants — used when the assessment
+// is triggered server-side (no client to pass the list).
+const PART_CATEGORIES = [
+  'Air & Fuel Delivery', 'Air Conditioning & Heating', 'Brakes & Brake Parts', 'Engines & Engine Parts',
+  'Engine Cooling', 'Exhaust & Emission', 'Exterior Parts', 'Ignition Systems', 'Interior Parts',
+  'Lighting & Bulbs', 'Starters, Alternators & Wiring', 'Steering & Suspension', 'Transmission & Drivetrain',
+  'Wheels, Tyres & Parts', 'Towing Parts', 'Other Car & Truck Parts', 'Legacy Items',
+]
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
   try {
@@ -19,14 +28,44 @@ serve(async (req) => {
 
     const url = Deno.env.get('SUPABASE_URL')!
     const anon = Deno.env.get('SUPABASE_ANON_KEY')!
+    const TRIGGER_SECRET = Deno.env.get('ASSESS_TRIGGER_SECRET')
     const body = await req.json()
-    const { storeId, mode = 'assess' } = body
+    const mode = body.mode || 'assess'
+    // A trusted server-side trigger (DB webhook) authenticates with a shared
+    // secret instead of a user JWT, and loads the part's data from the database.
+    const trusted = !!(body.triggerSecret && TRIGGER_SECRET && body.triggerSecret === TRIGGER_SECRET)
+    const urlOf = (v: any) => { if (!v) return null; if (typeof v === 'object') return v.url || v.ebay_url || null; try { const o = JSON.parse(v); return o.url || o.ebay_url || v } catch { return v } }
+
+    if (trusted && body.partId) {
+      // Auto-assess flow: pull everything we need from the part row server-side
+      // so there's no dependency on the phone staying open or connected.
+      const service = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const { data: p } = await service.from('parts').select('store_id, car_id, title, list_price, photos, ai_assessed').eq('id', body.partId).single()
+      if (!p) return json({ error: 'part not found' }, 404)
+      if (p.ai_assessed) return json({ ok: true, skipped: 'already assessed' })
+      body.storeId = p.store_id
+      body.carId = p.car_id
+      body.existingTitle = p.title
+      body.existingPrice = p.list_price
+      body.categories = body.categories || PART_CATEGORIES
+      let urls = Array.isArray(p.photos) ? p.photos.map(urlOf).filter(Boolean) : []
+      if (!urls.length) {
+        const { data: ph } = await service.from('photos').select('url').eq('parent_type', 'part').eq('parent_id', body.partId).order('display_order')
+        urls = (ph || []).map((x: any) => x.url).filter(Boolean)
+      }
+      if (!urls.length) return json({ error: 'part has no photos to assess' }, 400)
+      body.photoUrls = urls
+    }
+
+    const { storeId } = body
     if (!storeId) return json({ error: 'storeId required' }, 400)
 
-    // Authorise: caller must be a member of this store.
-    const userClient = createClient(url, anon, { global: { headers: { Authorization: req.headers.get('Authorization') || '' } } })
-    const { data: member } = await userClient.rpc('is_store_member', { p_store_id: storeId })
-    if (!member) return json({ error: 'Not authorised' }, 403)
+    // Authorise: a store member (via JWT) OR a trusted trigger call.
+    if (!trusted) {
+      const userClient = createClient(url, anon, { global: { headers: { Authorization: req.headers.get('Authorization') || '' } } })
+      const { data: member } = await userClient.rpc('is_store_member', { p_store_id: storeId })
+      if (!member) return json({ error: 'Not authorised' }, 403)
+    }
 
     const callAnthropic = (payload: Record<string, unknown>) => fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -131,6 +170,7 @@ serve(async (req) => {
         weight: parsed.weight || null,
         list_price: (+existingPrice > 0) ? +existingPrice : aiPrice,
         ai_assessed: true,
+        ai_pending: false,
       }
       if (parsed.title || existingTitle) update.title = parsed.title || existingTitle
       if (parsed.category) update.category = parsed.category
