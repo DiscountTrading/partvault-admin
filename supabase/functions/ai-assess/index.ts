@@ -88,6 +88,28 @@ serve(async (req) => {
       return json({ ok: true, text: textOf(data) })
     }
 
+    // Mode: identify a car (make/model/year) from its photos — replaces VIN
+    // lookup. Reads the badges/shape and any visible plates.
+    if (mode === 'identify-car') {
+      const carUrls = (Array.isArray(body.photoUrls) ? body.photoUrls : []).filter(Boolean).slice(0, 6)
+      const carB64s = (Array.isArray(body.photoBase64s) ? body.photoBase64s : (body.photoBase64 ? [body.photoBase64] : [])).filter(Boolean).slice(0, 6)
+      const blocks: any[] = [
+        ...carUrls.map((u: string) => ({ type: 'image', source: { type: 'url', url: u } })),
+        ...carB64s.map((b: string) => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b } })),
+      ]
+      if (!blocks.length) return json({ error: 'At least one car photo is required' }, 400)
+      const aiRes = await callAnthropic({
+        model: 'claude-sonnet-4-6', max_tokens: 200,
+        system: 'You identify Australian-market vehicles from photos. Return JSON only: {"make":"","model":"","year":"","confidence":"high|medium|low"}. Use the badges, body shape, lights and any visible build plate. year is the model year or a short range if unsure. Only fill a field if reasonably confident; leave "" otherwise.',
+        messages: [{ role: 'user', content: [...blocks, { type: 'text', text: 'Identify this vehicle (Australian market).' }] }],
+      })
+      const data = await aiRes.json()
+      if (data.error) return json({ error: data.error.message || 'AI error' }, 400)
+      const parsed = parseJson(textOf(data))
+      if (!parsed) return json({ error: 'Could not identify the car' }, 502)
+      return json({ ok: true, result: parsed })
+    }
+
     // Mode: parse make/model/year from a listing title (cheap, Haiku).
     if (mode === 'parse-title') {
       const { title } = body
