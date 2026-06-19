@@ -213,6 +213,10 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
   const [previewLoading, setPreviewLoading] = useState(false)
   const [preview, setPreview] = useState(null)
   const [previewErr, setPreviewErr] = useState('')
+  const [specEdits, setSpecEdits] = useState({})       // name -> current (possibly edited) value
+  const [specBaseline, setSpecBaseline] = useState({}) // name -> value as computed/loaded
+  const [savingSpecs, setSavingSpecs] = useState(false)
+  const [specsSaved, setSpecsSaved] = useState(false)
   const photoRef = useRef()
 
   // Read-only preview of the exact eBay category + item specifics + fitment that
@@ -230,6 +234,8 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
       const d = await res.json()
       if (!res.ok || d.error) throw new Error(d.error || 'Preview failed')
       setPreview(d)
+      const base = {}; (d.specifics || []).forEach(s => { base[s.name] = s.value || '' })
+      setSpecBaseline(base); setSpecEdits(base)
     } catch (e) { setPreviewErr(e.message) }
     setPreviewLoading(false)
   }
@@ -237,6 +243,25 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
     const next = !previewOpen
     setPreviewOpen(next)
     if (next && !preview && !previewLoading) loadPreview()
+  }
+  const setSpec = (name, val) => setSpecEdits(e => ({ ...e, [name]: val }))
+  const specDirty = Object.keys(specEdits).some(n => (specEdits[n] || '') !== (specBaseline[n] || ''))
+  // Persist the user's corrections as per-part overrides (they win at publish).
+  const saveSpecs = async () => {
+    if (!part?.id) return
+    setSavingSpecs(true); setPreviewErr('')
+    try {
+      const changed = {}
+      Object.keys(specEdits).forEach(n => { if ((specEdits[n] || '') !== (specBaseline[n] || '')) changed[n] = specEdits[n] })
+      const merged = { ...(form.ebayOverrides?.specifics || {}), ...changed }
+      const newOv = { ...(form.ebayOverrides || {}), specifics: merged }
+      const { error } = await sb.from('parts').update({ ebay_overrides: newOv }).eq('id', part.id)
+      if (error) throw error
+      setForm(f => ({ ...f, ebayOverrides: newOv }))
+      setSpecBaseline({ ...specEdits })
+      setSpecsSaved(true); setTimeout(() => setSpecsSaved(false), 2000)
+    } catch (e) { setPreviewErr(e.message) }
+    setSavingSpecs(false)
   }
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
   const setCost = (k, v) => setForm(f => ({ ...f, costs: { ...f.costs, [k]: +v||0 } }))
@@ -383,21 +408,40 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
                 <span style={{ color:C.muted }}>eBay category: </span>
                 <strong style={{ color:C.text }}>{preview.categoryName || preview.categoryId}</strong>
               </div>
-              <div style={{ fontSize:12, fontWeight:700, color:C.text, marginBottom:6 }}>
-                eBay item specifics for this category — {(preview.specifics||[]).filter(s=>s.value).length} of {preview.specifics?.length||0} filled
-                <span style={{ fontWeight:400, color:C.muted }}> · ★ = required</span>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6, flexWrap:'wrap', gap:8 }}>
+                <div style={{ fontSize:12, fontWeight:700, color:C.text }}>
+                  eBay item specifics — {Object.values(specEdits).filter(Boolean).length} of {preview.specifics?.length||0} filled
+                  <span style={{ fontWeight:400, color:C.muted }}> · ★ required · 🚩 your override · editable</span>
+                </div>
+                <button onClick={saveSpecs} disabled={savingSpecs || !specDirty}
+                  style={{ ...S.btn(specsSaved?'success':'primary'), padding:'5px 14px', fontSize:12, opacity:(savingSpecs||!specDirty)?0.5:1 }}>
+                  {savingSpecs ? 'Saving…' : specsSaved ? '✓ Saved' : 'Save corrections'}
+                </button>
               </div>
               <div style={{ border:`1px solid ${C.border}`, borderRadius:8, overflow:'hidden', marginBottom:14 }}>
-                {[...(preview.specifics||[])].sort((a,b)=>(b.required-a.required)||((b.value?1:0)-(a.value?1:0))).map((s,i,arr) => (
-                  <div key={s.name} style={{ display:'flex', fontSize:13, padding:'7px 10px', background:i%2?'#fafafa':'#fff', borderBottom:i<arr.length-1?`1px solid ${C.border}`:'none' }}>
-                    <div style={{ flex:'0 0 44%', color:C.muted, paddingRight:8 }}>
+                {[...(preview.specifics||[])].sort((a,b)=>(b.required-a.required)||((b.value?1:0)-(a.value?1:0))).map((s,i,arr) => {
+                  const isOverride = s.overridden || ((specEdits[s.name]||'') !== (specBaseline[s.name]||''))
+                  return (
+                  <div key={s.name} style={{ display:'flex', alignItems:'center', fontSize:13, padding:'5px 10px', background:i%2?'#fafafa':'#fff', borderBottom:i<arr.length-1?`1px solid ${C.border}`:'none' }}>
+                    <div style={{ flex:'0 0 42%', color:C.muted, paddingRight:8 }}>
                       {s.required && <span title="Required by eBay" style={{ color:'#d97706', marginRight:4 }}>★</span>}{s.name}
                     </div>
-                    <div style={{ flex:1, color: s.value ? C.text : '#bbb' }}>
-                      {s.value || (s.options?.length ? <span style={{ fontStyle:'italic' }}>— ({s.options.length} options)</span> : <span style={{ fontStyle:'italic' }}>—</span>)}
+                    <div style={{ flex:1, display:'flex', alignItems:'center', gap:6 }}>
+                      {s.options?.length ? (
+                        <select value={specEdits[s.name]||''} onChange={e=>setSpec(s.name, e.target.value)}
+                          style={{ ...S.select, flex:1, fontSize:12, padding:'4px 6px' }}>
+                          <option value="">— (none)</option>
+                          {!s.options.includes(specEdits[s.name]) && specEdits[s.name] && <option value={specEdits[s.name]}>{specEdits[s.name]} (custom)</option>}
+                          {s.options.map(o => <option key={o} value={o}>{o}</option>)}
+                        </select>
+                      ) : (
+                        <input value={specEdits[s.name]||''} onChange={e=>setSpec(s.name, e.target.value)} placeholder="—"
+                          style={{ ...S.input, flex:1, fontSize:12, padding:'4px 6px' }} />
+                      )}
+                      {isOverride && <span title="Your override (wins over AI)" style={{ cursor:'default' }}>🚩</span>}
                     </div>
                   </div>
-                ))}
+                )})}
                 {!preview.specifics?.length && <div style={{ fontSize:12, color:C.muted, padding:'8px 10px' }}>No specifics returned (category may not require any).</div>}
               </div>
               <div style={{ fontSize:12, fontWeight:700, color:C.text, marginBottom:6 }}>Compatible vehicles ({preview.fitment?.length||0})</div>

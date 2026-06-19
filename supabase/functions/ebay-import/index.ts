@@ -186,6 +186,16 @@ async function fillAspects(
       }
     }
   } catch (_) { /* best effort */ }
+  // Manual overrides win over the AI — the user's corrections in the listing
+  // preview (and, later, the mapping page) are authoritative.
+  const ov = part.ebay_overrides || {}
+  if (ov.specifics && typeof ov.specifics === 'object') {
+    for (const [k, v] of Object.entries(ov.specifics)) {
+      if (v == null || v === '') delete aspects[k]
+      else aspects[k] = [String(v)]
+    }
+  }
+  if (Array.isArray(ov.fitment)) fitmentList = ov.fitment
   return { aspects, fitmentList, specs: specsOut }
 }
 
@@ -1405,14 +1415,15 @@ async function handleRequest(req: Request): Promise<Response> {
       const { aspects, fitmentList, specs } = await fillAspects(part, categoryId, categoryTreeId, ebayHeaders, partUrls.slice(0, 6))
       // Show EVERY aspect eBay offers for this category, with our filled value
       // (or empty), so the user sees the full set and what's still blank.
+      const ovSpec = (part.ebay_overrides && part.ebay_overrides.specifics) || {}
       const seen = new Set<string>()
       const specifics = (specs || []).map((s: any) => {
         seen.add(s.name)
-        return { name: s.name, value: (aspects[s.name] || []).join(', '), required: !!s.required, options: (s.allowed || []).slice(0, 60) }
+        return { name: s.name, value: (aspects[s.name] || []).join(', '), required: !!s.required, options: (s.allowed || []).slice(0, 60), overridden: Object.prototype.hasOwnProperty.call(ovSpec, s.name) }
       })
       // Any filled aspect not in the spec list (shouldn't happen, but be safe).
       for (const [name, values] of Object.entries(aspects)) {
-        if (!seen.has(name)) specifics.push({ name, value: (values as string[]).join(', '), required: false, options: [] })
+        if (!seen.has(name)) specifics.push({ name, value: (values as string[]).join(', '), required: false, options: [], overridden: Object.prototype.hasOwnProperty.call(ovSpec, name) })
       }
       return json({ ok: true, categoryId, categoryName, specifics, fitment: fitmentList, title: part.title })
     }

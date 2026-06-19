@@ -17,6 +17,7 @@ const mapRow = r => ({
   deletedAt: r.deleted_at||null, createdAt: r.created_at,
   car_id: r.car_id||null, source: r.source||null,
   ai_assessed: r.ai_assessed||false,
+  ebayOverrides: r.ebay_overrides||null,
 })
 
 const mapToRow = p => ({
