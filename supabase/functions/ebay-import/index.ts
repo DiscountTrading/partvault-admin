@@ -57,9 +57,10 @@ async function fillAspects(
   categoryTreeId: string,
   ebayHeaders: Record<string, string>,
   aiPhotos: string[],
-): Promise<{ aspects: Record<string, string[]>; fitmentList: any[] }> {
+): Promise<{ aspects: Record<string, string[]>; fitmentList: any[]; specs: any[] }> {
   const aspects: Record<string, string[]> = {}
   let fitmentList: any[] = []
+  let specsOut: any[] = [] // full list of every aspect eBay offers for this category
   const titleLc = (part.title || '').toLowerCase()
   const placement = () => {
     const out: string[] = []
@@ -93,6 +94,7 @@ async function fillAspects(
         selectionOnly: a.aspectConstraint?.aspectMode === 'SELECTION_ONLY',
         allowed: (a.aspectValues || []).map((v: any) => v.localizedValue).filter(Boolean) as string[],
       }))
+      specsOut = specs
       const inAllowedOf = (allowed: string[], val: string) => allowed.find((v) => v.toLowerCase() === String(val).toLowerCase())
 
       // Pass 1 — fill from our own structured part/car data.
@@ -112,7 +114,7 @@ async function fillAspects(
           const aspList = todo.map((s: any) => s.selectionOnly && s.allowed.length
             ? `- ${s.name} (choose exactly one, verbatim: ${s.allowed.slice(0, 40).join(' | ')})`
             : `- ${s.name} (free text, max 60 chars)`).join('\n')
-          const sys = `You are an expert Australian auto-parts eBay lister. Identify the part from the PHOTOS first — the provided Category is only a hint and may be wrong; trust the photos if they disagree. From the part photos and the known donor vehicle, do TWO things and return JSON only:\n{"aspects": {<aspectName>: <value>}, "fitment": [{"make":"","model":"","yearFrom":2012,"yearTo":2017,"trim":"","engine":""}]}\ntrim and engine are optional — include them only when the part is specific to that trim/engine; leave "" otherwise.\nASPECTS: only include one you can determine with reasonable confidence from the photo or known part/vehicle. For "choose one" aspects return one listed option verbatim, otherwise omit. Never invent a colour/material/measurement you cannot see.\nFITMENT — list the vehicles this part actually fits (confidence is about whether it genuinely fits, NOT about how few you list):\n• VEHICLE-SPECIFIC parts (body panels, light assemblies, looms, ECUs, trim, mirrors): list only vehicles you are confident share the IDENTICAL part (same OEM/interchange number) — the donor vehicle plus platform-shared siblings you are sure about. Omit uncertain ones.\n• STANDARDISED / UNIVERSAL parts (a globe/bulb of a standard base such as H1/H4/H7/H11/HB3/9005, a fuse, a wiper blade of a given size, a standard spin-on oil filter, a common belt): these genuinely fit MANY vehicles. First identify the exact specification, then list the common Australian-market vehicles that use that spec — up to 20 popular models with realistic year ranges. This is accurate, not guessing, so do NOT restrict it to just the donor car.\nNever list a vehicle that does not actually take this part. Return an empty array only if you truly cannot tell.`
+          const sys = `You are an expert Australian auto-parts eBay lister. Identify the part from the PHOTOS first — the provided Category is only a hint and may be wrong; trust the photos if they disagree. From the part photos and the known donor vehicle, do TWO things and return JSON only:\n{"aspects": {<aspectName>: <value>}, "fitment": [{"make":"","model":"","yearFrom":2012,"yearTo":2017,"trim":"","engine":""}]}\ntrim and engine are optional — include them only when the part is specific to that trim/engine; leave "" otherwise.\nASPECTS: only include one you can determine with reasonable confidence from the photo or known part/vehicle. For "choose one" aspects return one listed option verbatim, otherwise omit. Never invent a colour/material/measurement you cannot see — BUT if a dimension, size, wattage, voltage, bulb base/size or part number IS printed or visible in the photos, read it and fill the matching aspect (e.g. Item Diameter, Item Length, Bulb Size, Voltage, Wattage).\nFITMENT — list the vehicles this part actually fits (confidence is about whether it genuinely fits, NOT about how few you list):\n• VEHICLE-SPECIFIC parts (body panels, light assemblies, looms, ECUs, trim, mirrors): list only vehicles you are confident share the IDENTICAL part (same OEM/interchange number) — the donor vehicle plus platform-shared siblings you are sure about. Omit uncertain ones.\n• STANDARDISED / UNIVERSAL parts (a globe/bulb of a standard base such as H1/H4/H7/H11/HB3/9005, a fuse, a wiper blade of a given size, a standard spin-on oil filter, a common belt): these genuinely fit MANY vehicles. First identify the exact specification, then list the common Australian-market vehicles that use that spec — up to 20 popular models with realistic year ranges. This is accurate, not guessing, so do NOT restrict it to just the donor car.\nNever list a vehicle that does not actually take this part. Return an empty array only if you truly cannot tell.`
           const usr = `Part: ${part.title || ''}\nVehicle: ${part.make || ''} ${part.model || ''} ${part.year || ''}\nCategory: ${part.category || ''}\nPart number: ${part.part_number || 'unknown'}\n${aiPhotos.length > 1 ? `\nThe ${aiPhotos.length} photos are all of the SAME part from different angles/close-ups — use them together.` : ''}\nAspects to fill:\n${aspList}`
           const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
             method: 'POST',
@@ -184,7 +186,7 @@ async function fillAspects(
       }
     }
   } catch (_) { /* best effort */ }
-  return { aspects, fitmentList }
+  return { aspects, fitmentList, specs: specsOut }
 }
 
 Deno.serve(async (req) => {
@@ -1400,8 +1402,18 @@ async function handleRequest(req: Request): Promise<Response> {
       let partUrls = (phRows || []).map((r: any) => r.url || r.ebay_url).filter(Boolean)
       if (!partUrls.length) partUrls = (part.photos || []).map((p: any) => { if (p && typeof p === 'object') return p.url || p.ebay_url; try { const o = JSON.parse(p); return o.url || o.ebay_url || p } catch { return p } }).filter(Boolean)
 
-      const { aspects, fitmentList } = await fillAspects(part, categoryId, categoryTreeId, ebayHeaders, partUrls.slice(0, 6))
-      const specifics = Object.entries(aspects).map(([name, values]) => ({ name, values }))
+      const { aspects, fitmentList, specs } = await fillAspects(part, categoryId, categoryTreeId, ebayHeaders, partUrls.slice(0, 6))
+      // Show EVERY aspect eBay offers for this category, with our filled value
+      // (or empty), so the user sees the full set and what's still blank.
+      const seen = new Set<string>()
+      const specifics = (specs || []).map((s: any) => {
+        seen.add(s.name)
+        return { name: s.name, value: (aspects[s.name] || []).join(', '), required: !!s.required, options: (s.allowed || []).slice(0, 60) }
+      })
+      // Any filled aspect not in the spec list (shouldn't happen, but be safe).
+      for (const [name, values] of Object.entries(aspects)) {
+        if (!seen.has(name)) specifics.push({ name, value: (values as string[]).join(', '), required: false, options: [] })
+      }
       return json({ ok: true, categoryId, categoryName, specifics, fitment: fitmentList, title: part.title })
     }
 

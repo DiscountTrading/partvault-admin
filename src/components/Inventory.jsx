@@ -383,12 +383,19 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
                 <span style={{ color:C.muted }}>eBay category: </span>
                 <strong style={{ color:C.text }}>{preview.categoryName || preview.categoryId}</strong>
               </div>
-              <div style={{ fontSize:12, fontWeight:700, color:C.text, marginBottom:6 }}>Item specifics ({preview.specifics?.length||0})</div>
+              <div style={{ fontSize:12, fontWeight:700, color:C.text, marginBottom:6 }}>
+                eBay item specifics for this category — {(preview.specifics||[]).filter(s=>s.value).length} of {preview.specifics?.length||0} filled
+                <span style={{ fontWeight:400, color:C.muted }}> · ★ = required</span>
+              </div>
               <div style={{ border:`1px solid ${C.border}`, borderRadius:8, overflow:'hidden', marginBottom:14 }}>
-                {(preview.specifics||[]).map((s,i) => (
-                  <div key={s.name} style={{ display:'flex', fontSize:13, padding:'7px 10px', background:i%2?'#fafafa':'#fff', borderBottom:i<preview.specifics.length-1?`1px solid ${C.border}`:'none' }}>
-                    <div style={{ flex:'0 0 42%', color:C.muted, paddingRight:8 }}>{s.name}</div>
-                    <div style={{ flex:1, color:C.text }}>{(s.values||[]).join(', ')}</div>
+                {[...(preview.specifics||[])].sort((a,b)=>(b.required-a.required)||((b.value?1:0)-(a.value?1:0))).map((s,i,arr) => (
+                  <div key={s.name} style={{ display:'flex', fontSize:13, padding:'7px 10px', background:i%2?'#fafafa':'#fff', borderBottom:i<arr.length-1?`1px solid ${C.border}`:'none' }}>
+                    <div style={{ flex:'0 0 44%', color:C.muted, paddingRight:8 }}>
+                      {s.required && <span title="Required by eBay" style={{ color:'#d97706', marginRight:4 }}>★</span>}{s.name}
+                    </div>
+                    <div style={{ flex:1, color: s.value ? C.text : '#bbb' }}>
+                      {s.value || (s.options?.length ? <span style={{ fontStyle:'italic' }}>— ({s.options.length} options)</span> : <span style={{ fontStyle:'italic' }}>—</span>)}
+                    </div>
                   </div>
                 ))}
                 {!preview.specifics?.length && <div style={{ fontSize:12, color:C.muted, padding:'8px 10px' }}>No specifics returned (category may not require any).</div>}
