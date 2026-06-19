@@ -22,7 +22,7 @@ export const EBAY_AU_CATEGORIES = {
   'Exterior Parts':['Bumper Bars','Door Mirrors','Door Panels','Fenders / Guards','Grilles','Bonnet / Hood','Boot Lid','Other'],
   'Ignition Systems':['Coil Packs','Glow Plugs','Ignition Coils','Spark Plugs','Distributor','Other'],
   'Interior Parts':['Dashboards','Door Cards','Instrument Clusters','Seats','Seat Belts','Steering Wheels','Window Regulators','Other'],
-  'Lighting & Bulbs':['Headlight Assemblies','Tail Lights','Fog Lights','Indicators','DRL','Other'],
+  'Lighting & Bulbs':['Headlight Assemblies','Tail Lights','Fog Lights','Indicators','Reverse Lights','Globes & Bulbs','Interior Lights','DRL','Other'],
   'Starters, Alternators & Wiring':['Alternators','ECUs','Fuse Boxes','Starter Motors','Wiring Looms','Other'],
   'Steering & Suspension':['Ball Joints','Coil Springs','Control Arms','Power Steering Pumps','Shock Absorbers','Tie Rod Ends','Wheel Bearings','Other'],
   'Transmission & Drivetrain':['Clutch Kits','CV Boots','Driveshafts','Gearboxes -- Auto','Gearboxes -- Manual','Transfer Cases','Other'],
