@@ -7,13 +7,11 @@ import Activity from './Activity'
 import { compressImage } from '../lib/image'
 import ShippingSettings from './ShippingSettings'
 
-const DEFAULT_FOOTER = `At Cloud9 Auto Parts, we aim to make your buying experience as simple and reliable as possible. All photos shown are of the exact part you will receive, no stock images. We clearly list the compatible models and year ranges in each title, but we always recommend double checking fitment by comparing photos, part numbers, and your own research.
-All parts are genuine used OEM components unless stated otherwise. As they are pre-owned, some items may show minor wear, which we highlight clearly in the photos. Everything we have in stock is listed here on our eBay store.
-Some parts, such as ECUs or stereos, may require a security code from the vehicle manufacturer. Steering wheels are sold without airbags due to shipping restrictions.
-Shipping:
-All items are posted first thing each morning. Orders placed after the daily dispatch time will be shipped the following morning, and tracking will be provided through eBay once your order is on its way.
-Please note that we do not offer local pickup.
-If you have any questions, feel free to send a message. I'll always do my best to help and ensure you're completely satisfied with your purchase.`
+// Vertical-neutral starting template — each store edits this to its own wording.
+// (Must NOT assume auto parts or name a specific business; PartVault is multi-store.)
+const DEFAULT_FOOTER = `All photos are of the exact item you will receive — no stock images. Items are sold as described, so please review the photos and details, and message us with any questions before you buy.
+We post promptly and provide tracking through eBay once your order is on its way.
+Thanks for shopping with us — we'll always do our best to make sure you're happy with your purchase.`
 
 const DEFAULT_AI_SETTINGS = {
   includeMake: true,
