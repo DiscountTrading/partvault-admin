@@ -46,6 +46,134 @@ const CATEGORY_ID_MAP: Record<string, string> = {
   '33704':'Interior Parts','39754':'Interior Parts',
 }
 
+// Build the eBay item specifics + confident fitment for a part, using the
+// Taxonomy aspect list for its leaf category. Three passes: derive from our
+// structured data, AI-fill the rest from the part photos, neutral fallback for
+// required leftovers. Shared by publish_listings and preview_listing so the
+// preview shows exactly what will be sent.
+async function fillAspects(
+  part: any,
+  categoryId: string,
+  categoryTreeId: string,
+  ebayHeaders: Record<string, string>,
+  aiPhotos: string[],
+): Promise<{ aspects: Record<string, string[]>; fitmentList: any[] }> {
+  const aspects: Record<string, string[]> = {}
+  let fitmentList: any[] = []
+  const titleLc = (part.title || '').toLowerCase()
+  const placement = () => {
+    const out: string[] = []
+    if (/\bfront\b/.test(titleLc)) out.push('Front')
+    if (/\b(rear|back)\b/.test(titleLc)) out.push('Rear')
+    if (/\b(left|lh|l\/h|driver)\b/.test(titleLc)) out.push('Left')
+    if (/\b(right|rh|r\/h|passenger)\b/.test(titleLc)) out.push('Right')
+    return out.length ? out.join(', ') : null
+  }
+  const derive = (name: string): string | null => {
+    const n = name.toLowerCase()
+    if (/\b(brand|manufacturer)\b/.test(n) && !/part/.test(n)) return part.make || null
+    if (/make/.test(n)) return part.make || null
+    if (/model/.test(n)) return part.model || null
+    if (/year/.test(n)) return part.year ? String(part.year) : null
+    if (/(part\s*number|^mpn$|oe[\/\s]?oem|reference|interchange|supersed)/.test(n)) return part.part_number || null
+    if (/placement/.test(n)) return placement()
+    if (/^type$/.test(n)) return part.subcategory || part.category || null
+    return null
+  }
+  try {
+    const aRes = await fetch(`https://api.ebay.com/commerce/taxonomy/v1/category_tree/${categoryTreeId}/get_item_aspects_for_category?category_id=${categoryId}`, { headers: ebayHeaders })
+    if (aRes.ok) {
+      const aData = await aRes.json()
+      const NEUTRAL = ['unbranded', 'does not apply', 'unknown', 'not specified', 'unspecified', 'other', 'na', 'n/a']
+      const specs = (aData.aspects || []).map((a: any) => ({
+        name: a.localizedAspectName as string,
+        required: !!a.aspectConstraint?.aspectRequired,
+        selectionOnly: a.aspectConstraint?.aspectMode === 'SELECTION_ONLY',
+        allowed: (a.aspectValues || []).map((v: any) => v.localizedValue).filter(Boolean) as string[],
+      }))
+      const inAllowedOf = (allowed: string[], val: string) => allowed.find((v) => v.toLowerCase() === String(val).toLowerCase())
+
+      // Pass 1 — fill from our own structured part/car data.
+      for (const s of specs) {
+        if (aspects[s.name]) continue
+        const d = derive(s.name)
+        if (!d) continue
+        if (!s.selectionOnly || !s.allowed.length) aspects[s.name] = [d]
+        else { const m = inAllowedOf(s.allowed, d); if (m) aspects[s.name] = [m] }
+      }
+
+      // Pass 2 — AI fills the remaining specifics + confident fitment from the photos.
+      const todo = specs.filter((s: any) => !aspects[s.name]).slice(0, 30)
+      const ANTHROPIC = Deno.env.get('ANTHROPIC_API_KEY')
+      if (ANTHROPIC && aiPhotos.length && todo.length) {
+        try {
+          const aspList = todo.map((s: any) => s.selectionOnly && s.allowed.length
+            ? `- ${s.name} (choose exactly one, verbatim: ${s.allowed.slice(0, 40).join(' | ')})`
+            : `- ${s.name} (free text, max 60 chars)`).join('\n')
+          const sys = `You are an expert Australian auto-parts eBay lister. From the part photos and the known donor vehicle, do TWO things and return JSON only:\n{"aspects": {<aspectName>: <value>}, "fitment": [{"make":"","model":"","yearFrom":2012,"yearTo":2017,"trim":"","engine":""}]}\ntrim and engine are optional — include them only when the part is specific to that trim/engine; leave "" otherwise.\nASPECTS: only include one you can determine with reasonable confidence from the photo or known part/vehicle. For "choose one" aspects return one listed option verbatim, otherwise omit. Never invent a colour/material/measurement you cannot see.\nFITMENT: list ONLY vehicles you are CONFIDENT share this IDENTICAL part (same OEM / interchange number) — include the donor vehicle plus any platform-shared siblings you are genuinely sure about. OMIT anything uncertain. Use realistic Australian-market year ranges. Return an empty array if unsure. Do not guess to widen coverage — an over-broad fitment causes returns and hurts the seller.`
+          const usr = `Part: ${part.title || ''}\nVehicle: ${part.make || ''} ${part.model || ''} ${part.year || ''}\nCategory: ${part.category || ''}\nPart number: ${part.part_number || 'unknown'}\n${aiPhotos.length > 1 ? `\nThe ${aiPhotos.length} photos are all of the SAME part from different angles/close-ups — use them together.` : ''}\nAspects to fill:\n${aspList}`
+          const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: { 'x-api-key': ANTHROPIC, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+            body: JSON.stringify({
+              model: 'claude-sonnet-4-6', max_tokens: 900, system: sys,
+              messages: [{ role: 'user', content: [
+                ...aiPhotos.map((u: string) => ({ type: 'image', source: { type: 'url', url: u } })),
+                { type: 'text', text: usr },
+              ] }],
+            }),
+          })
+          if (aiRes.ok) {
+            const aiData = await aiRes.json()
+            const raw = (aiData.content || []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('').trim()
+            let map: any = null
+            try { map = JSON.parse(raw) } catch { const mm = raw.match(/\{[\s\S]*\}/); if (mm) map = JSON.parse(mm[0]) }
+            const aspMap = map?.aspects || map || {}
+            for (const s of todo) {
+              const v = aspMap[s.name]
+              if (!v || typeof v !== 'string') continue
+              if (s.selectionOnly && s.allowed.length) { const m = inAllowedOf(s.allowed, v); if (m) aspects[s.name] = [m] }
+              else aspects[s.name] = [v.slice(0, 65)]
+            }
+            if (Array.isArray(map?.fitment)) fitmentList = map.fitment.slice(0, 50)
+          }
+        } catch (_) { /* AI is best-effort */ }
+      }
+
+      // Compatible-vehicle item specifics (multi-value) from the fitment.
+      if (fitmentList.length) {
+        const uniq = (xs: string[]) => [...new Set(xs.filter(Boolean))]
+        const makes = uniq(fitmentList.map((f: any) => f.make))
+        const models = uniq(fitmentList.map((f: any) => f.model))
+        const years = uniq(fitmentList.flatMap((f: any) => {
+          const out: string[] = []; const yf = +f.yearFrom, yt = +f.yearTo || yf
+          if (yf) for (let y = yf; y <= yt && y - yf < 40; y++) out.push(String(y))
+          return out
+        }))
+        for (const s of specs) {
+          const nlc = s.name.toLowerCase()
+          if (!/compat/.test(nlc)) continue
+          let vals = /make/.test(nlc) ? makes : /model/.test(nlc) ? models : /year/.test(nlc) ? years : []
+          if (s.allowed.length) vals = vals.map((v) => inAllowedOf(s.allowed, v)).filter(Boolean) as string[]
+          if (vals.length) aspects[s.name] = uniq([...(aspects[s.name] || []), ...vals]).slice(0, 30)
+        }
+      }
+
+      // Pass 3 — required-but-empty → sensible/neutral value.
+      for (const s of specs) {
+        if (aspects[s.name] || !s.required) continue
+        const nlc = s.name.toLowerCase()
+        if (/\b(brand|manufacturer)\b/.test(nlc) && !/part/.test(nlc))
+          aspects[s.name] = [s.allowed.length ? (inAllowedOf(s.allowed, 'Unbranded') || s.allowed[0]) : (part.make || 'Unbranded')]
+        else if (/part\s*number|mpn/i.test(nlc)) aspects[s.name] = [part.part_number || 'Does Not Apply']
+        else if (s.allowed.length) aspects[s.name] = [s.allowed.find((v: string) => NEUTRAL.includes(v.toLowerCase())) || s.allowed[0]]
+        else aspects[s.name] = ['Unbranded']
+      }
+    }
+  } catch (_) { /* best effort */ }
+  return { aspects, fitmentList }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
   console.log(`[${EDGE_FN_VERSION}] ${req.method} request received`)
@@ -1204,6 +1332,66 @@ async function handleRequest(req: Request): Promise<Response> {
       return json({ drafted, failed, errors })
     }
 
+    if (action === 'preview_listing') {
+      // Read-only preview of the eBay category + item specifics + fitment that a
+      // publish would send for one part. Lets the user see everything we fill in.
+      const authHeader = req.headers.get('Authorization') || ''
+      const userClient = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: authHeader } } })
+      const { data: member } = await userClient.rpc('is_store_member', { p_store_id: storeId })
+      if (!member) return json({ error: 'Not authorised' }, 403)
+
+      const partId = body.partId
+      if (!partId) throw new Error('partId required')
+      const { data: part, error: pErr } = await sb.from('parts').select('*').eq('id', partId).eq('store_id', storeId).single()
+      if (pErr || !part) throw new Error('Part not found')
+
+      const { token } = await getToken()
+      const ebayHeaders = {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Accept-Language': 'en-AU',
+        'Content-Language': 'en-AU',
+        'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU',
+      }
+      const PREVIEW_CATEGORY_ID: Record<string, string> = {
+        'Air & Fuel Delivery':'33549','Air Conditioning & Heating':'33542','Brakes & Brake Parts':'33559',
+        'Engines & Engine Parts':'33612','Engine Cooling':'33599','Exhaust & Emission':'33605',
+        'Exterior Parts':'33637','Ignition Systems':'33687','Interior Parts':'33694',
+        'Lighting & Bulbs':'33707','Starters, Alternators & Wiring':'33572','Steering & Suspension':'33579',
+        'Transmission & Drivetrain':'33726','Wheels, Tyres & Parts':'33743','Towing Parts':'180143',
+        'Other Car & Truck Parts':'9886','Legacy Items':'9886',
+      }
+      let categoryTreeId = '15'
+      try {
+        const tRes = await fetch('https://api.ebay.com/commerce/taxonomy/v1/get_default_category_tree_id?marketplace_id=EBAY_AU', { headers: ebayHeaders })
+        if (tRes.ok) categoryTreeId = (await tRes.json()).categoryTreeId || '15'
+      } catch (_) { /* keep default */ }
+      const catQuery = [part.make, part.model, part.year, part.category, part.title].filter(Boolean).join(' ')
+      let categoryId = PREVIEW_CATEGORY_ID[part.category] || '9886'
+      let categoryName = ''
+      try {
+        const r = await fetch(`https://api.ebay.com/commerce/taxonomy/v1/category_tree/${categoryTreeId}/get_category_suggestions?q=${encodeURIComponent(catQuery || 'car part')}`, { headers: ebayHeaders })
+        if (r.ok) {
+          const d = await r.json()
+          const sug = d.categorySuggestions?.[0]
+          if (sug?.category?.categoryId) {
+            categoryId = sug.category.categoryId
+            const anc = (sug.categoryTreeNodeAncestors || []).map((a: any) => a.categoryName).reverse()
+            categoryName = [...anc, sug.category.categoryName].filter(Boolean).join(' › ')
+          }
+        }
+      } catch (_) { /* fallback id */ }
+
+      const { data: phRows } = await sb.from('photos').select('url, ebay_url, is_primary, display_order').eq('parent_type', 'part').eq('parent_id', partId).order('is_primary', { ascending: false }).order('display_order', { ascending: true })
+      let partUrls = (phRows || []).map((r: any) => r.url || r.ebay_url).filter(Boolean)
+      if (!partUrls.length) partUrls = (part.photos || []).map((p: any) => { if (p && typeof p === 'object') return p.url || p.ebay_url; try { const o = JSON.parse(p); return o.url || o.ebay_url || p } catch { return p } }).filter(Boolean)
+
+      const { aspects, fitmentList } = await fillAspects(part, categoryId, categoryTreeId, ebayHeaders, partUrls.slice(0, 6))
+      const specifics = Object.entries(aspects).map(([name, values]) => ({ name, values }))
+      return json({ ok: true, categoryId, categoryName, specifics, fitment: fitmentList, title: part.title })
+    }
+
     if (action === 'publish_listings') {
       // ── Authorize: caller must hold the 'publish' capability for this store ──
       const authHeader = req.headers.get('Authorization') || ''
@@ -1341,131 +1529,9 @@ async function handleRequest(req: Request): Promise<Response> {
           const carUrls = part.car_id ? (await photoUrls('car', part.car_id)).slice(0, carMax) : []
           const marketingUrls = marketingImages.slice(0, marketingMax)
           let imageUrls = [...new Set([...partUrls, ...carUrls, ...marketingUrls])].slice(0, EBAY_MAX_IMAGES)
-          const aspects: Record<string, string[]> = {}
-          let fitmentList: any[] = [] // confident vehicle fitment from the AI (for compatible specifics + description)
-          // Derive an item-specific value from the part/car data by aspect name —
-          // this is what populates the previously-blank fields (Compatible Make/
-          // Model/Year, Placement, OE/Interchange/Superseded number, Type, Brand).
-          const titleLc = (part.title || '').toLowerCase()
-          const placement = () => {
-            const out: string[] = []
-            if (/\bfront\b/.test(titleLc)) out.push('Front')
-            if (/\b(rear|back)\b/.test(titleLc)) out.push('Rear')
-            if (/\b(left|lh|l\/h|driver)\b/.test(titleLc)) out.push('Left')
-            if (/\b(right|rh|r\/h|passenger)\b/.test(titleLc)) out.push('Right')
-            return out.length ? out.join(', ') : null
-          }
-          const derive = (name: string): string | null => {
-            const n = name.toLowerCase()
-            if (/\b(brand|manufacturer)\b/.test(n) && !/part/.test(n)) return part.make || null
-            if (/make/.test(n)) return part.make || null
-            if (/model/.test(n)) return part.model || null
-            if (/year/.test(n)) return part.year ? String(part.year) : null
-            if (/(part\s*number|^mpn$|oe[\/\s]?oem|reference|interchange|supersed)/.test(n)) return part.part_number || null
-            if (/placement/.test(n)) return placement()
-            if (/^type$/.test(n)) return part.subcategory || part.category || null
-            return null
-          }
-          try {
-            const aRes = await fetch(`https://api.ebay.com/commerce/taxonomy/v1/category_tree/${categoryTreeId}/get_item_aspects_for_category?category_id=${categoryId}`, { headers: ebayHeaders })
-            if (aRes.ok) {
-              const aData = await aRes.json()
-              const NEUTRAL = ['unbranded', 'does not apply', 'unknown', 'not specified', 'unspecified', 'other', 'na', 'n/a']
-              // eBay's Taxonomy API is the source of truth for which item specifics
-              // exist for THIS leaf category — so this works across every category
-              // without hardcoding. We fill them in three passes.
-              const specs = (aData.aspects || []).map((a: any) => ({
-                name: a.localizedAspectName as string,
-                required: !!a.aspectConstraint?.aspectRequired,
-                selectionOnly: a.aspectConstraint?.aspectMode === 'SELECTION_ONLY',
-                allowed: (a.aspectValues || []).map((v: any) => v.localizedValue).filter(Boolean) as string[],
-              }))
-              const inAllowedOf = (allowed: string[], val: string) => allowed.find((v) => v.toLowerCase() === String(val).toLowerCase())
-
-              // Pass 1 — fill from our own structured part/car data.
-              for (const s of specs) {
-                if (aspects[s.name]) continue
-                const d = derive(s.name)
-                if (!d) continue
-                if (!s.selectionOnly || !s.allowed.length) aspects[s.name] = [d]
-                else { const m = inAllowedOf(s.allowed, d); if (m) aspects[s.name] = [m] }
-              }
-
-              // Pass 2 — let the AI fill the remaining specifics from the part photo
-              // (Colour, Material, Surface Finish, Placement, Fitment, Warranty, …).
-              // Best-effort: never block a publish if the AI call fails.
-              const aiPhotos = (partUrls.length ? partUrls : imageUrls).slice(0, 6)
-              const todo = specs.filter((s: any) => !aspects[s.name]).slice(0, 30)
-              const ANTHROPIC = Deno.env.get('ANTHROPIC_API_KEY')
-              if (ANTHROPIC && aiPhotos.length && todo.length) {
-                try {
-                  const aspList = todo.map((s: any) => s.selectionOnly && s.allowed.length
-                    ? `- ${s.name} (choose exactly one, verbatim: ${s.allowed.slice(0, 40).join(' | ')})`
-                    : `- ${s.name} (free text, max 60 chars)`).join('\n')
-                  const sys = `You are an expert Australian auto-parts eBay lister. From the part photos and the known donor vehicle, do TWO things and return JSON only:\n{"aspects": {<aspectName>: <value>}, "fitment": [{"make":"","model":"","yearFrom":2012,"yearTo":2017,"trim":"","engine":""}]}\ntrim and engine are optional — include them only when the part is specific to that trim/engine; leave "" otherwise.\nASPECTS: only include one you can determine with reasonable confidence from the photo or known part/vehicle. For "choose one" aspects return one listed option verbatim, otherwise omit. Never invent a colour/material/measurement you cannot see.\nFITMENT: list ONLY vehicles you are CONFIDENT share this IDENTICAL part (same OEM / interchange number) — include the donor vehicle plus any platform-shared siblings you are genuinely sure about. OMIT anything uncertain. Use realistic Australian-market year ranges. Return an empty array if unsure. Do not guess to widen coverage — an over-broad fitment causes returns and hurts the seller.`
-                  const usr = `Part: ${part.title || ''}\nVehicle: ${part.make || ''} ${part.model || ''} ${part.year || ''}\nCategory: ${part.category || ''}\nPart number: ${part.part_number || 'unknown'}\n${aiPhotos.length > 1 ? `\nThe ${aiPhotos.length} photos are all of the SAME part from different angles/close-ups — use them together.` : ''}\nAspects to fill:\n${aspList}`
-                  const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
-                    method: 'POST',
-                    headers: { 'x-api-key': ANTHROPIC, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-                    body: JSON.stringify({
-                      model: 'claude-sonnet-4-6', max_tokens: 900, system: sys,
-                      messages: [{ role: 'user', content: [
-                        ...aiPhotos.map((u: string) => ({ type: 'image', source: { type: 'url', url: u } })),
-                        { type: 'text', text: usr },
-                      ] }],
-                    }),
-                  })
-                  if (aiRes.ok) {
-                    const aiData = await aiRes.json()
-                    const raw = (aiData.content || []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('').trim()
-                    let map: any = null
-                    try { map = JSON.parse(raw) } catch { const mm = raw.match(/\{[\s\S]*\}/); if (mm) map = JSON.parse(mm[0]) }
-                    const aspMap = map?.aspects || map || {}
-                    for (const s of todo) {
-                      const v = aspMap[s.name]
-                      if (!v || typeof v !== 'string') continue
-                      if (s.selectionOnly && s.allowed.length) { const m = inAllowedOf(s.allowed, v); if (m) aspects[s.name] = [m] }
-                      else aspects[s.name] = [v.slice(0, 65)]
-                    }
-                    if (Array.isArray(map?.fitment)) fitmentList = map.fitment.slice(0, 50)
-                  }
-                } catch (_) { /* AI is best-effort */ }
-              }
-
-              // Compatible-vehicle item specifics (multi-value) from the fitment,
-              // for the categories that expose "Compatible Make/Model/Year" — this
-              // is what makes the part surface in eBay's vehicle-filtered searches.
-              if (fitmentList.length) {
-                const uniq = (xs: string[]) => [...new Set(xs.filter(Boolean))]
-                const makes = uniq(fitmentList.map((f: any) => f.make))
-                const models = uniq(fitmentList.map((f: any) => f.model))
-                const years = uniq(fitmentList.flatMap((f: any) => {
-                  const out: string[] = []; const yf = +f.yearFrom, yt = +f.yearTo || yf
-                  if (yf) for (let y = yf; y <= yt && y - yf < 40; y++) out.push(String(y))
-                  return out
-                }))
-                for (const s of specs) {
-                  const nlc = s.name.toLowerCase()
-                  if (!/compat/.test(nlc)) continue
-                  let vals = /make/.test(nlc) ? makes : /model/.test(nlc) ? models : /year/.test(nlc) ? years : []
-                  if (s.allowed.length) vals = vals.map((v) => inAllowedOf(s.allowed, v)).filter(Boolean) as string[]
-                  if (vals.length) aspects[s.name] = uniq([...(aspects[s.name] || []), ...vals]).slice(0, 30)
-                }
-              }
-
-              // Pass 3 — any REQUIRED aspect still empty gets a sensible/neutral value
-              // so eBay accepts the listing.
-              for (const s of specs) {
-                if (aspects[s.name] || !s.required) continue
-                const nlc = s.name.toLowerCase()
-                if (/\b(brand|manufacturer)\b/.test(nlc) && !/part/.test(nlc))
-                  aspects[s.name] = [s.allowed.length ? (inAllowedOf(s.allowed, 'Unbranded') || s.allowed[0]) : (part.make || 'Unbranded')]
-                else if (/part\s*number|mpn/i.test(nlc)) aspects[s.name] = [part.part_number || 'Does Not Apply']
-                else if (s.allowed.length) aspects[s.name] = [s.allowed.find((v: string) => NEUTRAL.includes(v.toLowerCase())) || s.allowed[0]]
-                else aspects[s.name] = ['Unbranded']
-              }
-            }
-          } catch (_) { /* best effort */ }
+          // Item specifics + confident fitment (shared with the preview action).
+          const aiPhotos = (partUrls.length ? partUrls : imageUrls).slice(0, 6)
+          const { aspects, fitmentList } = await fillAspects(part, categoryId, categoryTreeId, ebayHeaders, aiPhotos)
 
           // Full listing description: the part's description (or notes) + the
           // store's standard footer from settings.

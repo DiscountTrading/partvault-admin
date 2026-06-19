@@ -201,7 +201,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
   const defCat = CATEGORY_NAMES[4]
   const [form, setForm] = useState(part ? { ...part, costs: { ...part.costs }, listPrice: part.list_price||part.listPrice||0, ai_assessed: part.ai_assessed??false } : {
     title:'', category:defCat, subcategory:EBAY_AU_CATEGORIES[defCat][0], make:'', model:'', year:'', condition:PART_CONDITIONS[1],
-    description:'', acquiredDate:'', costs:defCosts(), listPrice:'', soldPrice:'', photos:[], weight:'', status:'in_stock',
+    description:'', acquiredDate:new Date().toISOString().slice(0,10), costs:defCosts(), listPrice:'', soldPrice:'', photos:[], weight:'', status:'in_stock',
     partNumber:'', notes:'', ai_assessed:false, car_id:null,
   })
   const [generating, setGenerating] = useState(false)
@@ -209,7 +209,35 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
   const [aiError, setAiError] = useState('')
   const [aiPhotos, setAiPhotos] = useState([])
   const [uncheckedWarning, setUncheckedWarning] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [preview, setPreview] = useState(null)
+  const [previewErr, setPreviewErr] = useState('')
   const photoRef = useRef()
+
+  // Read-only preview of the exact eBay category + item specifics + fitment that
+  // a publish would send, generated from the part's photos (one AI call).
+  const loadPreview = async () => {
+    if (!part?.id) return
+    setPreviewLoading(true); setPreviewErr('')
+    try {
+      const { data: { session } } = await sb.auth.getSession()
+      const res = await fetch('https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ action: 'preview_listing', storeId, partId: part.id }),
+      })
+      const d = await res.json()
+      if (!res.ok || d.error) throw new Error(d.error || 'Preview failed')
+      setPreview(d)
+    } catch (e) { setPreviewErr(e.message) }
+    setPreviewLoading(false)
+  }
+  const togglePreview = () => {
+    const next = !previewOpen
+    setPreviewOpen(next)
+    if (next && !preview && !previewLoading) loadPreview()
+  }
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
   const setCost = (k, v) => setForm(f => ({ ...f, costs: { ...f.costs, [k]: +v||0 } }))
   const cost = Object.values(form.costs||{}).reduce((a,v) => a+(+v||0), 0)
@@ -336,6 +364,48 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
             </button>
           </div>
           {aiError && <div style={{ fontSize:12, color:C.red, marginTop:10 }}>{aiError}</div>}
+        </Section>
+      )}
+
+      {/* eBay listing preview — see the exact category + item specifics + fitment */}
+      {part && (
+        <Section title="eBay listing preview" accent="#1d4ed8"
+          hint="The exact eBay category and item specifics we'll send when you publish, generated from the part's photos.">
+          <button onClick={togglePreview} disabled={previewLoading}
+            style={{ ...ebayBtn('secondary'), padding:'8px 18px', fontSize:13, borderColor:'#1d4ed8', color:'#1d4ed8', opacity:previewLoading?0.6:1 }}>
+            {previewLoading ? '⏳ Building preview…' : previewOpen ? '▲ Hide eBay fields' : '▼ Show eBay category & fields'}
+          </button>
+          {previewLoading && <div style={{ fontSize:12, color:C.muted, marginTop:10 }}>Reading eBay's category fields and AI-filling specifics — a few seconds…</div>}
+          {previewErr && <div style={{ fontSize:12, color:C.red, marginTop:10 }}>{previewErr}</div>}
+          {previewOpen && preview && !previewLoading && (
+            <div style={{ marginTop:14 }}>
+              <div style={{ fontSize:13, marginBottom:12 }}>
+                <span style={{ color:C.muted }}>eBay category: </span>
+                <strong style={{ color:C.text }}>{preview.categoryName || preview.categoryId}</strong>
+              </div>
+              <div style={{ fontSize:12, fontWeight:700, color:C.text, marginBottom:6 }}>Item specifics ({preview.specifics?.length||0})</div>
+              <div style={{ border:`1px solid ${C.border}`, borderRadius:8, overflow:'hidden', marginBottom:14 }}>
+                {(preview.specifics||[]).map((s,i) => (
+                  <div key={s.name} style={{ display:'flex', fontSize:13, padding:'7px 10px', background:i%2?'#fafafa':'#fff', borderBottom:i<preview.specifics.length-1?`1px solid ${C.border}`:'none' }}>
+                    <div style={{ flex:'0 0 42%', color:C.muted, paddingRight:8 }}>{s.name}</div>
+                    <div style={{ flex:1, color:C.text }}>{(s.values||[]).join(', ')}</div>
+                  </div>
+                ))}
+                {!preview.specifics?.length && <div style={{ fontSize:12, color:C.muted, padding:'8px 10px' }}>No specifics returned (category may not require any).</div>}
+              </div>
+              <div style={{ fontSize:12, fontWeight:700, color:C.text, marginBottom:6 }}>Compatible vehicles ({preview.fitment?.length||0})</div>
+              {preview.fitment?.length ? (
+                <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+                  {preview.fitment.map((f,i) => (
+                    <span key={i} style={{ fontSize:12, background:'#eff6ff', color:'#1d4ed8', borderRadius:20, padding:'3px 10px' }}>
+                      {[f.make, f.model].filter(Boolean).join(' ')}{f.yearFrom ? ` ${f.yearFrom}${f.yearTo&&f.yearTo!==f.yearFrom?`-${f.yearTo}`:''}` : ''}{f.trim?` ${f.trim}`:''}
+                    </span>
+                  ))}
+                </div>
+              ) : <div style={{ fontSize:12, color:C.muted }}>No confident fitment beyond the donor car.</div>}
+              <div style={{ fontSize:11, color:C.muted, marginTop:12 }}>This is a preview — the values are finalised when you publish.</div>
+            </div>
+          )}
         </Section>
       )}
 
