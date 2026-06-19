@@ -138,7 +138,6 @@ serve(async (req) => {
     if (!partBlocks.length) return json({ error: 'At least one photo is required' }, 400)
 
     // Authoritative donor-car details + photos (best-effort context).
-    const urlOf = (v: any) => { if (!v) return null; if (typeof v === 'object') return v.url || v.ebay_url || null; try { const o = JSON.parse(v); return o.url || o.ebay_url || v } catch { return v } }
     let carInfo: any = car || {}
     const carBlocks: any[] = []
     if (carId) {
