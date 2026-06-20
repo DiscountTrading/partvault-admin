@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import { C, S, fmt, pct, totalCost, estimateCostBasis, CATEGORY_NAMES, EBAY_AU_CATEGORIES, PART_CONDITIONS, STATUS_COLORS, STATUS_LABELS } from '../lib/constants'
 import { sb } from '../lib/supabase'
 
@@ -305,6 +305,9 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
   }
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
   const setCost = (k, v) => setForm(f => ({ ...f, costs: { ...f.costs, [k]: +v||0 } }))
+
+  // Flag that a part editor is open, so switching stores can warn before leaving.
+  useEffect(() => { window.__pvPartOpen = true; return () => { window.__pvPartOpen = false } }, [])
   const manualCost = Object.values(form.costs||{}).reduce((a,v) => a+(+v||0), 0)
   // Estimated cost basis from the store costing config (car-cost share + removal
   // labour + admin). carPartsValue = sum of list prices of this car's parts.
@@ -783,6 +786,9 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
   const [newWindow, setNewWindow] = useState(24) // hours; default last 24h
   const [showForm, setShowForm] = useState(false)
   const [editingPart, setEditingPart] = useState(null)
+  // Switching stores must close any open part editor — the part belongs to the
+  // previous store; leaving it open mixes the two stores.
+  useEffect(() => { setShowForm(false); setEditingPart(null) }, [storeId])
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [deleteCarTarget, setDeleteCarTarget] = useState(null)
   const [expandedCars, setExpandedCars] = useState(new Set())

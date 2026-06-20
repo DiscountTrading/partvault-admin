@@ -75,6 +75,14 @@ function StoreSwitcher({ stores, activeStoreId, setActiveStore, refreshStores })
 
   if (!stores || stores.length === 0) return null
 
+  // Warn before switching stores while a part editor is open — its unsaved
+  // changes belong to the current store and would be lost.
+  const switchTo = (id) => {
+    if (id === activeStoreId) { setOpen(false); return }
+    if (window.__pvPartOpen && !window.confirm('You have a part open. Switch stores anyway?\n\nUnsaved changes to it will be lost — click Cancel to go back and save first.')) return
+    setActiveStore(id); setOpen(false)
+  }
+
   return (
     <div style={{ position: 'relative' }}>
       <button onClick={() => setOpen(o => !o)}
@@ -89,7 +97,7 @@ function StoreSwitcher({ stores, activeStoreId, setActiveStore, refreshStores })
             {stores.map(s => {
               const isActive = s.store_id === activeStoreId
               return (
-                <button key={s.store_id} onClick={() => { setActiveStore(s.store_id); setOpen(false) }}
+                <button key={s.store_id} onClick={() => switchTo(s.store_id)}
                   style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, width: '100%', textAlign: 'left', background: isActive ? '#fff4ef' : '#fff', border: 'none', borderTop: `1px solid ${C.border}`, padding: '10px 12px', cursor: 'pointer' }}>
                   <span style={{ minWidth: 0 }}>
                     <span style={{ display: 'block', fontSize: 13, fontWeight: 700, color: C.text }}>{s.store_name}</span>
