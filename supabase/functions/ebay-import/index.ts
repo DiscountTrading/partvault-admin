@@ -956,7 +956,7 @@ async function handleRequest(req: Request): Promise<Response> {
       const ebayIds = await fetchAllIds(token, certId, 'ActiveList')
       const ebaySet = new Set(ebayIds)
       const { data: activeListings } = await sb.from('listings').select('platform_listing_id')
-        .eq('store_id', storeId).eq('platform', 'ebay').eq('status', 'active').eq('deferred_review', false).is('deleted_at', null)
+        .eq('store_id', storeId).eq('platform', 'ebay').eq('status', 'active').not('deferred_review', 'is', true).is('deleted_at', null)
       const { data: allListings } = await sb.from('listings').select('platform_listing_id')
         .eq('store_id', storeId).eq('platform', 'ebay').is('deleted_at', null)
       const ourIds = new Set((allListings ?? []).map((l: any) => l.platform_listing_id))
@@ -976,7 +976,7 @@ async function handleRequest(req: Request): Promise<Response> {
         .eq('store_id', storeId)
         .eq('platform', 'ebay')
         .eq('status', 'active')
-        .eq('deferred_review', false)
+        .not('deferred_review', 'is', true)
         .is('deleted_at', null)
 
       const { data: allListings } = await sb.from('listings')
