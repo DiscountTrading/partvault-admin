@@ -121,6 +121,8 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
   const [ebayTestResult, setEbayTestResult] = useState(null)
   const [importing, setImporting] = useState(false)
   const [importJob, setImportJob] = useState(null)
+  const [syncingAll, setSyncingAll] = useState(false)
+  const [syncPhase, setSyncPhase] = useState('')
   const [backfilling, setBackfilling] = useState(false)
   const [backfillResult, setBackfillResult] = useState(null)
   const backfillCancelRef = useRef(false)
@@ -450,90 +452,68 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
     setEbayTesting(false)
   }
 
-  const importAllListings = async () => {
+  // Returns a promise that resolves when the chunked import finishes (or
+  // fails/cancels), so it can be chained in the unified "Sync with eBay" flow.
+  const importAllListings = () => new Promise((resolve) => {
     setImporting(true)
     setImportJob({ status: 'starting', current_item: 'Fetching eBay listing IDs...' })
-    try {
-      // Step 1: start — fetches all IDs from eBay and creates job record
-      const res = await fetch(EDGE_FN, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'start', storeId }),
-      })
-      const data = await res.json()
-      if (data.error) throw new Error(data.error)
+    ;(async () => {
+      try {
+        const res = await fetch(EDGE_FN, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'start', storeId }),
+        })
+        const data = await res.json()
+        if (data.error) throw new Error(data.error)
 
-      const jobId = data.jobId
-      setImportJob({ status: 'running', current_item: 'Starting...', total_items: data.totalIds, imported: 0, skipped: 0, failed: 0, id: jobId })
+        const jobId = data.jobId
+        setImportJob({ status: 'running', current_item: 'Starting...', total_items: data.totalIds, imported: 0, skipped: 0, failed: 0, id: jobId })
 
-      // Step 2: repeatedly call process_chunk until complete or cancelled
-      const processNext = async () => {
-        // Check for cancellation via Supabase
-        const { data: jobCheck } = await sb.from('jobs').select('status').eq('id', jobId).single()
-        if (jobCheck?.status === 'cancelled') {
-          setImporting(false)
-          setImportJob(j => ({ ...j, status: 'cancelled' }))
-          return
-        }
-
-        try {
-          const chunkRes = await fetch(EDGE_FN, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'process_chunk', jobId, storeId }),
-          })
-          const chunk = await chunkRes.json()
-          if (chunk.error && chunk.retry) {
-            // Timeout — just retry the same chunk after a short pause
-            console.log('Chunk timed out, retrying...')
-            setTimeout(processNext, 2000)
-            return
+        const processNext = async () => {
+          const { data: jobCheck } = await sb.from('jobs').select('status').eq('id', jobId).single()
+          if (jobCheck?.status === 'cancelled') {
+            setImporting(false); setImportJob(j => ({ ...j, status: 'cancelled' })); resolve(); return
           }
-          if (chunk.error) throw new Error(chunk.error)
+          try {
+            const chunkRes = await fetch(EDGE_FN, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'process_chunk', jobId, storeId }),
+            })
+            const chunk = await chunkRes.json()
+            if (chunk.error && chunk.retry) { setTimeout(processNext, 2000); return }
+            if (chunk.error) throw new Error(chunk.error)
 
-          setImportJob(j => ({
-            ...j,
-            id: jobId,
-            status: chunk.status,
-            imported: chunk.imported,
-            skipped: chunk.skipped,
-            failed: chunk.failed,
-            batch_offset: chunk.offset,
-            total_items: chunk.total,
-            current_item: chunk.isComplete
-              ? `✓ Complete — ${chunk.imported} imported, ${chunk.skipped} skipped`
-              : `Processing ${chunk.offset} of ${chunk.total}...`,
-          }))
+            setImportJob(j => ({
+              ...j, id: jobId, status: chunk.status,
+              imported: chunk.imported, skipped: chunk.skipped, failed: chunk.failed,
+              batch_offset: chunk.offset, total_items: chunk.total,
+              current_item: chunk.isComplete
+                ? `✓ Complete — ${chunk.imported} imported, ${chunk.skipped} skipped`
+                : `Processing ${chunk.offset} of ${chunk.total}...`,
+            }))
 
-          if (chunk.isComplete || chunk.status === 'completed') {
-            setImporting(false)
-            return
+            if (chunk.isComplete || chunk.status === 'completed') { setImporting(false); resolve(); return }
+            setTimeout(processNext, 500)
+          } catch (e) {
+            setImportJob(j => ({ ...j, status: 'failed', error_message: e.message })); setImporting(false); resolve()
           }
-
-          // Small pause then next chunk
-          setTimeout(processNext, 500)
-        } catch (e) {
-          setImportJob(j => ({ ...j, status: 'failed', error_message: e.message }))
-          setImporting(false)
         }
+        setTimeout(processNext, 300)
+      } catch (e) {
+        setImportJob({ status: 'failed', error_message: e.message }); setImporting(false); resolve()
       }
+    })()
+  })
 
-      setTimeout(processNext, 300)
-
-    } catch (e) {
-      setImportJob({ status: 'failed', error_message: e.message })
-      setImporting(false)
-    }
-  }
-
-  const runBackfill = async () => {
+  const runBackfill = async (daysBack = 5 * 365) => {
     backfillCancelRef.current = false
     setBackfilling(true)
     setBackfillResult(null)
 
     const WINDOW_DAYS = 30
-    const YEARS_BACK  = 5
-    const startDate   = new Date(Date.now() - YEARS_BACK * 365 * 24 * 60 * 60 * 1000)
+    const startDate   = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000)
     let windowEnd     = new Date()
     let totalUpdated  = 0
     let totalAlready  = 0
@@ -706,6 +686,24 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
       setReconcileError(e.message)
     }
     setReconciling(false)
+  }
+
+  // One-click full sync: import new listings → update sold orders (last ~4
+  // months) → reconcile against eBay. Each step shows its own progress below.
+  const syncEverything = async () => {
+    setSyncingAll(true)
+    try {
+      setSyncPhase('1/3 · Importing listings from eBay…')
+      await importAllListings()
+      setSyncPhase('2/3 · Updating sold orders…')
+      await runBackfill(120)
+      setSyncPhase('3/3 · Reconciling with eBay…')
+      await runReconcile()
+      setSyncPhase('✓ Sync complete')
+    } catch (e) {
+      setSyncPhase(`Sync stopped: ${e.message}`)
+    }
+    setSyncingAll(false)
   }
 
   const retryFailed = async () => {
@@ -1658,9 +1656,15 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
                   </div>
                 </div>
               )}
+              <button style={{ ...S.btn('primary'), width: '100%', marginBottom: syncPhase ? 6 : 12, opacity: (syncingAll || !ebayConnected) ? 0.6 : 1 }} onClick={syncEverything} disabled={syncingAll || importing || backfilling || reconciling || !ebayConnected}>
+                {syncingAll ? '⏳ Syncing with eBay…' : '🔄 Sync with eBay'}
+              </button>
+              {syncPhase && <div style={{ fontSize: 12, color: syncPhase.startsWith('✓') ? C.green : C.muted, marginBottom: 12 }}>{syncPhase}</div>}
+              <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>One click: imports new listings, updates sold orders (last ~4 months), then reconciles against eBay. Or run a step on its own:</div>
+
               <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-                <button style={{ ...S.btn('primary'), flex: 1, opacity: (importing || !ebayConnected) ? 0.6 : 1 }} onClick={importAllListings} disabled={importing || !ebayConnected}>
-                  {importing ? '⏳ Importing...' : '📥 Import All eBay Listings'}
+                <button style={{ ...S.btn('secondary'), flex: 1, opacity: (importing || syncingAll || !ebayConnected) ? 0.6 : 1 }} onClick={importAllListings} disabled={importing || syncingAll || !ebayConnected}>
+                  {importing ? '⏳ Importing...' : '📥 Import listings only'}
                 </button>
                 {importing && <button style={S.btn('danger')} onClick={cancelImport}>Cancel</button>}
               </div>
