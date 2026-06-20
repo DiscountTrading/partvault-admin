@@ -125,6 +125,29 @@ serve(async (req) => {
       return json({ ok: true, result: parsed })
     }
 
+    // Mode: quick product name from photos (fast/cheap, Haiku) — used to pre-fill
+    // the editable title while capturing, without the full assessment.
+    if (mode === 'quick-name') {
+      const urls = (Array.isArray(body.photoUrls) ? body.photoUrls : (body.photoUrl ? [body.photoUrl] : [])).filter(Boolean).slice(0, 3)
+      const b64s = (Array.isArray(body.photoBase64s) ? body.photoBase64s : (body.photoBase64 ? [body.photoBase64] : [])).filter(Boolean).slice(0, 3)
+      const blocks: any[] = [
+        ...urls.map((u: string) => ({ type: 'image', source: { type: 'url', url: u } })),
+        ...b64s.map((b: string) => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b } })),
+      ]
+      if (!blocks.length) return json({ error: 'At least one photo is required' }, 400)
+      const car = body.car || {}
+      const aiRes = await callAnthropic({
+        model: 'claude-haiku-4-5-20251001', max_tokens: 120,
+        system: 'You name a used car part for an eBay listing. Return JSON only: {"title":"max 80 chars"}. Front-load Make Model Year(s) and the part type, then a key qualifier (side/position). No filler, no ALL CAPS.',
+        messages: [{ role: 'user', content: [...blocks, { type: 'text', text: `Vehicle: ${car.make || ''} ${car.model || ''} ${car.year || ''}. Give a concise eBay product name for this part.` }] }],
+      })
+      const data = await aiRes.json()
+      if (data.error) return json({ error: data.error.message || 'AI error' }, 400)
+      const parsed = parseJson(textOf(data))
+      if (!parsed?.title) return json({ error: 'Could not name the part' }, 502)
+      return json({ ok: true, title: parsed.title })
+    }
+
     // Mode: parse make/model/year from a listing title (cheap, Haiku).
     if (mode === 'parse-title') {
       const { title } = body
@@ -228,7 +251,10 @@ serve(async (req) => {
         ai_assessed: true,
         ai_pending: false,
       }
-      if (parsed.title || existingTitle) update.title = parsed.title || existingTitle
+      // Keep the title set at capture (AI-prefilled name, edited by the user);
+      // only fall back to the AI title if the part has none.
+      if (existingTitle) update.title = existingTitle
+      else if (parsed.title) update.title = parsed.title
       if (parsed.category) update.category = parsed.category
       const { error: upErr } = await service.from('parts').update(update).eq('id', partId).eq('store_id', storeId)
       if (upErr) return json({ error: `AI ran but saving failed: ${upErr.message}`, result: parsed }, 500)
