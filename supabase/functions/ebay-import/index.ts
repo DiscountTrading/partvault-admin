@@ -199,6 +199,33 @@ async function fillAspects(
   return { aspects, fitmentList, specs: specsOut }
 }
 
+// Build the full listing description (body + "Compatible with" block + footer)
+// exactly as it will be sent to eBay. Shared by publish + preview so the preview
+// is a faithful image of the real listing.
+function buildDescription(part: any, fitmentList: any[], footer: string): string {
+  const esc = (s: string) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const descBody = part.description || part.notes || part.title || ''
+  const fitsLines = (fitmentList || []).map((f: any) => {
+    const yr = +f.yearFrom ? ` ${f.yearFrom}${+f.yearTo && +f.yearTo !== +f.yearFrom ? `-${f.yearTo}` : ''}` : ''
+    return [`${[f.make, f.model].filter(Boolean).join(' ')}${yr}`, f.trim].filter(Boolean).join(' ').trim()
+  }).filter(Boolean)
+  const fitsBlock = fitsLines.length ? `Compatible with:\n${fitsLines.map((l: string) => `• ${l}`).join('\n')}\nPlease confirm fitment against your part number before purchase.` : ''
+  return [descBody, fitsBlock, footer].filter(Boolean).map((s: string) => esc(s).replace(/\n/g, '<br>')).join('<br><br>') || (part.title || part.sku || '')
+}
+
+// Resolve the package weight (grams) + dimensions (cm) exactly as publish does:
+// part weight > category preset > store default, guarded against zero/sub-gram.
+function resolveShipping(part: any, shipCats: any, shipDefW: number, shipDefDims: any) {
+  const preset = shipCats[part.category] || {}
+  const presetOrDefaultG = +preset.weightG > 0 ? +preset.weightG : shipDefW
+  let weightG = Math.round(+part.weight > 0 ? +part.weight : presetOrDefaultG)
+  if (!Number.isFinite(weightG) || weightG < 2) weightG = Math.round(presetOrDefaultG)
+  const dimL = +preset.l > 0 ? +preset.l : (+shipDefDims.l > 0 ? +shipDefDims.l : 30)
+  const dimW = +preset.w > 0 ? +preset.w : (+shipDefDims.w > 0 ? +shipDefDims.w : 20)
+  const dimH = +preset.h > 0 ? +preset.h : (+shipDefDims.h > 0 ? +shipDefDims.h : 15)
+  return { weightG, dimL, dimW, dimH }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
   console.log(`[${EDGE_FN_VERSION}] ${req.method} request received`)
@@ -1412,6 +1439,20 @@ async function handleRequest(req: Request): Promise<Response> {
       let partUrls = (phRows || []).map((r: any) => r.url || r.ebay_url).filter(Boolean)
       if (!partUrls.length) partUrls = (part.photos || []).map((p: any) => { if (p && typeof p === 'object') return p.url || p.ebay_url; try { const o = JSON.parse(p); return o.url || o.ebay_url || p } catch { return p } }).filter(Boolean)
 
+      // Store config (same as publish): footer, shipping, best offer, image mix.
+      const { data: storeRow } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      const settings = storeRow?.settings || {}
+      const comp = settings.imageComposition || {}
+      const carMax = comp.carMax ?? 5
+      const marketingMax = comp.marketingMax ?? 5
+      const marketingImages: string[] = settings.marketingImages || []
+      let carUrls: string[] = []
+      if (part.car_id) {
+        const { data: cph } = await sb.from('photos').select('url, ebay_url, is_primary, display_order').eq('parent_type', 'car').eq('parent_id', part.car_id).order('is_primary', { ascending: false }).order('display_order', { ascending: true })
+        carUrls = (cph || []).map((r: any) => r.url || r.ebay_url).filter(Boolean).slice(0, carMax)
+      }
+      const photos = [...new Set([...partUrls, ...carUrls, ...marketingImages.slice(0, marketingMax)])].slice(0, 24)
+
       const { aspects, fitmentList, specs } = await fillAspects(part, categoryId, categoryTreeId, ebayHeaders, partUrls.slice(0, 6))
       // Show EVERY aspect eBay offers for this category, with our filled value
       // (or empty), so the user sees the full set and what's still blank.
@@ -1425,7 +1466,24 @@ async function handleRequest(req: Request): Promise<Response> {
       for (const [name, values] of Object.entries(aspects)) {
         if (!seen.has(name)) specifics.push({ name, value: (values as string[]).join(', '), required: false, options: [], overridden: Object.prototype.hasOwnProperty.call(ovSpec, name) })
       }
-      return json({ ok: true, categoryId, categoryName, specifics, fitment: fitmentList, title: part.title })
+
+      // The exact description (body + compatible-with block + footer) and shipping
+      // eBay will receive — so the preview has no surprises.
+      const description = buildDescription(part, fitmentList, settings.footer || '')
+      const shipping = settings.shipping || {}
+      const shipCats = shipping.categories || {}
+      const shipDefW = +shipping.defaultWeightG > 0 ? +shipping.defaultWeightG : 1000
+      const shipDefDims = shipping.defaultDimsCm || {}
+      const { weightG, dimL, dimW, dimH } = resolveShipping(part, shipCats, shipDefW, shipDefDims)
+
+      return json({
+        ok: true, categoryId, categoryName, specifics, fitment: fitmentList,
+        title: part.title, description, photos,
+        price: +part.list_price || 0, condition: part.condition || 'Used – Good',
+        hasFooter: !!(settings.footer && settings.footer.trim()),
+        allowOffers: !!settings.allowOffers,
+        weightG, dims: { l: dimL, w: dimW, h: dimH },
+      })
     }
 
     if (action === 'publish_listings') {
@@ -1571,31 +1629,11 @@ async function handleRequest(req: Request): Promise<Response> {
 
           // Full listing description: the part's description (or notes) + the
           // store's standard footer from settings.
-          const esc = (s: string) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-          const descBody = part.description || part.notes || part.title || ''
-          // "Compatible with" block from the confident fitment — improves buyer
-          // confidence and adds searchable vehicle terms to the listing.
-          const fitsLines = fitmentList.map((f: any) => {
-            const yr = +f.yearFrom ? ` ${f.yearFrom}${+f.yearTo && +f.yearTo !== +f.yearFrom ? `-${f.yearTo}` : ''}` : ''
-            return [`${[f.make, f.model].filter(Boolean).join(' ')}${yr}`, f.trim].filter(Boolean).join(' ').trim()
-          }).filter(Boolean)
-          const fitsBlock = fitsLines.length ? `Compatible with:\n${fitsLines.map((l: string) => `• ${l}`).join('\n')}\nPlease confirm fitment against your part number before purchase.` : ''
           const footer = storeRow?.settings?.footer || ''
-          const fullDescription = [descBody, fitsBlock, footer].filter(Boolean).map((s: string) => esc(s).replace(/\n/g, '<br>')).join('<br><br>') || (part.title || sku)
+          const fullDescription = buildDescription(part, fitmentList, footer)
           const allowOffers = !!storeRow?.settings?.allowOffers
-
-          // eBay (calculated shipping) requires package weight + dimensions.
-          // part weight > category preset > store default > hardcoded.
-          const preset = shipCats[part.category] || {}
-          // part.weight is stored in grams (matching the import path). Guard against
-          // missing / zero / sub-gram values that eBay rejects ("Invalid value for
-          // weight.value") by falling back to the category preset or store default.
-          const presetOrDefaultG = +preset.weightG > 0 ? +preset.weightG : shipDefW
-          let weightG = Math.round(+part.weight > 0 ? +part.weight : presetOrDefaultG)
-          if (!Number.isFinite(weightG) || weightG < 2) weightG = Math.round(presetOrDefaultG)
-          const dimL = +preset.l > 0 ? +preset.l : (+shipDefDims.l > 0 ? +shipDefDims.l : 30)
-          const dimW = +preset.w > 0 ? +preset.w : (+shipDefDims.w > 0 ? +shipDefDims.w : 20)
-          const dimH = +preset.h > 0 ? +preset.h : (+shipDefDims.h > 0 ? +shipDefDims.h : 15)
+          // Package weight (grams) + dimensions (cm) — shared with the preview.
+          const { weightG, dimL, dimW, dimH } = resolveShipping(part, shipCats, shipDefW, shipDefDims)
 
           // 1. Create/replace the inventory item (PUT is idempotent)
           const invRes = await fetch(`https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, {

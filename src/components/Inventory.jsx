@@ -409,15 +409,31 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
       {/* eBay listing preview — see the exact category + item specifics + fitment */}
       {part && (
         <Section title="eBay listing preview" accent="#1d4ed8"
-          hint="The exact eBay category and item specifics we'll send when you publish, generated from the part's photos.">
+          hint="An exact image of what will go to eBay — photos, title, price, description + footer, item specifics and compatible vehicles. No surprises when you list.">
           <button onClick={togglePreview} disabled={previewLoading}
             style={{ ...ebayBtn('secondary'), padding:'8px 18px', fontSize:13, borderColor:'#1d4ed8', color:'#1d4ed8', opacity:previewLoading?0.6:1 }}>
-            {previewLoading ? '⏳ Building preview…' : previewOpen ? '▲ Hide eBay fields' : '▼ Show eBay category & fields'}
+            {previewLoading ? '⏳ Building preview…' : previewOpen ? '▲ Hide listing preview' : '▼ Show full listing preview'}
           </button>
           {previewLoading && <div style={{ fontSize:12, color:C.muted, marginTop:10 }}>Reading eBay's category fields and AI-filling specifics — a few seconds…</div>}
           {previewErr && <div style={{ fontSize:12, color:C.red, marginTop:10 }}>{previewErr}</div>}
           {previewOpen && preview && !previewLoading && (
             <div style={{ marginTop:14 }}>
+              {/* Photos */}
+              {preview.photos?.length > 0 && (
+                <div style={{ display:'flex', gap:6, overflowX:'auto', marginBottom:12, paddingBottom:4 }}>
+                  {preview.photos.map((u,i) => (
+                    <img key={i} src={u} alt="" style={{ width:72, height:72, borderRadius:8, objectFit:'cover', border:`1px solid ${C.border}`, flexShrink:0 }} />
+                  ))}
+                </div>
+              )}
+              {/* Title + price + condition + offers */}
+              <div style={{ fontSize:15, fontWeight:700, color:C.text, marginBottom:4 }}>{preview.title || '(no title)'}</div>
+              <div style={{ display:'flex', gap:14, flexWrap:'wrap', fontSize:13, marginBottom:12 }}>
+                <span style={{ color: preview.price>0?C.text:C.red, fontWeight:700 }}>{preview.price>0 ? fmt(preview.price) : 'No price set'}</span>
+                <span style={{ color:C.muted }}>{preview.condition}</span>
+                {preview.allowOffers && <span style={{ color:'#1d4ed8' }}>Best Offer on</span>}
+                <span style={{ color:C.muted }}>Ship: {Math.round((preview.weightG||0))}g · {preview.dims?.l}×{preview.dims?.w}×{preview.dims?.h}cm</span>
+              </div>
               <div style={{ fontSize:13, marginBottom:12 }}>
                 <span style={{ color:C.muted }}>eBay category: </span>
                 <strong style={{ color:C.text }}>{preview.categoryName || preview.categoryId}</strong>
@@ -473,7 +489,17 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
                 {!fitEdits.length && <div style={{ fontSize:12, color:C.muted }}>No vehicles yet — add the ones this part fits.</div>}
               </div>
               <button onClick={addFit} style={{ ...S.btn('secondary'), padding:'5px 12px', fontSize:12 }}>+ Add vehicle</button>
-              <div style={{ fontSize:11, color:C.muted, marginTop:12 }}>Edits here are saved as overrides and win over the AI when you publish.</div>
+
+              {/* Description exactly as the buyer will see it (body + compatible block + footer) */}
+              <div style={{ fontSize:12, fontWeight:700, color:C.text, margin:'16px 0 6px' }}>
+                Description {preview.hasFooter
+                  ? <span style={{ fontWeight:400, color:'#16a34a' }}>· footer included</span>
+                  : <span style={{ fontWeight:400, color:'#d97706' }}>· no store footer set (Settings → Descriptions)</span>}
+              </div>
+              <div style={{ border:`1px solid ${C.border}`, borderRadius:8, padding:'10px 12px', fontSize:13, lineHeight:1.5, color:C.text, background:'#fff', maxHeight:240, overflowY:'auto' }}
+                dangerouslySetInnerHTML={{ __html: preview.description || '<span style="color:#bbb">(empty)</span>' }} />
+
+              <div style={{ fontSize:11, color:C.muted, marginTop:12 }}>This is an exact preview of what goes to eBay. Edits to specifics/vehicles are saved as overrides and win over the AI when you publish.</div>
             </div>
           )}
         </Section>
