@@ -123,6 +123,8 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
   const [importJob, setImportJob] = useState(null)
   const [syncingAll, setSyncingAll] = useState(false)
   const [syncPhase, setSyncPhase] = useState('')
+  const [syncStatus, setSyncStatus] = useState(null)
+  const [statusLoading, setStatusLoading] = useState(false)
   const [backfilling, setBackfilling] = useState(false)
   const [backfillResult, setBackfillResult] = useState(null)
   const backfillCancelRef = useRef(false)
@@ -687,6 +689,25 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
     }
     setReconciling(false)
   }
+
+  // Lightweight live check: how many parts are out of step with eBay.
+  const checkSyncStatus = async () => {
+    setStatusLoading(true)
+    try {
+      const { data: { session } } = await sb.auth.getSession()
+      const res = await fetch(EDGE_FN, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ action: 'sync_status', storeId }),
+      })
+      const d = await res.json()
+      if (!res.ok || d.error) throw new Error(d.error || 'Check failed')
+      setSyncStatus(d)
+    } catch (e) { setSyncStatus({ error: e.message }) }
+    setStatusLoading(false)
+  }
+  // Auto-check when the eBay tab is opened and connected.
+  useEffect(() => { if (tab === 'ebay' && ebayConnected && storeId) checkSyncStatus() }, [tab, ebayConnected, storeId])
 
   // One-click full sync: import new listings → update sold orders (last ~4
   // months) → reconcile against eBay. Each step shows its own progress below.
@@ -1656,6 +1677,36 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
                   </div>
                 </div>
               )}
+
+              {/* Live sync-health checker */}
+              {ebayConnected && (() => {
+                const s = syncStatus
+                const inSync = s && !s.error && s.outOfSync === 0
+                const bg = !s || s.error ? '#f9f8f5' : inSync ? '#ecfdf5' : '#fffbeb'
+                const border = !s || s.error ? C.border : inSync ? '#a7f3d0' : '#fcd34d'
+                return (
+                  <div style={{ background: bg, border: `1px solid ${border}`, borderRadius: 10, padding: '12px 14px', marginBottom: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>
+                        {statusLoading ? '⏳ Checking sync…'
+                          : !s ? 'Sync status'
+                          : s.error ? '⚠ Could not check'
+                          : inSync ? '✓ In sync with eBay'
+                          : `⚠ ${s.outOfSync} item${s.outOfSync === 1 ? '' : 's'} out of sync`}
+                      </div>
+                      <button onClick={checkSyncStatus} disabled={statusLoading} style={{ ...S.btn('secondary'), padding: '5px 12px', fontSize: 12, opacity: statusLoading ? 0.6 : 1 }}>↻ Re-check</button>
+                    </div>
+                    {s && !s.error && (
+                      <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>
+                        {s.stale} listed here but ended on eBay · {s.missing} on eBay not here · {s.ebayActive} active on eBay vs {s.pvActive} here
+                        {s.outOfSync > 0 && <span style={{ color: '#b45309' }}> — run Sync to resolve</span>}
+                      </div>
+                    )}
+                    {s?.error && <div style={{ fontSize: 12, color: C.red, marginTop: 6 }}>{s.error}</div>}
+                  </div>
+                )
+              })()}
+
               <button style={{ ...S.btn('primary'), width: '100%', marginBottom: syncPhase ? 6 : 12, opacity: (syncingAll || !ebayConnected) ? 0.6 : 1 }} onClick={syncEverything} disabled={syncingAll || importing || backfilling || reconciling || !ebayConnected}>
                 {syncingAll ? '⏳ Syncing with eBay…' : '🔄 Sync with eBay'}
               </button>

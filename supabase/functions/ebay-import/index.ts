@@ -945,6 +945,27 @@ async function handleRequest(req: Request): Promise<Response> {
       return json({ created, skipped: existingIds.size, noData, errors: errors.slice(0, 20), hasMore: false })
     }
 
+    if (action === 'sync_status') {
+      // Lightweight sync-health check: how many parts are out of step with eBay.
+      const authHeader = req.headers.get('Authorization') || ''
+      const userClient = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: authHeader } } })
+      const { data: member } = await userClient.rpc('is_store_member', { p_store_id: storeId })
+      if (!member) return json({ error: 'Not authorised' }, 403)
+
+      const { token, certId } = await getToken()
+      const ebayIds = await fetchAllIds(token, certId, 'ActiveList')
+      const ebaySet = new Set(ebayIds)
+      const { data: activeListings } = await sb.from('listings').select('platform_listing_id')
+        .eq('store_id', storeId).eq('platform', 'ebay').eq('status', 'active').eq('deferred_review', false).is('deleted_at', null)
+      const { data: allListings } = await sb.from('listings').select('platform_listing_id')
+        .eq('store_id', storeId).eq('platform', 'ebay').is('deleted_at', null)
+      const ourIds = new Set((allListings ?? []).map((l: any) => l.platform_listing_id))
+      const ourActive = (activeListings ?? []).map((l: any) => l.platform_listing_id)
+      const stale = ourActive.filter((id: string) => !ebaySet.has(id)).length   // listed here, gone from eBay
+      const missing = ebayIds.filter((id: string) => !ourIds.has(id)).length     // on eBay, not here
+      return json({ ok: true, ebayActive: ebayIds.length, pvActive: ourActive.length, stale, missing, outOfSync: stale + missing, checkedAt: new Date().toISOString() })
+    }
+
     if (action === 'reconcile') {
       const { token, certId } = await getToken()
       const ebayIds = await fetchAllIds(token, certId, 'ActiveList')
