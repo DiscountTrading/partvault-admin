@@ -234,11 +234,13 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
       const res = await fetch('https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-        body: JSON.stringify({ action: 'market_lookup', storeId, part: { title: form.title, make: form.make, model: form.model, year: form.year, part_number: form.partNumber, list_price: +form.listPrice || 0, category: form.category } }),
+        body: JSON.stringify({ action: 'market_lookup', storeId, partId: part?.id, part: { title: form.title, make: form.make, model: form.model, year: form.year, part_number: form.partNumber, list_price: +form.listPrice || 0, category: form.category } }),
       })
       const d = await res.json()
       if (!res.ok || d.error) throw new Error(d.error || 'Market lookup failed')
       setMarket(d)
+      // Stamp the form so the "last checked" line reflects this refresh immediately.
+      if (d.browse && !d.browse.error && d.browse.median > 0) setForm(f => ({ ...f, marketPrice: d.browse.median, marketCheckedAt: new Date().toISOString() }))
     } catch (e) { setMarketErr(e.message) }
     setMarketLoading(false)
   }
@@ -674,9 +676,17 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
         {/* Live eBay market data — what similar used parts are listed at right now */}
         <div style={{ marginTop:14, padding:'12px 14px', background:'#fff', border:`1px solid ${C.border}`, borderRadius:10 }}>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, flexWrap:'wrap' }}>
-            <div style={{ fontSize:13, fontWeight:700, color:C.text }}>📊 eBay market price</div>
-            <button onClick={loadMarket} disabled={marketLoading} style={{ ...S.btn('secondary'), padding:'5px 14px', fontSize:12, opacity:marketLoading?0.6:1 }}>
-              {marketLoading ? 'Checking…' : 'Check market'}
+            <div>
+              <div style={{ fontSize:13, fontWeight:700, color:C.text }}>📊 eBay market price</div>
+              {(() => {
+                if (!form.marketCheckedAt) return <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>Not checked yet</div>
+                const days = Math.floor((Date.now() - new Date(form.marketCheckedAt).getTime()) / 86400000)
+                const color = days > 21 ? C.red : days > 10 ? C.yellow : C.muted
+                return <div style={{ fontSize:11, color, marginTop:2 }}>Last checked {days <= 0 ? 'today' : `${days}d ago`}{form.marketPrice ? ` · median ${fmt(form.marketPrice)}` : ''}{days > 10 ? ' — refresh before adjusting' : ''}</div>
+              })()}
+            </div>
+            <button onClick={loadMarket} disabled={marketLoading} style={{ ...S.btn(form.marketCheckedAt && (Date.now()-new Date(form.marketCheckedAt).getTime())/86400000 > 10 ? 'primary' : 'secondary'), padding:'5px 14px', fontSize:12, opacity:marketLoading?0.6:1 }}>
+              {marketLoading ? 'Checking…' : form.marketCheckedAt ? 'Refresh' : 'Check market'}
             </button>
           </div>
           {marketErr && <div style={{ fontSize:12, color:C.red, marginTop:8 }}>{marketErr}</div>}

@@ -19,6 +19,9 @@ const mapRow = r => ({
   ai_assessed: r.ai_assessed||false,
   ebayOverrides: r.ebay_overrides||null,
   removalMinutes: r.removal_minutes ?? null,
+  marketPrice: r.market_price ?? null,
+  marketCount: r.market_count ?? null,
+  marketCheckedAt: r.market_checked_at || null,
 })
 
 const mapToRow = p => ({
