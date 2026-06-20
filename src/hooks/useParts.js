@@ -18,6 +18,7 @@ const mapRow = r => ({
   car_id: r.car_id||null, source: r.source||null,
   ai_assessed: r.ai_assessed||false,
   ebayOverrides: r.ebay_overrides||null,
+  removalMinutes: r.removal_minutes ?? null,
 })
 
 const mapToRow = p => ({
@@ -32,6 +33,7 @@ const mapToRow = p => ({
   listed_date: p.listedDate||null, sold_date: p.soldDate||null,
   deleted_at: p.deletedAt||null, car_id: p.car_id||null,
   ai_assessed: p.ai_assessed||false,
+  removal_minutes: p.removalMinutes ?? null,
 })
 
 export function useParts(storeId) {

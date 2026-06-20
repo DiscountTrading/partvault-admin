@@ -148,6 +148,7 @@ export default function App() {
   }, [tab, smartRefetch])
   const [aiSettings, setAiSettings] = useState(DEFAULT_AI_SETTINGS)
   const [footer, setFooter] = useState(DEFAULT_FOOTER)
+  const [costing, setCosting] = useState({ labourRate: 60, adminPct: 10, adminMin: 5 })
   const [cars, setCars] = useState([])
 
   // Name this window so the field app's "Open Admin" link returns to this tab
@@ -164,6 +165,7 @@ export default function App() {
     sb.from('stores').select('settings').eq('id', storeId).single().then(({ data }) => {
       if (data?.settings?.aiDescription) setAiSettings(s => ({ ...s, ...data.settings.aiDescription }))
       if (data?.settings?.footer) setFooter(data.settings.footer)
+      if (data?.settings?.costing) setCosting(s => ({ ...s, ...data.settings.costing }))
     })
     // Load cars
     sb.from('cars').select('*').eq('store_id', storeId).is('deleted_at', null).order('created_at', { ascending: false })
@@ -212,7 +214,7 @@ export default function App() {
             parts={parts} cars={cars} storeId={storeId}
             onAdd={handleAdd} onEdit={handleEdit} onDelete={handleDel}
             onDeleteCar={softDeleteCar} onAddCar={handleAddCar}
-            aiSettings={aiSettings} footer={footer}
+            aiSettings={aiSettings} footer={footer} costing={costing}
           />
         )}
         {tab === 'ebay' && <Ebay storeId={storeId} onChanged={smartRefetch} />}

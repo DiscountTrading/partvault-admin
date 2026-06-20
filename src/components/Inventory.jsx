@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef } from 'react'
-import { C, S, fmt, pct, totalCost, CATEGORY_NAMES, EBAY_AU_CATEGORIES, PART_CONDITIONS, STATUS_COLORS, STATUS_LABELS } from '../lib/constants'
+import { C, S, fmt, pct, totalCost, estimateCostBasis, CATEGORY_NAMES, EBAY_AU_CATEGORIES, PART_CONDITIONS, STATUS_COLORS, STATUS_LABELS } from '../lib/constants'
 import { sb } from '../lib/supabase'
 
 const MAKES = ['Toyota','Ford','Holden','Mazda','Hyundai','Kia','Mitsubishi','Nissan','Subaru','Honda','Volkswagen','BMW','Mercedes-Benz','Audi','Land Rover','Isuzu','Suzuki','Lexus','Jeep','Volvo','Other']
@@ -197,7 +197,7 @@ function AddCarModal({ storeId, onSave, onCancel }) {
 }
 
 // ─── Part Form ─────────────────────────────────────────────────────────────
-function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSettings, footer }) {
+function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSettings, footer, costing, allParts = [] }) {
   const defCat = CATEGORY_NAMES[4]
   const [form, setForm] = useState(part ? { ...part, costs: { ...part.costs }, listPrice: part.list_price||part.listPrice||0, ai_assessed: part.ai_assessed??false, acquiredDate: part.acquiredDate ? String(part.acquiredDate).slice(0,10) : (part.createdAt ? String(part.createdAt).slice(0,10) : '') } : {
     title:'', category:defCat, subcategory:EBAY_AU_CATEGORIES[defCat][0], make:'', model:'', year:'', condition:PART_CONDITIONS[1],
@@ -284,7 +284,14 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
   }
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
   const setCost = (k, v) => setForm(f => ({ ...f, costs: { ...f.costs, [k]: +v||0 } }))
-  const cost = Object.values(form.costs||{}).reduce((a,v) => a+(+v||0), 0)
+  const manualCost = Object.values(form.costs||{}).reduce((a,v) => a+(+v||0), 0)
+  // Estimated cost basis from the store costing config (car-cost share + removal
+  // labour + admin). carPartsValue = sum of list prices of this car's parts.
+  const formCar = cars?.find(c => c.id === form.car_id)
+  const carPartsValue = (allParts||[]).filter(p => p.car_id === form.car_id && !p.deletedAt)
+    .reduce((a,p) => a + (p.id === form.id ? (+form.listPrice||0) : (+p.list_price||+p.listPrice||0)), 0)
+  const basis = estimateCostBasis({ list_price: +form.listPrice||0, removalMinutes: form.removalMinutes }, costing, +formCar?.purchase_price||0, carPartsValue)
+  const cost = manualCost + basis.total
   const profit = (+form.listPrice||0) - cost
   const margin = +form.listPrice > 0 ? (profit / +form.listPrice) * 100 : 0
 
@@ -316,7 +323,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
     try {
       const car = cars?.find(c => c.id === form.car_id)
       const parsed = await analysePart({ photoBase64s: aiPhotos.map(p => p.split(',')[1]), carId: car?.id }, car||form, storeId)
-      setForm(f => ({ ...f, title:parsed.title||f.title, category:parsed.category||f.category, subcategory:parsed.subcategory||f.subcategory, condition:parsed.condition||f.condition, description:parsed.description||f.description, partNumber:parsed.partNumber||f.partNumber, listPrice:parsed.listPrice||f.listPrice, weight:parsed.weight||f.weight, costs:parsed.sizeTier?COST_TIERS[parsed.sizeTier]||f.costs:f.costs, ai_assessed:true }))
+      setForm(f => ({ ...f, title:parsed.title||f.title, category:parsed.category||f.category, subcategory:parsed.subcategory||f.subcategory, condition:parsed.condition||f.condition, description:parsed.description||f.description, partNumber:parsed.partNumber||f.partNumber, listPrice:parsed.listPrice||f.listPrice, weight:parsed.weight||f.weight, removalMinutes:parsed.removalMinutes??f.removalMinutes, costs:parsed.sizeTier?COST_TIERS[parsed.sizeTier]||f.costs:f.costs, ai_assessed:true }))
     } catch(e) { setAiError(e.message) }
     setAnalysing(false)
   }
@@ -331,7 +338,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
     try {
       const car = cars?.find(c => c.id === form.car_id)
       const parsed = await analysePart({ photoUrls: partPhotoUrls, carId: car?.id }, car||form, storeId)
-      setForm(f => ({ ...f, title:parsed.title||f.title, category:parsed.category||f.category, subcategory:parsed.subcategory||f.subcategory, condition:parsed.condition||f.condition, description:parsed.description||f.description, partNumber:parsed.partNumber||f.partNumber, listPrice:parsed.listPrice||f.listPrice, weight:parsed.weight||f.weight, costs:parsed.sizeTier?COST_TIERS[parsed.sizeTier]||f.costs:f.costs, ai_assessed:true }))
+      setForm(f => ({ ...f, title:parsed.title||f.title, category:parsed.category||f.category, subcategory:parsed.subcategory||f.subcategory, condition:parsed.condition||f.condition, description:parsed.description||f.description, partNumber:parsed.partNumber||f.partNumber, listPrice:parsed.listPrice||f.listPrice, weight:parsed.weight||f.weight, removalMinutes:parsed.removalMinutes??f.removalMinutes, costs:parsed.sizeTier?COST_TIERS[parsed.sizeTier]||f.costs:f.costs, ai_assessed:true }))
     } catch(e) { setAiError(e.message) }
     setAnalysing(false)
   }
@@ -617,8 +624,23 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
               </Field>
             ))}
           </div>
-          <div style={{ display:'flex', gap:20, marginTop:8, fontSize:12 }}>
-            <span>Cost: <strong style={{ color:C.red }}>{fmt(cost)}</strong></span>
+          <div style={{ marginTop:12, paddingTop:12, borderTop:`1px dashed ${C.border}` }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, marginBottom:8, flexWrap:'wrap' }}>
+              <div style={{ fontSize:13, fontWeight:700, color:C.text }}>Estimated cost basis (auto)</div>
+              <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                <span style={{ fontSize:12, color:C.muted }}>Removal mins</span>
+                <input style={{ ...S.input, width:80, padding:'6px 8px', fontSize:13 }} type="number" min="0" value={form.removalMinutes||''} onChange={e => set('removalMinutes', e.target.value)} placeholder="—" />
+              </div>
+            </div>
+            <div style={{ display:'flex', gap:16, flexWrap:'wrap', fontSize:12, color:C.muted }}>
+              <span>Car share: <strong style={{ color:C.text }}>{fmt(basis.carShare)}</strong></span>
+              <span>Removal labour: <strong style={{ color:C.text }}>{fmt(basis.labour)}</strong></span>
+              <span>Admin: <strong style={{ color:C.text }}>{fmt(basis.admin)}</strong></span>
+              <span>Auto basis: <strong style={{ color:C.text }}>{fmt(basis.total)}</strong></span>
+            </div>
+          </div>
+          <div style={{ display:'flex', gap:20, marginTop:12, fontSize:12 }}>
+            <span>Total cost: <strong style={{ color:C.red }}>{fmt(cost)}</strong></span>
             <span>Profit: <strong style={{ color:profit>=0?C.green:C.red }}>{fmt(profit)}</strong></span>
             <span>Margin: <strong style={{ color:margin>=30?C.green:C.yellow }}>{pct(margin)}</strong></span>
           </div>
@@ -692,7 +714,7 @@ function BulkAIPanel({ group, onComplete, aiSettings, footer, storeId }) {
 }
 
 // ─── Main Inventory ────────────────────────────────────────────────────────
-export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDeleteCar, onAddCar, storeId, aiSettings, footer }) {
+export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDeleteCar, onAddCar, storeId, aiSettings, footer, costing }) {
   const [viewMode, setViewMode] = useState('parts')
   const [search, setSearch] = useState('')
   const [filterMake, setFilterMake] = useState('')
@@ -758,7 +780,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
   }
 
   if (showForm) return (
-    <PartForm part={editingPart} cars={cars} storeId={storeId} aiSettings={aiSettings} footer={footer}
+    <PartForm part={editingPart} cars={cars} storeId={storeId} aiSettings={aiSettings} footer={footer} costing={costing} allParts={parts}
       onSave={async p => { editingPart?await onEdit({...editingPart,...p}):await onAdd(p); setShowForm(false); setEditingPart(null) }}
       onSaveAndAdd={handleSaveAndAdd}
       onCancel={() => { setShowForm(false); setEditingPart(null) }}

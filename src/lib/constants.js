@@ -65,3 +65,21 @@ export const pct = n => `${(+n||0).toFixed(1)}%`
 export const today = () => new Date().toISOString().split('T')[0]
 export const totalCost = p => Object.values(p.costs||{}).reduce((a,v)=>a+(+v||0),0)
 export const partProfit = p => (+p.list_price||0) - totalCost(p)
+
+// Estimated cost basis for a part, from the store costing config:
+//  - carShare: the car's purchase price spread across its parts, proportional
+//    to each part's sale price (re-divides as more parts are added).
+//  - labour: removal_minutes / 60 * hourly labour rate.
+//  - admin: max(% of sale price, minimum $).
+// `carPartsValue` is the sum of list prices of all (non-deleted) parts for the
+// same car; `carPrice` is that car's purchase price.
+export const estimateCostBasis = (p, costing = {}, carPrice = 0, carPartsValue = 0) => {
+  const price = +p.list_price || +p.listPrice || 0
+  const labourRate = +costing.labourRate || 0
+  const adminPct = +costing.adminPct || 0
+  const adminMin = +costing.adminMin || 0
+  const carShare = (carPrice > 0 && carPartsValue > 0) ? carPrice * (price / carPartsValue) : 0
+  const labour = (+p.removalMinutes || +p.removal_minutes || 0) / 60 * labourRate
+  const admin = Math.max(price * adminPct / 100, adminMin)
+  return { carShare, labour, admin, total: carShare + labour + admin }
+}

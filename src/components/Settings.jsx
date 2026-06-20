@@ -87,6 +87,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
   const [footer, setFooter] = useState(DEFAULT_FOOTER)
   const [aiSettings, setAiSettings] = useState(DEFAULT_AI_SETTINGS)
   const [captureAssess, setCaptureAssess] = useState({ category: true, price: true })
+  const [costing, setCosting] = useState({ labourRate: 60, adminPct: 10, adminMin: 5 })
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -195,6 +196,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
         if (data.settings.footer) setFooter(data.settings.footer)
         if (data.settings.aiDescription) setAiSettings(s => ({ ...s, ...data.settings.aiDescription }))
         if (data.settings.captureAssess) setCaptureAssess(s => ({ ...s, ...data.settings.captureAssess }))
+        if (data.settings.costing) setCosting(s => ({ ...s, ...data.settings.costing }))
         if (data.settings.shipAddress) setShipAddress(a => ({ ...a, ...data.settings.shipAddress }))
         if (data.settings.ebayLocationKey) setEbayLocationKey(data.settings.ebayLocationKey)
         if (data.settings.ebayUsername) setEbayUsername(data.settings.ebayUsername) // persisted — shows immediately
@@ -219,7 +221,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
     setSaving(true)
     try {
       const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const merged = { ...(current?.settings || {}), footer, aiDescription: aiSettings, captureAssess }
+      const merged = { ...(current?.settings || {}), footer, aiDescription: aiSettings, captureAssess, costing }
       await sb.from('stores').update({ settings: merged }).eq('id', storeId)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
@@ -1389,6 +1391,27 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
             </p>
             <Toggle label="Assess category at capture" desc="Auto-pick the part category from the photo." value={captureAssess.category} onChange={v => setCaptureAssess(s => ({ ...s, category: v }))} />
             <Toggle label="Suggest a sale price at capture" desc="Fill a suggested list price (only when none was entered)." value={captureAssess.price} onChange={v => setCaptureAssess(s => ({ ...s, price: v }))} />
+          </Section>
+
+          <Section title="💰 Costing">
+            <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
+              Used to estimate each part's cost basis: the car's purchase price spread across its parts (by sale price), plus removal labour (AI-estimated minutes × your rate), plus an admin cost.
+            </p>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ flex: '1 1 140px' }}>
+                <label style={S.label}>Labour rate ($/hour)</label>
+                <input type="number" style={S.input} value={costing.labourRate} onChange={e => setCosting(s => ({ ...s, labourRate: e.target.value }))} />
+              </div>
+              <div style={{ flex: '1 1 140px' }}>
+                <label style={S.label}>Admin cost (% of sale)</label>
+                <input type="number" style={S.input} value={costing.adminPct} onChange={e => setCosting(s => ({ ...s, adminPct: e.target.value }))} />
+              </div>
+              <div style={{ flex: '1 1 140px' }}>
+                <label style={S.label}>Admin cost minimum ($)</label>
+                <input type="number" style={S.input} value={costing.adminMin} onChange={e => setCosting(s => ({ ...s, adminMin: e.target.value }))} />
+              </div>
+            </div>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>Admin cost per part = the greater of {costing.adminPct || 0}% of sale price or ${costing.adminMin || 0}.</div>
           </Section>
 
           <Section title="🤖 AI Description Template">
