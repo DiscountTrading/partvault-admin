@@ -219,6 +219,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
   const [fitBaseline, setFitBaseline] = useState('[]')
   const [savingSpecs, setSavingSpecs] = useState(false)
   const [specsSaved, setSpecsSaved] = useState(false)
+  const [previewSig, setPreviewSig] = useState('') // inputs the loaded preview was built from
   const photoRef = useRef()
 
   // Read-only preview of the exact eBay category + item specifics + fitment that
@@ -231,7 +232,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
       const res = await fetch('https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-        body: JSON.stringify({ action: 'preview_listing', storeId, partId: part.id }),
+        body: JSON.stringify({ action: 'preview_listing', storeId, partId: part.id, title: form.title, price: +form.listPrice || 0, condition: form.condition, description: form.description || '' }),
       })
       const d = await res.json()
       if (!res.ok || d.error) throw new Error(d.error || 'Preview failed')
@@ -240,13 +241,17 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
       setSpecBaseline(base); setSpecEdits(base)
       const fit = (d.fitment || []).map(f => ({ make:f.make||'', model:f.model||'', yearFrom:f.yearFrom||'', yearTo:f.yearTo||'', trim:f.trim||'' }))
       setFitEdits(fit); setFitBaseline(JSON.stringify(fit))
+      setPreviewSig(previewInputSig())
     } catch (e) { setPreviewErr(e.message) }
     setPreviewLoading(false)
   }
+  // Signature of the inputs that affect the preview — so we only rebuild (an AI
+  // call) when something actually changed.
+  const previewInputSig = () => JSON.stringify({ t: form.title, p: +form.listPrice || 0, c: form.condition, d: form.description || '', ov: form.ebayOverrides || null })
   const togglePreview = () => {
     const next = !previewOpen
     setPreviewOpen(next)
-    if (next && !preview && !previewLoading) loadPreview()
+    if (next && !previewLoading && (!preview || previewSig !== previewInputSig())) loadPreview()
   }
   const setSpec = (name, val) => setSpecEdits(e => ({ ...e, [name]: val }))
   const setFit = (i, k, val) => setFitEdits(rows => rows.map((r, j) => j === i ? { ...r, [k]: val } : r))

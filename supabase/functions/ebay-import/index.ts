@@ -1395,6 +1395,12 @@ async function handleRequest(req: Request): Promise<Response> {
       if (!partId) throw new Error('partId required')
       const { data: part, error: pErr } = await sb.from('parts').select('*').eq('id', partId).eq('store_id', storeId).single()
       if (pErr || !part) throw new Error('Part not found')
+      // Reflect the editor's current (possibly unsaved) values so the preview
+      // matches what's on screen — no need to save first.
+      if (typeof body.title === 'string' && body.title) part.title = body.title
+      if (body.price != null && body.price !== '') part.list_price = +body.price || 0
+      if (typeof body.condition === 'string' && body.condition) part.condition = body.condition
+      if (typeof body.description === 'string') part.description = body.description
 
       const { token } = await getToken()
       const ebayHeaders = {
