@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.0'
+const EDGE_FN_VERSION         = '3.14.1'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 25 * 1000
@@ -956,7 +956,7 @@ async function handleRequest(req: Request): Promise<Response> {
       const ebayIds = await fetchAllIds(token, certId, 'ActiveList')
       const ebaySet = new Set(ebayIds)
       const { data: activeListings } = await sb.from('listings').select('platform_listing_id')
-        .eq('store_id', storeId).eq('platform', 'ebay').eq('status', 'active').not('deferred_review', 'is', true).is('deleted_at', null)
+        .eq('store_id', storeId).eq('platform', 'ebay').in('status', ['active', 'live']).not('deferred_review', 'is', true).is('deleted_at', null)
       const { data: allListings } = await sb.from('listings').select('platform_listing_id')
         .eq('store_id', storeId).eq('platform', 'ebay').is('deleted_at', null)
       const ourIds = new Set((allListings ?? []).map((l: any) => l.platform_listing_id))
@@ -979,7 +979,7 @@ async function handleRequest(req: Request): Promise<Response> {
         .select('id, part_id, platform_listing_id, platform_sku')
         .eq('store_id', storeId)
         .eq('platform', 'ebay')
-        .eq('status', 'active')
+        .in('status', ['active', 'live'])
         .not('deferred_review', 'is', true)
         .is('deleted_at', null)
 
@@ -1911,7 +1911,7 @@ async function handleRequest(req: Request): Promise<Response> {
       for (const partId of partIds) {
         try {
           const { data: listings } = await sb.from('listings').select('*')
-            .eq('part_id', partId).eq('platform', 'ebay').eq('status', 'active').is('deleted_at', null)
+            .eq('part_id', partId).eq('platform', 'ebay').in('status', ['active', 'live']).is('deleted_at', null)
           for (const listing of (listings || [])) {
             const offerId = listing.platform_data?.offerId
             if (offerId) {
