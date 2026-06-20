@@ -50,6 +50,9 @@ serve(async (req) => {
     // secret instead of a user JWT, and loads the part's data from the database.
     const trusted = !!(body.triggerSecret && TRIGGER_SECRET && body.triggerSecret === TRIGGER_SECRET)
     const urlOf = (v: any) => { if (!v) return null; if (typeof v === 'object') return v.url || v.ebay_url || null; try { const o = JSON.parse(v); return o.url || o.ebay_url || v } catch { return v } }
+    // Capture (mobile) auto-assess does only the light items; the rest is done in
+    // admin. Which light items run is a per-store setting (default category+price).
+    const capCfg = { category: true, price: true }
 
     if (trusted && body.partId) {
       // Auto-assess flow: pull everything we need from the part row server-side
@@ -58,6 +61,10 @@ serve(async (req) => {
       const { data: p } = await service.from('parts').select('store_id, car_id, title, list_price, photos, ai_assessed').eq('id', body.partId).single()
       if (!p) return json({ error: 'part not found' }, 404)
       if (p.ai_assessed) return json({ ok: true, skipped: 'already assessed' })
+      const { data: stCfg } = await service.from('stores').select('settings').eq('id', p.store_id).single()
+      const cc = stCfg?.settings?.captureAssess
+      capCfg.category = cc?.category !== false
+      capCfg.price = cc?.price !== false
       body.storeId = p.store_id
       body.carId = p.car_id
       body.existingTitle = p.title
@@ -241,21 +248,32 @@ serve(async (req) => {
     if (partId) {
       const service = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const aiPrice = +parsed.listPrice || 0
-      const update: Record<string, unknown> = {
-        subcategory: parsed.subcategory || '',
-        condition: parsed.condition || 'Used – Good',
-        description: parsed.description || null,
-        part_number: parsed.partNumber || null,
-        weight: parsed.weight || null,
-        list_price: (+existingPrice > 0) ? +existingPrice : aiPrice,
-        ai_assessed: true,
-        ai_pending: false,
+      let update: Record<string, unknown>
+      if (trusted) {
+        // Capture (mobile): only the light items per the store's captureAssess
+        // setting. Description / part number / specifics / fitment stay for admin,
+        // so ai_assessed stays false (admin still shows "Needs AI").
+        update = { ai_pending: false, ai_assessed: false }
+        if (capCfg.category && parsed.category) { update.category = parsed.category; update.subcategory = parsed.subcategory || '' }
+        if (capCfg.price && !(+existingPrice > 0) && aiPrice) update.list_price = aiPrice
+        // Title was set at capture (AI-prefilled name); only fall back if blank.
+        if (!existingTitle && parsed.title) update.title = parsed.title
+      } else {
+        // Full assessment (admin, server-side): everything.
+        update = {
+          subcategory: parsed.subcategory || '',
+          condition: parsed.condition || 'Used – Good',
+          description: parsed.description || null,
+          part_number: parsed.partNumber || null,
+          weight: parsed.weight || null,
+          list_price: (+existingPrice > 0) ? +existingPrice : aiPrice,
+          ai_assessed: true,
+          ai_pending: false,
+        }
+        if (existingTitle) update.title = existingTitle
+        else if (parsed.title) update.title = parsed.title
+        if (parsed.category) update.category = parsed.category
       }
-      // Keep the title set at capture (AI-prefilled name, edited by the user);
-      // only fall back to the AI title if the part has none.
-      if (existingTitle) update.title = existingTitle
-      else if (parsed.title) update.title = parsed.title
-      if (parsed.category) update.category = parsed.category
       const { error: upErr } = await service.from('parts').update(update).eq('id', partId).eq('store_id', storeId)
       if (upErr) return json({ error: `AI ran but saving failed: ${upErr.message}`, result: parsed }, 500)
       applied = true

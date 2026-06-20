@@ -86,6 +86,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
   const [tab, setTab] = useState('account')
   const [footer, setFooter] = useState(DEFAULT_FOOTER)
   const [aiSettings, setAiSettings] = useState(DEFAULT_AI_SETTINGS)
+  const [captureAssess, setCaptureAssess] = useState({ category: true, price: true })
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -193,6 +194,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
       if (data?.settings) {
         if (data.settings.footer) setFooter(data.settings.footer)
         if (data.settings.aiDescription) setAiSettings(s => ({ ...s, ...data.settings.aiDescription }))
+        if (data.settings.captureAssess) setCaptureAssess(s => ({ ...s, ...data.settings.captureAssess }))
         if (data.settings.shipAddress) setShipAddress(a => ({ ...a, ...data.settings.shipAddress }))
         if (data.settings.ebayLocationKey) setEbayLocationKey(data.settings.ebayLocationKey)
         if (data.settings.ebayUsername) setEbayUsername(data.settings.ebayUsername) // persisted — shows immediately
@@ -217,7 +219,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
     setSaving(true)
     try {
       const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const merged = { ...(current?.settings || {}), footer, aiDescription: aiSettings }
+      const merged = { ...(current?.settings || {}), footer, aiDescription: aiSettings, captureAssess }
       await sb.from('stores').update({ settings: merged }).eq('id', storeId)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
@@ -1381,6 +1383,14 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
       {/* DESCRIPTIONS TAB */}
       {tab === 'descriptions' && !loading && (
         <>
+          <Section title="📱 Mobile capture AI">
+            <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
+              What the AI fills in automatically when a part is captured on the phone. The part name is always pre-filled. Everything else (description, item specifics, fitment) is done here in admin.
+            </p>
+            <Toggle label="Assess category at capture" desc="Auto-pick the part category from the photo." value={captureAssess.category} onChange={v => setCaptureAssess(s => ({ ...s, category: v }))} />
+            <Toggle label="Suggest a sale price at capture" desc="Fill a suggested list price (only when none was entered)." value={captureAssess.price} onChange={v => setCaptureAssess(s => ({ ...s, price: v }))} />
+          </Section>
+
           <Section title="🤖 AI Description Template">
             <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
               Configure what information the AI includes when generating part descriptions.
