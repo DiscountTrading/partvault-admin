@@ -26,6 +26,7 @@ const COLS = [
   { key: 'list_price', label: 'Price', type: 'range', align: 'right', fmt: 'money', w: 95 },
   { key: 'market_price', label: 'Market', type: 'range', align: 'right', fmt: 'money', w: 95 },
   { key: 'price_variance_pct', label: 'vs Market', type: 'range', align: 'right', fmt: 'pct', w: 105 },
+  { key: 'market_checked_at', label: 'Checked', type: 'date', align: 'right', fmt: 'ago', w: 95 },
   { key: 'profit', label: 'Profit', type: 'range', align: 'right', fmt: 'money', w: 100 },
   { key: 'margin_pct', label: 'Margin', type: 'range', align: 'right', fmt: 'pct', w: 95 },
 ]
@@ -224,6 +225,12 @@ export default function Insights({ storeId }) {
 
   const cell = (r, col) => {
     const v = fieldVal(r, col.key)
+    if (col.fmt === 'ago') {
+      if (!v) return <span style={{ color: '#bbb' }}>never</span>
+      const days = Math.floor((Date.now() - new Date(v).getTime()) / 86400000)
+      const color = days > 21 ? C.red : days > 10 ? C.yellow : C.muted
+      return <span style={{ color }}>{days <= 0 ? 'today' : `${days}d ago`}</span>
+    }
     if (col.fmt === 'money') return money(v)
     if (col.fmt === 'pct') return v == null ? '—' : `${v}%`
     if (col.unit) return `${v ?? 0}${col.unit}`
@@ -308,10 +315,12 @@ export default function Insights({ storeId }) {
                         </span>
                         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{col.label}</span>
                       </span>
-                      <button onClick={() => setOpenFilter(o => o === col.key ? null : col.key)}
-                        style={{ background: 'none', border: 'none', padding: 2, cursor: 'pointer', lineHeight: 0 }} title="Filter">
-                        <FunnelIcon active={active(col.key)} />
-                      </button>
+                      {col.type !== 'date' && (
+                        <button onClick={() => setOpenFilter(o => o === col.key ? null : col.key)}
+                          style={{ background: 'none', border: 'none', padding: 2, cursor: 'pointer', lineHeight: 0 }} title="Filter">
+                          <FunnelIcon active={active(col.key)} />
+                        </button>
+                      )}
                     </div>
                     {openFilter === col.key && (
                       <>
