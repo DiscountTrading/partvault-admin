@@ -59,7 +59,7 @@ serve(async (req) => {
       // Auto-assess flow: pull everything we need from the part row server-side
       // so there's no dependency on the phone staying open or connected.
       const service = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-      const { data: p } = await service.from('parts').select('store_id, car_id, title, list_price, photos, ai_assessed').eq('id', body.partId).single()
+      const { data: p } = await service.from('parts').select('store_id, car_id, title, list_price, photos, ai_assessed, make, model, year').eq('id', body.partId).single()
       if (!p) return json({ error: 'part not found' }, 404)
       if (p.ai_assessed) return json({ ok: true, skipped: 'already assessed' })
       const { data: stCfg } = await service.from('stores').select('settings').eq('id', p.store_id).single()
@@ -67,6 +67,7 @@ serve(async (req) => {
       capCfg.category = cc?.category !== false
       capCfg.price = cc?.price !== false
       body.storeId = p.store_id
+      body.car = body.car || { make: p.make, model: p.model, year: p.year }
       body.carId = p.car_id
       body.existingTitle = p.title
       body.existingPrice = p.list_price
@@ -182,6 +183,32 @@ serve(async (req) => {
       ...b64s.map((b: string) => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b } })),
     ]
     if (!partBlocks.length) return json({ error: 'At least one photo is required' }, 400)
+
+    // ── Fast capture path (mobile trigger) ──────────────────────────────────
+    // Light + quick: one photo, Haiku, category + price only. The full
+    // description / specifics / fitment are done later in admin.
+    if (trusted && partId) {
+      const clearPending = async () => { try { await createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!).from('parts').update({ ai_pending: false }).eq('id', partId) } catch (_) { /* ignore */ } }
+      const catTree = Object.entries(CATEGORY_TREE).map(([c, subs]) => `${c}: ${subs.join(', ')}`).join('\n')
+      const lightSys = `You are an expert Australian used car parts seller. Return JSON only: {"category":"exact","subcategory":"exact","listPrice":number}. Pick the single best category and a subcategory that is EXACTLY one of that category's options (or "Other"). A loose globe/bulb is "Globes & Bulbs", not a "Headlight Assembly". listPrice = a realistic AUD used price. Category list:\n${catTree}`
+      const carTxt = `${car?.make || ''} ${car?.model || ''} ${car?.year || ''}`.trim()
+      const aiRes = await callAnthropic({
+        model: 'claude-haiku-4-5-20251001', max_tokens: 200, system: lightSys,
+        messages: [{ role: 'user', content: [partBlocks[0], { type: 'text', text: `Vehicle: ${carTxt}. Give this part's category, subcategory and a fair used price.` }] }],
+      })
+      const data = await aiRes.json()
+      if (data.error) { await clearPending(); return json({ error: data.error.message || 'AI error' }, 400) }
+      const parsed = parseJson(textOf(data))
+      if (!parsed) { await clearPending(); return json({ error: 'Could not parse AI response' }, 502) }
+      const service = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const aiPrice = +parsed.listPrice || 0
+      const update: Record<string, unknown> = { ai_pending: false, ai_assessed: false }
+      if (capCfg.category && parsed.category) { update.category = parsed.category; update.subcategory = parsed.subcategory || '' }
+      if (capCfg.price && !(+existingPrice > 0) && aiPrice) update.list_price = aiPrice
+      const { error: upErr } = await service.from('parts').update(update).eq('id', partId).eq('store_id', storeId)
+      if (upErr) return json({ error: `Capture assess saving failed: ${upErr.message}` }, 500)
+      return json({ ok: true, result: parsed, light: true })
+    }
 
     // Authoritative donor-car details + photos (best-effort context).
     let carInfo: any = car || {}
