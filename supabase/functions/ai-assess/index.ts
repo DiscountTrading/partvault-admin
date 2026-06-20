@@ -37,6 +37,7 @@ const PART_CATEGORIES = Object.keys(CATEGORY_TREE)
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
+  let body: any = null
   try {
     const ANTHROPIC = Deno.env.get('ANTHROPIC_API_KEY')
     if (!ANTHROPIC) return json({ error: 'AI is not configured (missing ANTHROPIC_API_KEY secret)' }, 500)
@@ -44,7 +45,7 @@ serve(async (req) => {
     const url = Deno.env.get('SUPABASE_URL')!
     const anon = Deno.env.get('SUPABASE_ANON_KEY')!
     const TRIGGER_SECRET = Deno.env.get('ASSESS_TRIGGER_SECRET')
-    const body = await req.json()
+    body = await req.json()
     const mode = body.mode || 'assess'
     // A trusted server-side trigger (DB webhook) authenticates with a shared
     // secret instead of a user JWT, and loads the part's data from the database.
@@ -232,14 +233,21 @@ serve(async (req) => {
     }
     const multi = partBlocks.length > 1 ? 'The part photos are the same part from different angles/close-ups — read any part numbers, labels or stampings.' : ''
     content.push({ type: 'text', text: `${vehicleLine}\n${multi}\nIdentify the part and return the JSON.` })
+    // For the capture trigger, never leave a part stuck on "Assessing…": clear
+    // ai_pending even if the AI call or parsing fails (admin can re-run later).
+    const clearPendingOnFail = async () => {
+      if (trusted && partId) {
+        try { await createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!).from('parts').update({ ai_pending: false }).eq('id', partId) } catch (_) { /* ignore */ }
+      }
+    }
     const aiRes = await callAnthropic({
-      model: 'claude-sonnet-4-6', max_tokens: 800, system: sys,
+      model: 'claude-sonnet-4-6', max_tokens: 1500, system: sys,
       messages: [{ role: 'user', content }],
     })
     const data = await aiRes.json()
-    if (data.error) return json({ error: data.error.message || 'AI error' }, 400)
+    if (data.error) { await clearPendingOnFail(); return json({ error: data.error.message || 'AI error' }, 400) }
     const parsed = parseJson(textOf(data))
-    if (!parsed) return json({ error: 'Could not parse AI response' }, 502)
+    if (!parsed) { await clearPendingOnFail(); return json({ error: 'Could not parse AI response' }, 502) }
 
     // If a partId is given (mobile background flow), write the result back
     // server-side with the service role so it doesn't depend on the caller's
@@ -280,6 +288,12 @@ serve(async (req) => {
     }
     return json({ ok: true, result: parsed, applied })
   } catch (e) {
+    // Never leave a capture-triggered part stuck on "Assessing…".
+    try {
+      if (body?.triggerSecret && body?.partId) {
+        await createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!).from('parts').update({ ai_pending: false }).eq('id', body.partId)
+      }
+    } catch (_) { /* ignore */ }
     return json({ error: (e as Error).message }, 500)
   }
 })
