@@ -196,7 +196,7 @@ serve(async (req) => {
         const lightSys = `You are an expert Australian used car parts seller. Return JSON only: {"category":"exact","listPrice":number}. Pick the single best TOP-LEVEL category from: ${catList}. listPrice = a realistic AUD used price.`
         const carTxt = `${car?.make || ''} ${car?.model || ''} ${car?.year || ''}`.trim()
         const aiRes = await callAnthropic({
-          model: 'claude-haiku-4-5-20251001', max_tokens: 120, system: lightSys,
+          model: 'claude-haiku-4-5-20251001', max_tokens: 120, temperature: 0, system: lightSys,
           messages: [{ role: 'user', content: [partBlocks[0], { type: 'text', text: `Vehicle: ${carTxt}. Top category + fair used AUD price.` }] }],
         })
         const d = await aiRes.json()
@@ -271,7 +271,7 @@ serve(async (req) => {
       }
     }
     const aiRes = await callAnthropic({
-      model: 'claude-sonnet-4-6', max_tokens: 1500, system: sys,
+      model: 'claude-sonnet-4-6', max_tokens: 1500, temperature: 0, system: sys,
       messages: [{ role: 'user', content }],
     })
     const data = await aiRes.json()
@@ -295,10 +295,12 @@ serve(async (req) => {
         part_number: parsed.partNumber || null,
         weight: parsed.weight || null,
         removal_minutes: +parsed.removalMinutes || null,
-        list_price: (+existingPrice > 0) ? +existingPrice : aiPrice,
         ai_assessed: true,
         ai_pending: false,
       }
+      // Price: for a capture (trusted) Stage 1 already set it — don't rewrite it.
+      // For an admin server-side full run, set it only if there's none yet.
+      if (!trusted) update.list_price = (+existingPrice > 0) ? +existingPrice : aiPrice
       if (existingTitle) update.title = existingTitle
       else if (parsed.title) update.title = parsed.title
       if (parsed.category) update.category = parsed.category
