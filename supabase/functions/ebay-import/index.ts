@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.13.0-edge'
+const EDGE_FN_VERSION         = '3.14.0-edge'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 25 * 1000
@@ -963,7 +963,11 @@ async function handleRequest(req: Request): Promise<Response> {
       const ourActive = (activeListings ?? []).map((l: any) => l.platform_listing_id)
       const stale = ourActive.filter((id: string) => !ebaySet.has(id)).length   // listed here, gone from eBay
       const missing = ebayIds.filter((id: string) => !ourIds.has(id)).length     // on eBay, not here
-      return json({ ok: true, ebayActive: ebayIds.length, pvActive: ourActive.length, stale, missing, outOfSync: stale + missing, checkedAt: new Date().toISOString() })
+      // Diagnostic: how our eBay listings break down by status (why pvActive may be 0).
+      const { data: allRows } = await sb.from('listings').select('status').eq('store_id', storeId).eq('platform', 'ebay').is('deleted_at', null)
+      const statusBreakdown: Record<string, number> = {}
+      for (const l of (allRows ?? [])) statusBreakdown[l.status || 'null'] = (statusBreakdown[l.status || 'null'] || 0) + 1
+      return json({ ok: true, version: EDGE_FN_VERSION, ebayActive: ebayIds.length, pvActive: ourActive.length, stale, missing, outOfSync: stale + missing, statusBreakdown, checkedAt: new Date().toISOString() })
     }
 
     if (action === 'reconcile') {

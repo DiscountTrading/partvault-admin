@@ -1719,6 +1719,11 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
                         })()}
                       </div>
                     )}
+                    {s?.statusBreakdown && (
+                      <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
+                        Our listings by status: {Object.entries(s.statusBreakdown).map(([k, v]) => `${k} ${v}`).join(' · ')}{s.version ? ` · fn ${s.version}` : ''}
+                      </div>
+                    )}
                     {s?.error && <div style={{ fontSize: 12, color: C.red, marginTop: 6 }}>{s.error}</div>}
                   </div>
                 )
