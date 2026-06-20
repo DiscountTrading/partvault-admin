@@ -703,11 +703,23 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
       const d = await res.json()
       if (!res.ok || d.error) throw new Error(d.error || 'Check failed')
       setSyncStatus(d)
+      try { localStorage.setItem(`pv_syncstatus_${storeId}`, JSON.stringify({ result: d, checkedAt: d.checkedAt || new Date().toISOString() })) } catch { /* ignore */ }
     } catch (e) { setSyncStatus({ error: e.message }) }
     setStatusLoading(false)
   }
-  // Auto-check when the eBay tab is opened and connected.
-  useEffect(() => { if (tab === 'ebay' && ebayConnected && storeId) checkSyncStatus() }, [tab, ebayConnected, storeId])
+  // Auto-check on opening the eBay tab, but at most once every 6h — show the
+  // cached result if it's still fresh (the ↻ Re-check button forces a refresh).
+  const SYNC_STATUS_TTL_MS = 6 * 60 * 60 * 1000
+  useEffect(() => {
+    if (tab !== 'ebay' || !ebayConnected || !storeId) return
+    try {
+      const cached = JSON.parse(localStorage.getItem(`pv_syncstatus_${storeId}`) || 'null')
+      if (cached?.checkedAt && Date.now() - new Date(cached.checkedAt).getTime() < SYNC_STATUS_TTL_MS) {
+        setSyncStatus(cached.result); return
+      }
+    } catch { /* ignore */ }
+    checkSyncStatus()
+  }, [tab, ebayConnected, storeId])
 
   // One-click full sync: import new listings → update sold orders (last ~4
   // months) → reconcile against eBay. Each step shows its own progress below.
@@ -1700,6 +1712,11 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
                       <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>
                         {s.stale} listed here but ended on eBay · {s.missing} on eBay not here · {s.ebayActive} active on eBay vs {s.pvActive} here
                         {s.outOfSync > 0 && <span style={{ color: '#b45309' }}> — run Sync to resolve</span>}
+                        {s.checkedAt && (() => {
+                          const mins = Math.floor((Date.now() - new Date(s.checkedAt).getTime()) / 60000)
+                          const ago = mins < 1 ? 'just now' : mins < 60 ? `${mins}m ago` : `${Math.floor(mins / 60)}h ago`
+                          return <span style={{ color: '#9ca3af' }}> · checked {ago}</span>
+                        })()}
                       </div>
                     )}
                     {s?.error && <div style={{ fontSize: 12, color: C.red, marginTop: 6 }}>{s.error}</div>}
