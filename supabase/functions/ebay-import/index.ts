@@ -225,6 +225,22 @@ function resolveShipping(part: any, shipCats: any, shipDefW: number, shipDefDims
   return { weightG, dimL, dimW, dimH }
 }
 
+// Application access token (client-credentials) for the Buy/Commerce data APIs
+// (Browse, Catalog) — no user consent needed; cached in-isolate until expiry.
+let _appToken = { token: '', exp: 0 }
+async function getAppToken(): Promise<string> {
+  if (_appToken.token && _appToken.exp - Date.now() > 60000) return _appToken.token
+  const res = await fetch(EBAY_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Authorization': `Basic ${btoa(`${APP_ID}:${CERT_ID}`)}` },
+    body: new URLSearchParams({ grant_type: 'client_credentials', scope: 'https://api.ebay.com/oauth/api_scope' }),
+  })
+  const d = await res.json()
+  if (!d.access_token) throw new Error(`eBay app token failed: ${d.error_description || 'unknown'}`)
+  _appToken = { token: d.access_token, exp: Date.now() + (d.expires_in || 7200) * 1000 }
+  return d.access_token
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
   console.log(`[${EDGE_FN_VERSION}] ${req.method} request received`)
@@ -1381,6 +1397,61 @@ async function handleRequest(req: Request): Promise<Response> {
       }
 
       return json({ drafted, failed, errors })
+    }
+
+    if (action === 'market_lookup') {
+      // Real eBay market data for a part: Browse (active comps + price range) and
+      // Catalog (product/ePID match). App token — no user consent needed.
+      const authHeader = req.headers.get('Authorization') || ''
+      const userClient = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: authHeader } } })
+      const { data: member } = await userClient.rpc('is_store_member', { p_store_id: storeId })
+      if (!member) return json({ error: 'Not authorised' }, 403)
+
+      let part = body.part
+      if (!part && body.partId) {
+        const { data } = await sb.from('parts').select('title, make, model, year, part_number, list_price, category').eq('id', body.partId).eq('store_id', storeId).single()
+        part = data
+      }
+      if (!part) throw new Error('part or partId required')
+
+      const pn = String(part.part_number || '').trim()
+      const usePn = pn.length >= 4 && !/does not apply|n\/a|unknown|unbranded/i.test(pn)
+      const q = (usePn ? pn : [part.make, part.model, part.year, part.title].filter(Boolean).join(' ')).slice(0, 100)
+      const token = await getAppToken()
+      const headers = { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU', 'Content-Type': 'application/json' }
+
+      let browse: any = null
+      try {
+        const r = await fetch(`https://api.ebay.com/buy/browse/v1/item_summary/search?q=${encodeURIComponent(q)}&limit=50&filter=${encodeURIComponent('conditions:{USED}')}`, { headers })
+        if (r.ok) {
+          const d = await r.json()
+          const items = d.itemSummaries || []
+          const prices = items.map((i: any) => +i.price?.value || 0).filter((p: number) => p > 0).sort((a: number, b: number) => a - b)
+          const myPrice = +part.list_price || 0
+          browse = {
+            total: d.total ?? items.length,
+            sampled: prices.length,
+            min: prices[0] || 0,
+            median: prices.length ? prices[Math.floor(prices.length / 2)] : 0,
+            max: prices[prices.length - 1] || 0,
+            myPrice,
+            cheaperThanPct: (myPrice > 0 && prices.length) ? Math.round(prices.filter((p: number) => p > myPrice).length / prices.length * 100) : null,
+            samples: items.slice(0, 5).map((i: any) => ({ title: i.title, price: +i.price?.value || 0, url: i.itemWebUrl })),
+          }
+        } else { browse = { error: `Browse ${r.status}` } }
+      } catch (e) { browse = { error: (e as Error).message } }
+
+      let catalog: any = null
+      try {
+        const r = await fetch(`https://api.ebay.com/commerce/catalog/v1_beta/product_summary/search?q=${encodeURIComponent(q)}&limit=3`, { headers })
+        if (r.ok) {
+          const d = await r.json()
+          const p0 = (d.productSummaries || [])[0]
+          if (p0) catalog = { epid: p0.epid, title: p0.title, image: p0.image?.imageUrl || null, brand: (p0.brands || [])[0] || null }
+        }
+      } catch (_) { /* best effort */ }
+
+      return json({ ok: true, query: q, matchedBy: usePn ? 'part number' : 'make/model/title', browse, catalog })
     }
 
     if (action === 'preview_listing') {

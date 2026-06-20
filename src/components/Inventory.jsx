@@ -221,7 +221,27 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
   const [savingSpecs, setSavingSpecs] = useState(false)
   const [specsSaved, setSpecsSaved] = useState(false)
   const [previewSig, setPreviewSig] = useState('') // inputs the loaded preview was built from
+  const [market, setMarket] = useState(null)
+  const [marketLoading, setMarketLoading] = useState(false)
+  const [marketErr, setMarketErr] = useState('')
   const photoRef = useRef()
+
+  // Real eBay market data (Browse comps + Catalog match) for this part.
+  const loadMarket = async () => {
+    setMarketLoading(true); setMarketErr('')
+    try {
+      const { data: { session } } = await sb.auth.getSession()
+      const res = await fetch('https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ action: 'market_lookup', storeId, part: { title: form.title, make: form.make, model: form.model, year: form.year, part_number: form.partNumber, list_price: +form.listPrice || 0, category: form.category } }),
+      })
+      const d = await res.json()
+      if (!res.ok || d.error) throw new Error(d.error || 'Market lookup failed')
+      setMarket(d)
+    } catch (e) { setMarketErr(e.message) }
+    setMarketLoading(false)
+  }
 
   // Read-only preview of the exact eBay category + item specifics + fitment that
   // a publish would send, generated from the part's photos (one AI call).
@@ -646,6 +666,38 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
             <span>Profit: <strong style={{ color:profit>=0?C.green:C.red }}>{fmt(profit)}</strong></span>
             <span>Margin: <strong style={{ color:margin>=30?C.green:C.yellow }}>{pct(margin)}</strong></span>
           </div>
+        </div>
+
+        {/* Live eBay market data — what similar used parts are listed at right now */}
+        <div style={{ marginTop:14, padding:'12px 14px', background:'#fff', border:`1px solid ${C.border}`, borderRadius:10 }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, flexWrap:'wrap' }}>
+            <div style={{ fontSize:13, fontWeight:700, color:C.text }}>📊 eBay market price</div>
+            <button onClick={loadMarket} disabled={marketLoading} style={{ ...S.btn('secondary'), padding:'5px 14px', fontSize:12, opacity:marketLoading?0.6:1 }}>
+              {marketLoading ? 'Checking…' : 'Check market'}
+            </button>
+          </div>
+          {marketErr && <div style={{ fontSize:12, color:C.red, marginTop:8 }}>{marketErr}</div>}
+          {market?.browse && !market.browse.error && (
+            <div style={{ marginTop:10, fontSize:13 }}>
+              <div style={{ fontSize:12, color:C.muted, marginBottom:6 }}>Matched by {market.matchedBy} · {market.browse.total} active used listings · {market.browse.sampled} priced</div>
+              <div style={{ display:'flex', gap:16, flexWrap:'wrap', marginBottom:8 }}>
+                <span>Range: <strong>{fmt(market.browse.min)}–{fmt(market.browse.max)}</strong></span>
+                <span>Median: <strong style={{ color:C.text }}>{fmt(market.browse.median)}</strong></span>
+                {market.browse.cheaperThanPct != null && <span style={{ color: market.browse.cheaperThanPct>=50?C.green:C.yellow }}>Your price beats {market.browse.cheaperThanPct}% of them</span>}
+              </div>
+              {!!market.browse.samples?.length && (
+                <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
+                  {market.browse.samples.map((s,i) => (
+                    <a key={i} href={s.url} target="_blank" rel="noopener" style={{ fontSize:12, color:C.muted, textDecoration:'none', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                      <strong style={{ color:C.text }}>{fmt(s.price)}</strong> · {s.title}
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {market?.browse?.error && <div style={{ fontSize:12, color:C.muted, marginTop:8 }}>No market data returned ({market.browse.error}).</div>}
+          {market?.catalog && <div style={{ fontSize:12, color:C.muted, marginTop:8 }}>eBay catalog match: {market.catalog.title}{market.catalog.epid?` (ePID ${market.catalog.epid})`:''}</div>}
         </div>
       </Section>
 
