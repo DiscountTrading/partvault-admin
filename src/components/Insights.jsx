@@ -104,7 +104,14 @@ export default function Insights({ storeId }) {
   const segmented = useMemo(() => {
     switch (segment) {
       case 'best': return rows.filter(r => r.status === 'sold')
-      case 'fast': return rows.filter(r => r.days_to_sell != null)
+      case 'fast': {
+        // The quicker half of sold parts (fastest to shift), not every sold part.
+        const sold = rows.filter(r => r.status === 'sold' && r.days_to_sell != null)
+        if (sold.length < 3) return sold
+        const ds = sold.map(r => r.days_to_sell).sort((a, b) => a - b)
+        const median = ds[Math.floor(ds.length / 2)]
+        return sold.filter(r => r.days_to_sell <= median)
+      }
       case 'slow': return rows.filter(r => isUnsold(r) && r.listing_count > 0)
       case 'dead': return rows.filter(isDead)
       default: return rows
@@ -141,7 +148,16 @@ export default function Insights({ storeId }) {
   // Any manual change to filters/segment means we're no longer on a saved view.
   const setFilter = (key, val) => { setFilters(f => ({ ...f, [key]: val })); setSelectedViewId(null) }
   const clearFilter = (key) => { setFilters(f => { const n = { ...f }; delete n[key]; return n }); setSelectedViewId(null); setOpenFilter(null) }
-  const pickSegment = (id) => { setSegment(id); setSelectedViewId(null) }
+  // Each segment gets a sensible default sort, so e.g. "Fast movers" leads with
+  // the fastest, not the slowest.
+  const SEGMENT_SORT = {
+    fast: { key: 'days_to_sell', dir: 'asc' },
+    slow: { key: 'days_on_shelf', dir: 'desc' },
+    dead: { key: 'days_on_shelf', dir: 'desc' },
+    best: { key: 'realized_profit', dir: 'desc' },
+    all:  { key: 'days_on_shelf', dir: 'desc' },
+  }
+  const pickSegment = (id) => { setSegment(id); setSelectedViewId(null); setSort(SEGMENT_SORT[id] || SEGMENT_SORT.all) }
   const removeAll = () => { setFilters({}); setSegment('all'); setSelectedViewId(null); setOpenFilter(null) }
 
   const applyView = (id) => {
