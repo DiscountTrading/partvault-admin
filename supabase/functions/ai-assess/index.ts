@@ -279,6 +279,28 @@ serve(async (req) => {
     const parsed = parseJson(textOf(data))
     if (!parsed) { await clearPendingOnFail(); return json({ error: 'Could not parse AI response' }, 502) }
 
+    // ── Learn from your own pricing history ─────────────────────────────────
+    // Reuse the price you actually used/sold for the same part: match on OEM
+    // part number first, then make/model/category. Your edits become the basis.
+    let learnedPrice = 0; let learnedFrom = ''
+    try {
+      const svc = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const pickPrice = (rows: any[]) => { for (const r of (rows || [])) { const p = +r.sold_price || +r.list_price || 0; if (p > 0) return p } return 0 }
+      const mk = carInfo?.make || car?.make || ''
+      const md = carInfo?.model || car?.model || ''
+      const pn = String(parsed.partNumber || '').trim()
+      if (pn.length >= 4 && !/does not apply|n\/a|unknown|unbranded/i.test(pn)) {
+        let q = svc.from('parts').select('list_price, sold_price, created_at').eq('store_id', storeId).ilike('part_number', pn).order('created_at', { ascending: false }).limit(8)
+        if (partId) q = q.neq('id', partId)
+        learnedPrice = pickPrice((await q).data); if (learnedPrice) learnedFrom = 'part number'
+      }
+      if (!learnedPrice && mk && md && parsed.category) {
+        let q = svc.from('parts').select('list_price, sold_price, created_at').eq('store_id', storeId).eq('make', mk).eq('model', md).eq('category', parsed.category).order('created_at', { ascending: false }).limit(8)
+        if (partId) q = q.neq('id', partId)
+        learnedPrice = pickPrice((await q).data); if (learnedPrice) learnedFrom = 'similar part'
+      }
+    } catch (_) { /* best effort */ }
+
     // If a partId is given (mobile background flow), write the result back
     // server-side with the service role so it doesn't depend on the caller's
     // RLS update rights or the app staying open.
@@ -298,9 +320,10 @@ serve(async (req) => {
         ai_assessed: true,
         ai_pending: false,
       }
-      // Price: for a capture (trusted) Stage 1 already set it — don't rewrite it.
-      // For an admin server-side full run, set it only if there's none yet.
-      if (!trusted) update.list_price = (+existingPrice > 0) ? +existingPrice : aiPrice
+      // Price: your learned price (from history) wins. Otherwise, for a capture,
+      // Stage 1 already set it; for an admin run, fill it if there's none yet.
+      if (learnedPrice > 0) update.list_price = learnedPrice
+      else if (!trusted) update.list_price = (+existingPrice > 0) ? +existingPrice : aiPrice
       if (existingTitle) update.title = existingTitle
       else if (parsed.title) update.title = parsed.title
       if (parsed.category) update.category = parsed.category
@@ -308,7 +331,7 @@ serve(async (req) => {
       if (upErr) return json({ error: `AI ran but saving failed: ${upErr.message}`, result: parsed }, 500)
       applied = true
     }
-    return json({ ok: true, result: parsed, applied })
+    return json({ ok: true, result: parsed, applied, learnedPrice, learnedFrom })
   } catch (e) {
     // Never leave a capture-triggered part stuck on "Assessing…".
     try {

@@ -88,7 +88,8 @@ async function analysePart({ photoBase64s, photoUrls, carId }, car, storeId) {
   })
   const data = await res.json()
   if (!res.ok || data.error) throw new Error(data.error || 'AI assessment failed')
-  return data.result
+  // Surface a learned price (from your own history) so the form can prefer it.
+  return { ...data.result, _learnedPrice: data.learnedPrice || 0, _learnedFrom: data.learnedFrom || '' }
 }
 
 function compressImg(file, callback) {
@@ -323,7 +324,8 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
     try {
       const car = cars?.find(c => c.id === form.car_id)
       const parsed = await analysePart({ photoBase64s: aiPhotos.map(p => p.split(',')[1]), carId: car?.id }, car||form, storeId)
-      setForm(f => ({ ...f, title:parsed.title||f.title, category:parsed.category||f.category, subcategory:parsed.subcategory||f.subcategory, condition:parsed.condition||f.condition, description:parsed.description||f.description, partNumber:parsed.partNumber||f.partNumber, listPrice:parsed.listPrice||f.listPrice, weight:parsed.weight||f.weight, removalMinutes:parsed.removalMinutes??f.removalMinutes, costs:parsed.sizeTier?COST_TIERS[parsed.sizeTier]||f.costs:f.costs, ai_assessed:true }))
+      setForm(f => ({ ...f, title:parsed.title||f.title, category:parsed.category||f.category, subcategory:parsed.subcategory||f.subcategory, condition:parsed.condition||f.condition, description:parsed.description||f.description, partNumber:parsed.partNumber||f.partNumber, listPrice:parsed._learnedPrice||parsed.listPrice||f.listPrice, weight:parsed.weight||f.weight, removalMinutes:parsed.removalMinutes??f.removalMinutes, costs:parsed.sizeTier?COST_TIERS[parsed.sizeTier]||f.costs:f.costs, ai_assessed:true }))
+      if (parsed._learnedPrice) setAiError('')
     } catch(e) { setAiError(e.message) }
     setAnalysing(false)
   }
@@ -338,7 +340,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
     try {
       const car = cars?.find(c => c.id === form.car_id)
       const parsed = await analysePart({ photoUrls: partPhotoUrls, carId: car?.id }, car||form, storeId)
-      setForm(f => ({ ...f, title:parsed.title||f.title, category:parsed.category||f.category, subcategory:parsed.subcategory||f.subcategory, condition:parsed.condition||f.condition, description:parsed.description||f.description, partNumber:parsed.partNumber||f.partNumber, listPrice:parsed.listPrice||f.listPrice, weight:parsed.weight||f.weight, removalMinutes:parsed.removalMinutes??f.removalMinutes, costs:parsed.sizeTier?COST_TIERS[parsed.sizeTier]||f.costs:f.costs, ai_assessed:true }))
+      setForm(f => ({ ...f, title:parsed.title||f.title, category:parsed.category||f.category, subcategory:parsed.subcategory||f.subcategory, condition:parsed.condition||f.condition, description:parsed.description||f.description, partNumber:parsed.partNumber||f.partNumber, listPrice:parsed._learnedPrice||parsed.listPrice||f.listPrice, weight:parsed.weight||f.weight, removalMinutes:parsed.removalMinutes??f.removalMinutes, costs:parsed.sizeTier?COST_TIERS[parsed.sizeTier]||f.costs:f.costs, ai_assessed:true }))
     } catch(e) { setAiError(e.message) }
     setAnalysing(false)
   }
