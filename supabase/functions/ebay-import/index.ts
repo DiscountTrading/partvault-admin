@@ -1451,7 +1451,49 @@ async function handleRequest(req: Request): Promise<Response> {
         }
       } catch (_) { /* best effort */ }
 
+      // Cache the market median on the part so Insights can compute over/under
+      // pricing without calling Browse for every row.
+      if (body.partId && browse && !browse.error && browse.median > 0) {
+        try { await sb.from('parts').update({ market_price: browse.median, market_count: browse.total, market_checked_at: new Date().toISOString() }).eq('id', body.partId).eq('store_id', storeId) } catch (_) { /* ignore */ }
+      }
       return json({ ok: true, query: q, matchedBy: usePn ? 'part number' : 'make/model/title', browse, catalog })
+    }
+
+    if (action === 'refresh_market') {
+      // Bulk-refresh cached market prices for in-stock parts (throttled, capped).
+      const authHeader = req.headers.get('Authorization') || ''
+      const userClient = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: authHeader } } })
+      const { data: member } = await userClient.rpc('is_store_member', { p_store_id: storeId })
+      if (!member) return json({ error: 'Not authorised' }, 403)
+
+      // Prefer never-checked / stalest first; cap so we stay within limits.
+      const { data: parts } = await sb.from('parts')
+        .select('id, title, make, model, year, part_number, list_price')
+        .eq('store_id', storeId).eq('status', 'in_stock').is('deleted_at', null)
+        .order('market_checked_at', { ascending: true, nullsFirst: true })
+        .limit(Math.min(+body.limit || 60, 80))
+      if (!parts?.length) return json({ ok: true, updated: 0, message: 'No in-stock parts to check' })
+
+      const token = await getAppToken()
+      const headers = { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU', 'Content-Type': 'application/json' }
+      let updated = 0
+      for (const p of parts) {
+        const pn = String(p.part_number || '').trim()
+        const usePn = pn.length >= 4 && !/does not apply|n\/a|unknown|unbranded/i.test(pn)
+        const q = (usePn ? pn : [p.make, p.model, p.year, p.title].filter(Boolean).join(' ')).slice(0, 100)
+        try {
+          const r = await fetch(`https://api.ebay.com/buy/browse/v1/item_summary/search?q=${encodeURIComponent(q)}&limit=50&filter=${encodeURIComponent('conditions:{USED}')}`, { headers })
+          if (r.ok) {
+            const d = await r.json()
+            const prices = (d.itemSummaries || []).map((i: any) => +i.price?.value || 0).filter((x: number) => x > 0).sort((a: number, b: number) => a - b)
+            const median = prices.length ? prices[Math.floor(prices.length / 2)] : 0
+            await sb.from('parts').update({ market_price: median || null, market_count: d.total ?? prices.length, market_checked_at: new Date().toISOString() }).eq('id', p.id)
+            if (median > 0) updated++
+          }
+        } catch (_) { /* skip this one */ }
+        await new Promise((res) => setTimeout(res, 150))
+      }
+      return json({ ok: true, updated, checked: parts.length })
     }
 
     if (action === 'preview_listing') {

@@ -11,6 +11,7 @@ const SEGMENTS = [
   { id: 'fast', label: '⚡ Fast movers' },
   { id: 'slow', label: '🐌 Slow movers' },
   { id: 'dead', label: '🪦 Dead stock' },
+  { id: 'pricing', label: '📊 Pricing vs market' },
 ]
 
 // Column definitions drive both the table and the per-column filters.
@@ -23,6 +24,8 @@ const COLS = [
   { key: 'total_days_listed', label: 'Days listed', type: 'range', align: 'right', unit: 'd', w: 110 },
   { key: 'total_cost', label: 'Cost', type: 'range', align: 'right', fmt: 'money', w: 95 },
   { key: 'list_price', label: 'Price', type: 'range', align: 'right', fmt: 'money', w: 95 },
+  { key: 'market_price', label: 'Market', type: 'range', align: 'right', fmt: 'money', w: 95 },
+  { key: 'price_variance_pct', label: 'vs Market', type: 'range', align: 'right', fmt: 'pct', w: 105 },
   { key: 'profit', label: 'Profit', type: 'range', align: 'right', fmt: 'money', w: 100 },
   { key: 'margin_pct', label: 'Margin', type: 'range', align: 'right', fmt: 'pct', w: 95 },
 ]
@@ -55,6 +58,25 @@ function Card({ label, value, sub }) {
 export default function Insights({ storeId }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
+  const [refreshingMkt, setRefreshingMkt] = useState(false)
+  const [mktMsg, setMktMsg] = useState('')
+  const refreshMarket = async () => {
+    setRefreshingMkt(true); setMktMsg('Checking eBay…')
+    try {
+      const { data: { session } } = await sb.auth.getSession()
+      const res = await fetch('https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ action: 'refresh_market', storeId }),
+      })
+      const d = await res.json()
+      if (!res.ok || d.error) throw new Error(d.error || 'Refresh failed')
+      setMktMsg(`Updated ${d.updated} of ${d.checked} parts`)
+      const { data } = await sb.from('part_insights').select('*').eq('store_id', storeId)
+      setRows(data || [])
+    } catch (e) { setMktMsg(e.message) }
+    setRefreshingMkt(false)
+  }
   const [segment, setSegment] = useState('all')
   const [filters, setFilters] = useState({})        // colKey -> value (string | {min,max})
   const [openFilter, setOpenFilter] = useState(null) // colKey whose popover is open
@@ -114,6 +136,7 @@ export default function Insights({ storeId }) {
       }
       case 'slow': return rows.filter(r => isUnsold(r) && r.listing_count > 0)
       case 'dead': return rows.filter(isDead)
+      case 'pricing': return rows.filter(r => isUnsold(r) && r.price_variance_pct != null)
       default: return rows
     }
   }, [rows, segment])
@@ -155,6 +178,7 @@ export default function Insights({ storeId }) {
     slow: { key: 'days_on_shelf', dir: 'desc' },
     dead: { key: 'days_on_shelf', dir: 'desc' },
     best: { key: 'realized_profit', dir: 'desc' },
+    pricing: { key: 'price_variance_pct', dir: 'desc' }, // most over-priced first
     all:  { key: 'days_on_shelf', dir: 'desc' },
   }
   const pickSegment = (id) => { setSegment(id); setSelectedViewId(null); setSort(SEGMENT_SORT[id] || SEGMENT_SORT.all) }
@@ -226,6 +250,12 @@ export default function Insights({ storeId }) {
             {s.label}
           </button>
         ))}
+        {segment === 'pricing' && (
+          <button onClick={refreshMarket} disabled={refreshingMkt} style={{ ...S.btn('secondary'), padding: '7px 12px', fontSize: 12, opacity: refreshingMkt ? 0.6 : 1 }}>
+            {refreshingMkt ? '⏳ Checking eBay…' : '↻ Refresh market prices'}
+          </button>
+        )}
+        {segment === 'pricing' && mktMsg && <span style={{ fontSize: 12, color: C.muted }}>{mktMsg}</span>}
         <div style={{ flex: 1 }} />
         {anyFilter && <button onClick={removeAll} style={{ ...S.btn('secondary'), padding: '7px 12px', fontSize: 12 }}>✕ Remove all filters</button>}
 
