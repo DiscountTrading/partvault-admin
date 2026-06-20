@@ -490,16 +490,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
               </div>
               <button onClick={addFit} style={{ ...S.btn('secondary'), padding:'5px 12px', fontSize:12 }}>+ Add vehicle</button>
 
-              {/* Description exactly as the buyer will see it (body + compatible block + footer) */}
-              <div style={{ fontSize:12, fontWeight:700, color:C.text, margin:'16px 0 6px' }}>
-                Description {preview.hasFooter
-                  ? <span style={{ fontWeight:400, color:'#16a34a' }}>· footer included</span>
-                  : <span style={{ fontWeight:400, color:'#d97706' }}>· no store footer set (Settings → Descriptions)</span>}
-              </div>
-              <div style={{ border:`1px solid ${C.border}`, borderRadius:8, padding:'10px 12px', fontSize:13, lineHeight:1.5, color:C.text, background:'#fff', maxHeight:240, overflowY:'auto' }}
-                dangerouslySetInnerHTML={{ __html: preview.description || '<span style="color:#bbb">(empty)</span>' }} />
-
-              <div style={{ fontSize:11, color:C.muted, marginTop:12 }}>This is an exact preview of what goes to eBay. Edits to specifics/vehicles are saved as overrides and win over the AI when you publish.</div>
+              <div style={{ fontSize:11, color:C.muted, marginTop:12 }}>The description + store footer are shown in the Description section below, exactly as they'll appear on eBay. Edits to specifics/vehicles are saved as overrides and win over the AI when you publish.</div>
             </div>
           )}
         </Section>
@@ -595,6 +586,14 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
           </div>
         }>
         <textarea style={{ ...S.textarea, minHeight:140 }} value={form.description||''} onChange={e => { set('description', e.target.value); if (e.target.value) set('ai_assessed', false) }} placeholder="Describe condition, fitment and any defects…" />
+        {footer ? (
+          <div style={{ marginTop:10, padding:'10px 12px', background:'#fafafa', border:`1px dashed ${C.border}`, borderRadius:8, fontSize:12, color:C.muted, whiteSpace:'pre-wrap', lineHeight:1.5 }}>
+            <div style={{ fontWeight:700, marginBottom:4, color:C.text }}>＋ Store footer (added automatically on publish — edit in Settings → Descriptions)</div>
+            {footer}
+          </div>
+        ) : (
+          <div style={{ marginTop:8, fontSize:12, color:'#d97706' }}>No store footer set — add one in Settings → Descriptions so it's appended to your listings.</div>
+        )}
       </Section>
 
       {/* Pricing */}

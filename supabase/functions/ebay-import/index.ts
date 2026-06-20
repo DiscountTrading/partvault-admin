@@ -202,15 +202,14 @@ async function fillAspects(
 // Build the full listing description (body + "Compatible with" block + footer)
 // exactly as it will be sent to eBay. Shared by publish + preview so the preview
 // is a faithful image of the real listing.
-function buildDescription(part: any, fitmentList: any[], footer: string): string {
+function buildDescription(part: any, _fitmentList: any[], footer: string): string {
+  // Just the product description + the store footer. Vehicle fitment is NOT
+  // repeated here — it lives in the item specifics and the Parts Compatibility
+  // list (which is what eBay search actually uses), so duplicating it in the
+  // description adds no search value and clutters the listing.
   const esc = (s: string) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   const descBody = part.description || part.notes || part.title || ''
-  const fitsLines = (fitmentList || []).map((f: any) => {
-    const yr = +f.yearFrom ? ` ${f.yearFrom}${+f.yearTo && +f.yearTo !== +f.yearFrom ? `-${f.yearTo}` : ''}` : ''
-    return [`${[f.make, f.model].filter(Boolean).join(' ')}${yr}`, f.trim].filter(Boolean).join(' ').trim()
-  }).filter(Boolean)
-  const fitsBlock = fitsLines.length ? `Compatible with:\n${fitsLines.map((l: string) => `• ${l}`).join('\n')}\nPlease confirm fitment against your part number before purchase.` : ''
-  return [descBody, fitsBlock, footer].filter(Boolean).map((s: string) => esc(s).replace(/\n/g, '<br>')).join('<br><br>') || (part.title || part.sku || '')
+  return [descBody, footer].filter(Boolean).map((s: string) => esc(s).replace(/\n/g, '<br>')).join('<br><br>') || (part.title || part.sku || '')
 }
 
 // Resolve the package weight (grams) + dimensions (cm) exactly as publish does:
