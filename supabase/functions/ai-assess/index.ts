@@ -184,30 +184,33 @@ serve(async (req) => {
     ]
     if (!partBlocks.length) return json({ error: 'At least one photo is required' }, 400)
 
-    // ── Fast capture path (mobile trigger) ──────────────────────────────────
-    // Light + quick: one photo, Haiku, category + price only. The full
-    // description / specifics / fitment are done later in admin.
+    // ── STAGE 1 — instant capture result (mobile trigger) ───────────────────
+    // Haiku + one photo → TOP category + price only. Clears ai_pending so the
+    // phone updates in ~2s. Then we fall through to the full Sonnet assessment
+    // below (same invocation) which finishes in the background — so it's done by
+    // the time the part is reviewed in admin. The phone updates on the DB write,
+    // not when the function returns, so nothing waits for stage 2.
     if (trusted && partId) {
-      const clearPending = async () => { try { await createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!).from('parts').update({ ai_pending: false }).eq('id', partId) } catch (_) { /* ignore */ } }
-      const catTree = Object.entries(CATEGORY_TREE).map(([c, subs]) => `${c}: ${subs.join(', ')}`).join('\n')
-      const lightSys = `You are an expert Australian used car parts seller. Return JSON only: {"category":"exact","subcategory":"exact","listPrice":number}. Pick the single best category and a subcategory that is EXACTLY one of that category's options (or "Other"). A loose globe/bulb is "Globes & Bulbs", not a "Headlight Assembly". listPrice = a realistic AUD used price. Category list:\n${catTree}`
-      const carTxt = `${car?.make || ''} ${car?.model || ''} ${car?.year || ''}`.trim()
-      const aiRes = await callAnthropic({
-        model: 'claude-haiku-4-5-20251001', max_tokens: 200, system: lightSys,
-        messages: [{ role: 'user', content: [partBlocks[0], { type: 'text', text: `Vehicle: ${carTxt}. Give this part's category, subcategory and a fair used price.` }] }],
-      })
-      const data = await aiRes.json()
-      if (data.error) { await clearPending(); return json({ error: data.error.message || 'AI error' }, 400) }
-      const parsed = parseJson(textOf(data))
-      if (!parsed) { await clearPending(); return json({ error: 'Could not parse AI response' }, 502) }
-      const service = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-      const aiPrice = +parsed.listPrice || 0
-      const update: Record<string, unknown> = { ai_pending: false, ai_assessed: false }
-      if (capCfg.category && parsed.category) { update.category = parsed.category; update.subcategory = parsed.subcategory || '' }
-      if (capCfg.price && !(+existingPrice > 0) && aiPrice) update.list_price = aiPrice
-      const { error: upErr } = await service.from('parts').update(update).eq('id', partId).eq('store_id', storeId)
-      if (upErr) return json({ error: `Capture assess saving failed: ${upErr.message}` }, 500)
-      return json({ ok: true, result: parsed, light: true })
+      try {
+        const catList = Object.keys(CATEGORY_TREE).join(', ')
+        const lightSys = `You are an expert Australian used car parts seller. Return JSON only: {"category":"exact","listPrice":number}. Pick the single best TOP-LEVEL category from: ${catList}. listPrice = a realistic AUD used price.`
+        const carTxt = `${car?.make || ''} ${car?.model || ''} ${car?.year || ''}`.trim()
+        const aiRes = await callAnthropic({
+          model: 'claude-haiku-4-5-20251001', max_tokens: 120, system: lightSys,
+          messages: [{ role: 'user', content: [partBlocks[0], { type: 'text', text: `Vehicle: ${carTxt}. Top category + fair used AUD price.` }] }],
+        })
+        const d = await aiRes.json()
+        const q = d.error ? null : parseJson(textOf(d))
+        const stage1: Record<string, unknown> = { ai_pending: false }
+        if (q) {
+          if (capCfg.category && q.category) stage1.category = q.category
+          if (capCfg.price && !(+existingPrice > 0) && +q.listPrice > 0) stage1.list_price = +q.listPrice
+        }
+        await createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!).from('parts').update(stage1).eq('id', partId).eq('store_id', storeId)
+      } catch (_) {
+        try { await createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!).from('parts').update({ ai_pending: false }).eq('id', partId) } catch (__) { /* ignore */ }
+      }
+      // …fall through to the full assessment (Stage 2) below.
     }
 
     // Authoritative donor-car details + photos (best-effort context).
@@ -279,37 +282,26 @@ serve(async (req) => {
     // If a partId is given (mobile background flow), write the result back
     // server-side with the service role so it doesn't depend on the caller's
     // RLS update rights or the app staying open.
+    // Stage 2 (and admin server-side): write the FULL assessment. For a captured
+    // part this lands a bit after Stage 1, so it's ready by the time it's reviewed.
     let applied = false
     if (partId) {
       const service = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const aiPrice = +parsed.listPrice || 0
-      let update: Record<string, unknown>
-      if (trusted) {
-        // Capture (mobile): only the light items per the store's captureAssess
-        // setting. Description / part number / specifics / fitment stay for admin,
-        // so ai_assessed stays false (admin still shows "Needs AI").
-        update = { ai_pending: false, ai_assessed: false }
-        if (capCfg.category && parsed.category) { update.category = parsed.category; update.subcategory = parsed.subcategory || '' }
-        if (capCfg.price && !(+existingPrice > 0) && aiPrice) update.list_price = aiPrice
-        // Title was set at capture (AI-prefilled name); only fall back if blank.
-        if (!existingTitle && parsed.title) update.title = parsed.title
-      } else {
-        // Full assessment (admin, server-side): everything.
-        update = {
-          subcategory: parsed.subcategory || '',
-          condition: parsed.condition || 'Used – Good',
-          description: parsed.description || null,
-          part_number: parsed.partNumber || null,
-          weight: parsed.weight || null,
-          removal_minutes: +parsed.removalMinutes || null,
-          list_price: (+existingPrice > 0) ? +existingPrice : aiPrice,
-          ai_assessed: true,
-          ai_pending: false,
-        }
-        if (existingTitle) update.title = existingTitle
-        else if (parsed.title) update.title = parsed.title
-        if (parsed.category) update.category = parsed.category
+      const update: Record<string, unknown> = {
+        subcategory: parsed.subcategory || '',
+        condition: parsed.condition || 'Used – Good',
+        description: parsed.description || null,
+        part_number: parsed.partNumber || null,
+        weight: parsed.weight || null,
+        removal_minutes: +parsed.removalMinutes || null,
+        list_price: (+existingPrice > 0) ? +existingPrice : aiPrice,
+        ai_assessed: true,
+        ai_pending: false,
       }
+      if (existingTitle) update.title = existingTitle
+      else if (parsed.title) update.title = parsed.title
+      if (parsed.category) update.category = parsed.category
       const { error: upErr } = await service.from('parts').update(update).eq('id', partId).eq('store_id', storeId)
       if (upErr) return json({ error: `AI ran but saving failed: ${upErr.message}`, result: parsed }, 500)
       applied = true
