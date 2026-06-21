@@ -74,9 +74,19 @@ export default function Dashboard({ parts }) {
               <div style={{ fontSize:22, fontWeight:700, color:C.blue }}>{fmt(stockVal)}</div>
             </div>
             <div>
-              <div style={{ fontSize:10, color:C.muted, marginBottom:4 }}>NET SHIPPING (income − cost)</div>
+              <div style={{ fontSize:10, color:C.muted, marginBottom:4 }}>SHIPPING INCOME</div>
+              <div style={{ fontSize:22, fontWeight:700, color:C.green }}>{fmt(shipInc)}</div>
+              <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>buyer-paid (from eBay)</div>
+            </div>
+            <div>
+              <div style={{ fontSize:10, color:C.muted, marginBottom:4 }}>SHIPPING COST</div>
+              <div style={{ fontSize:22, fontWeight:700, color:C.yellow }}>{fmt(shipCost)}</div>
+              <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>postage paid</div>
+            </div>
+            <div>
+              <div style={{ fontSize:10, color:C.muted, marginBottom:4 }}>NET SHIPPING</div>
               <div style={{ fontSize:22, fontWeight:700, color: netShip>=0?C.green:C.red }}>{fmt(netShip)}</div>
-              <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>{fmt(shipInc)} charged · {fmt(shipCost)} postage</div>
+              <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>income − cost</div>
             </div>
           </div>
         </div>
