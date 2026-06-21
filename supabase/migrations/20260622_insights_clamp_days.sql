@@ -3,6 +3,15 @@
 -- listing can start AFTER an older recorded sale, which produced negative day
 -- counts. greatest(0, ...) guards against that and any other date skew.
 -- (Full view re-declared so it supersedes 20260621_shipping_charged.sql.)
+
+-- Self-contained: ensure every column this view reads exists, regardless of
+-- which earlier migrations have been run (20260621_shipping_charged.sql,
+-- 20260621_market_pricing.sql).
+alter table public.parts add column if not exists shipping_charged   numeric;
+alter table public.parts add column if not exists market_price       numeric;
+alter table public.parts add column if not exists market_count       integer;
+alter table public.parts add column if not exists market_checked_at  timestamptz;
+
 drop view if exists public.part_insights;
 create view public.part_insights with (security_invoker = true) as
 select
