@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.14'
+const EDGE_FN_VERSION         = '3.14.15'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -774,6 +774,70 @@ async function handleRequest(req: Request): Promise<Response> {
         if (timeoutId) clearTimeout(timeoutId)
         throw e
       }
+    }
+
+    // Server-side nightly orchestrator (driven by pg_cron). Advances one store's
+    // daily run: import → sold orders (backfill) → reconcile. Resumable: state
+    // lives in sync_runs, so a later tick picks up exactly where this left off.
+    // Reuses the existing actions via internal self-calls (no logic duplicated).
+    if (action === 'cron_sync') {
+      const runDate = new Date().toISOString().slice(0, 10)
+      let { data: run } = await sb.from('sync_runs').select('*').eq('store_id', storeId).eq('run_date', runDate).maybeSingle()
+      if (!run) {
+        const { data: ins } = await sb.from('sync_runs').insert({ store_id: storeId, run_date: runDate, phase: 'import' }).select().single()
+        run = ins
+      }
+      if (!run) throw new Error('Could not create sync_runs row')
+      if (run.done) return json({ done: true, phase: 'done', detail: run.detail })
+
+      const SELF_URL = `${Deno.env.get('SUPABASE_URL')}/functions/v1/ebay-import`
+      const selfCall = async (payload: Record<string, unknown>) => {
+        const r = await fetch(SELF_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', apikey: Deno.env.get('SUPABASE_ANON_KEY')! },
+          body: JSON.stringify(payload),
+        })
+        return await r.json()
+      }
+      const save = (patch: Record<string, unknown>) =>
+        sb.from('sync_runs').update({ ...patch, updated_at: new Date().toISOString() }).eq('id', run.id)
+
+      const started = Date.now()
+      const BUDGET_MS = 110 * 1000
+      let phase: string = run.phase
+      let jobIdLocal: string | null = run.job_id
+
+      try {
+        while (Date.now() - started < BUDGET_MS && phase !== 'done') {
+          if (phase === 'import') {
+            if (!jobIdLocal) {
+              const s = await selfCall({ action: 'start', storeId })
+              if (s.error) throw new Error(s.error)
+              jobIdLocal = s.jobId
+              await save({ job_id: jobIdLocal, detail: `import: 0/${s.totalIds}` })
+            } else {
+              const c = await selfCall({ action: 'process_chunk', jobId: jobIdLocal, storeId })
+              if (c.error && c.retry) continue
+              if (c.error) throw new Error(c.error)
+              await save({ detail: `import ${c.offset}/${c.total} · ${c.imported} new, ${c.skipped} existing, ${c.failed} failed` })
+              if (c.isComplete || c.status === 'completed') { phase = 'backfill'; await save({ phase }) }
+            }
+          } else if (phase === 'backfill') {
+            const fromDate = new Date(Date.now() - 120 * 86400 * 1000).toISOString()
+            const b = await selfCall({ action: 'backfill_orders', storeId, fromDate })
+            phase = 'reconcile'
+            await save({ phase, detail: `sold orders: ${b.updated ?? 0} updated` })
+          } else if (phase === 'reconcile') {
+            const rec = await selfCall({ action: 'reconcile', storeId })
+            phase = 'done'
+            await save({ phase, done: true, detail: `done · ${rec.missingCount ?? 0} missing, ${rec.staleCount ?? 0} stale on eBay` })
+          }
+        }
+      } catch (e) {
+        await save({ detail: `error in ${phase}: ${(e as Error).message}` })
+        return json({ phase, error: (e as Error).message }, 200)
+      }
+      return json({ phase, done: phase === 'done' })
     }
 
     if (action === 'backfill_orders') {

@@ -1890,6 +1890,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                 <span>Reconcile: {fmtLastRun(lastRun.reconcile)}</span>
               </div>
               <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>One click imports new listings, updates sold orders (last ~4 months), then reconciles against eBay. It only reads from eBay — it never changes your live listings.</div>
+              <div style={{ fontSize: 11, color: C.green, marginBottom: 8 }}>🌙 Auto-syncs every night around midnight (Sydney) — no need to click unless you want an update now.</div>
 
               <button onClick={() => setShowAdvSync(v => !v)} style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12, padding: '2px 0', marginBottom: showAdvSync ? 10 : 4 }}>
                 {showAdvSync ? '▴ Hide advanced tools' : '⚙ Advanced tools (run a single step)'}
