@@ -51,10 +51,11 @@ export default function Dashboard({ parts, costing }) {
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20, paddingBottom:16, borderBottom:`1px solid ${C.border}` }}>
         <h2 style={{ ...S.h1 }}>📊 Dashboard</h2>
       </div>
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:20, marginBottom:20 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:20, marginBottom:20 }}>
         <StatCard label="Total Parts" value={active.length} sub={`${inStock.length} in stock`} />
         <StatCard label="Listed on eBay" value={listed.length} color={C.accent} />
-        <StatCard label="Total Sold" value={sold.length} color={C.green} sub={fmt(soldRev)+' revenue'} />
+        <StatCard label="Total Sold" value={sold.length} color={C.blue} sub="orders" />
+        <StatCard label="Total Sales" value={fmt(soldRev)} color={C.green} sub="item + shipping (matches eBay)" />
         <StatCard label="Gross Profit" value={fmt(gross)} color={margin>30?C.green:C.yellow} sub={pct(margin)+' margin'+(cogsEstimated?' · incl. est. cost':'')} />
       </div>
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20, marginBottom:20 }}>
