@@ -81,14 +81,24 @@ export default function Insights({ storeId, initial }) {
   const [segment, setSegment] = useState('all')
   const [filters, setFilters] = useState({})        // colKey -> value (string | {min,max})
 
-  // Drill-down from the Dashboard (e.g. an aged-stock bracket): apply the passed
-  // column filters and focus the relevant segment. Re-runs when a new _ts arrives.
+  const [drillIds, setDrillIds] = useState(null)   // Set<part_id> from a Dashboard drill
+  const [drillLabel, setDrillLabel] = useState('')
+
+  // Drill-down from the Dashboard (aged-stock bracket, category row, …): restrict
+  // to the exact parts passed by id. Re-runs when a new _ts arrives.
   useEffect(() => {
     if (!initial) return
-    setSegment(initial.segment || 'all')
-    setFilters(initial.filters || {})
+    if (initial.partIds) {
+      setDrillIds(new Set(initial.partIds))
+      setDrillLabel(initial.label || `${initial.partIds.length} parts`)
+      setSegment('all'); setFilters({}); setSelectedViewId(null)
+    } else {
+      setDrillIds(null); setDrillLabel('')
+      setSegment(initial.segment || 'all'); setFilters(initial.filters || {})
+    }
     if (initial.sort) setSort(initial.sort)
   }, [initial?._ts])
+  const clearDrill = () => { setDrillIds(null); setDrillLabel('') }
   const [openFilter, setOpenFilter] = useState(null) // colKey whose popover is open
   const [sort, setSort] = useState({ key: 'days_on_shelf', dir: 'desc' })
   const [views, setViews] = useState([])
@@ -152,7 +162,7 @@ export default function Insights({ storeId, initial }) {
   }, [rows, segment])
 
   const visible = useMemo(() => {
-    let list = segmented
+    let list = drillIds ? segmented.filter(r => drillIds.has(r.part_id)) : segmented
     for (const col of COLS) {
       const f = filters[col.key]
       if (!active(col.key)) continue
@@ -173,7 +183,7 @@ export default function Insights({ storeId, initial }) {
       if (bv == null) return -1
       return dir === 'asc' ? (av > bv ? 1 : -1) : (av < bv ? 1 : -1)
     })
-  }, [segmented, filters, sort])
+  }, [segmented, filters, sort, drillIds])
 
   const shown = visible.slice(0, RENDER_CAP)
 
@@ -272,6 +282,12 @@ export default function Insights({ storeId, initial }) {
           </button>
         )}
         {segment === 'pricing' && mktMsg && <span style={{ fontSize: 12, color: C.muted }}>{mktMsg}</span>}
+        {drillIds && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderRadius: 20, background: C.accent + '18', border: `1.5px solid ${C.accent}55`, color: C.accent, fontSize: 13, fontWeight: 600 }}>
+            🔎 {drillLabel}
+            <button onClick={clearDrill} style={{ background: 'none', border: 'none', color: C.accent, cursor: 'pointer', fontWeight: 700, fontSize: 14, padding: 0, lineHeight: 1 }}>✕</button>
+          </span>
+        )}
         <div style={{ flex: 1 }} />
         {anyFilter && <button onClick={removeAll} style={{ ...S.btn('secondary'), padding: '7px 12px', fontSize: 12 }}>✕ Remove all filters</button>}
 

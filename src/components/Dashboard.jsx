@@ -72,13 +72,18 @@ export default function Dashboard({ parts, costing, inventory, onDrill }) {
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, marginBottom:12 }}>
         <div style={{ ...S.card, padding:18 }}>
           <h2 style={{ ...S.h2, marginBottom:10 }}>Stock by Category</h2>
-          {catBreak.map(({cat,count})=>(
-            <div key={cat} style={{ display:'flex', justifyContent:'space-between', padding:'4px 0', borderBottom:`1px solid ${C.border}`, fontSize:13 }}>
-              <span>{cat}</span>
-              <span style={{ color:C.accent, fontWeight:700 }}>{count}</span>
-            </div>
-          ))}
+          {catBreak.map(({cat,count})=>{
+            const drill = () => onDrill?.({ partIds: active.filter(p=>p.category===cat).map(p=>p.id), label:cat })
+            return (
+              <div key={cat} onClick={drill} title={`View ${count} ${cat} parts in Insights`}
+                style={{ display:'flex', justifyContent:'space-between', padding:'4px 0', borderBottom:`1px solid ${C.border}`, fontSize:13, cursor:'pointer' }}>
+                <span>{cat}</span>
+                <span style={{ color:C.accent, fontWeight:700 }}>{count}</span>
+              </div>
+            )
+          })}
           {!catBreak.length && <p style={{ color:C.muted, fontSize:12 }}>No parts yet.</p>}
+          {!!catBreak.length && <div style={{ fontSize:11, color:C.muted, marginTop:6 }}>Click a category to see those parts in Insights.</div>}
         </div>
         <div style={{ ...S.card, padding:18 }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:14 }}>
@@ -90,11 +95,10 @@ export default function Dashboard({ parts, costing, inventory, onDrill }) {
             // Older brackets shade from yellow → red so the tail stands out.
             const t = ageBuckets.length>1 ? i/(ageBuckets.length-1) : 0
             const col = t<0.34?C.yellow:t<0.67?'#d9480f':C.red
-            const drill = () => onDrill?.({
-              segment:'all',
-              filters:{ days_on_shelf:{ min:b.min, max:b.max==null?undefined:b.max } },
-              sort:{ key:'days_on_shelf', dir:'desc' },
-            })
+            const drill = () => {
+              const ids = aged.filter(p=>{ const d=ageDays(p); return d!=null && (b.max==null ? d>=b.min : (d>=b.min && d<b.max)) }).map(p=>p.id)
+              onDrill?.({ partIds:ids, label:`Aged ${b.label}`, sort:{ key:'days_on_shelf', dir:'desc' } })
+            }
             return (
               <div key={b.label} onClick={b.count?drill:undefined} title={b.count?`View ${b.count} items in ${b.label} in Insights`:undefined}
                 style={{ marginBottom:6, cursor:b.count?'pointer':'default' }}>
