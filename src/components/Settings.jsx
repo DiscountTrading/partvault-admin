@@ -1519,8 +1519,8 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                     <span style={{ fontSize: 12, color: C.muted }}>g  →  $</span>
                     <input type="number" step="0.01" style={{ ...S.input, width: 100 }} value={t.cost}
                       onChange={e => setCosting(s => ({ ...s, postageTiers: s.postageTiers.map((x, j) => j === i ? { ...x, cost: e.target.value } : x) }))} />
-                    <button type="button" style={{ ...S.btn('secondary'), padding: '6px 10px' }}
-                      onClick={() => setCosting(s => ({ ...s, postageTiers: s.postageTiers.filter((_, j) => j !== i) }))}>✕</button>
+                    <button type="button" style={{ ...S.btn('danger'), padding: '6px 12px' }}
+                      onClick={() => setCosting(s => ({ ...s, postageTiers: s.postageTiers.filter((_, j) => j !== i) }))}>Delete row</button>
                   </div>
                 ))}
                 <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
@@ -1553,8 +1553,8 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                   <input type="number" style={{ ...S.input, width: 120 }} value={b}
                     onChange={e => setInventory(s => ({ ...s, ageBrackets: s.ageBrackets.map((x, j) => j === i ? e.target.value : x) }))} />
                   <span style={{ fontSize: 12, color: C.muted }}>days</span>
-                  <button type="button" style={{ ...S.btn('secondary'), padding: '6px 10px' }}
-                    onClick={() => setInventory(s => ({ ...s, ageBrackets: s.ageBrackets.filter((_, j) => j !== i) }))}>✕</button>
+                  <button type="button" style={{ ...S.btn('danger'), padding: '6px 12px' }}
+                    onClick={() => setInventory(s => ({ ...s, ageBrackets: s.ageBrackets.filter((_, j) => j !== i) }))}>Delete row</button>
                 </div>
               ))}
               <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
