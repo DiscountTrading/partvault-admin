@@ -14,10 +14,10 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.13'
+const EDGE_FN_VERSION         = '3.14.14'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
-const FUNCTION_TIMEOUT_MS     = 25 * 1000
+const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
 const EBAY_TOKEN_URL          = 'https://api.ebay.com/identity/v1/oauth2/token'
 const EBAY_SCOPES = 'https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.inventory.readonly https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly https://api.ebay.com/oauth/api_scope/sell.finances https://api.ebay.com/oauth/api_scope/sell.account.readonly'
 
@@ -655,7 +655,13 @@ async function handleRequest(req: Request): Promise<Response> {
         const allIds: string[]                      = job.meta?.all_item_ids  ?? []
         const offset: number                        = job.meta?.batch_offset  ?? 0
         const failedReasons: Record<string, string> = job.meta?.failed_reasons ?? {}
-        const chunk = allIds.slice(offset, offset + CHUNK_SIZE)
+        // Time-box the work instead of a fixed count: process items until ~18s
+        // have elapsed (or a hard cap), then persist progress and return. This
+        // guarantees forward progress and removes the timeout/retry deadlock that
+        // froze the bar on chunks full of slow new-item + photo imports.
+        const SOFT_LIMIT_MS = 18 * 1000
+        const HARD_CAP      = 60 // never look further ahead than this per call
+        const chunk = allIds.slice(offset, offset + HARD_CAP)
 
         if (chunk.length === 0) {
           const summary = job.result_summary ?? {}
@@ -679,7 +685,13 @@ async function handleRequest(req: Request): Promise<Response> {
           .in('platform_listing_id', chunk)
         const existingSet = new Set((existingInChunk ?? []).map((l: any) => l.platform_listing_id))
 
+        const startedAt = Date.now()
+        let doneThisCall = 0 // how many ids we actually advanced past this call
         for (const itemId of chunk) {
+          // Stop once the time budget is spent — but always do at least one item
+          // so we can't stall (a single slow item still advances the offset).
+          if (doneThisCall > 0 && Date.now() - startedAt > SOFT_LIMIT_MS) break
+          doneThisCall++
           if (existingSet.has(itemId)) { skipped++; processed++; continue }
           try {
             const xml = await trading(token, certId, 'GetItem', `<?xml version="1.0" encoding="utf-8"?>
@@ -726,7 +738,7 @@ async function handleRequest(req: Request): Promise<Response> {
           }
         }
 
-        const newOffset  = offset + CHUNK_SIZE
+        const newOffset  = offset + doneThisCall
         const isComplete = newOffset >= allIds.length
 
         await sb.from('jobs').update({

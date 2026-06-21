@@ -122,6 +122,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   const [ebayTestResult, setEbayTestResult] = useState(null)
   const [importing, setImporting] = useState(false)
   const [importJob, setImportJob] = useState(null)
+  const [showAdvSync, setShowAdvSync] = useState(false)
   const [syncingAll, setSyncingAll] = useState(false)
   const [syncPhase, setSyncPhase] = useState('')
   const [syncStatus, setSyncStatus] = useState(null)
@@ -1063,7 +1064,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
 
   const importProgress = importJob ? (() => {
     const total = importJob.total_items || 0
-    const done = (importJob.imported || 0) + (importJob.skipped || 0)
+    const done = (importJob.imported || 0) + (importJob.skipped || 0) + (importJob.failed || 0)
     return total > 0 ? Math.round((done / total) * 100) : 0
   })() : 0
 
@@ -1888,16 +1889,23 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                 <span>Sold orders: {fmtLastRun(lastRun.backfill)}</span>
                 <span>Reconcile: {fmtLastRun(lastRun.reconcile)}</span>
               </div>
-              <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>One click: imports new listings, updates sold orders (last ~4 months), then reconciles against eBay. Or run a step on its own:</div>
+              <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>One click imports new listings, updates sold orders (last ~4 months), then reconciles against eBay. It only reads from eBay — it never changes your live listings.</div>
 
+              <button onClick={() => setShowAdvSync(v => !v)} style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12, padding: '2px 0', marginBottom: showAdvSync ? 10 : 4 }}>
+                {showAdvSync ? '▴ Hide advanced tools' : '⚙ Advanced tools (run a single step)'}
+              </button>
+
+              {showAdvSync && (
               <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
                 <button style={{ ...S.btn('secondary'), flex: 1, opacity: (importing || syncingAll || !ebayConnected) ? 0.6 : 1 }} onClick={importAllListings} disabled={importing || syncingAll || !ebayConnected}>
                   {importing ? '⏳ Importing...' : '📥 Import listings only'}
                 </button>
                 {importing && <button style={S.btn('danger')} onClick={cancelImport}>Cancel</button>}
               </div>
+              )}
 
               {/* Maintenance tools — compact rows */}
+              {showAdvSync && (
               <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
                 {[
                   {
@@ -1948,11 +1956,12 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                   </div>
                 ))}
               </div>
+              )}
               {!ebayConnected && <div style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>Connect eBay above to enable.</div>}
             </Section>
 
-            {/* Reconcile */}
-            <ReconcileSection />
+            {/* Reconcile (advanced) */}
+            {showAdvSync && <ReconcileSection />}
           </div>{/* end right column */}
         </div>
       )}
