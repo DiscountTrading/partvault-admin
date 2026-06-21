@@ -216,7 +216,7 @@ export default function App() {
         </div>
       </nav>
       <main style={S.main}>
-        {tab === 'dashboard' && <Dashboard parts={parts} />}
+        {tab === 'dashboard' && <Dashboard parts={parts} costing={costing} />}
         {tab === 'inventory' && (
           <Inventory
             parts={parts} cars={cars} storeId={storeId}

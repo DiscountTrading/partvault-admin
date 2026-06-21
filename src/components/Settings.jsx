@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { C, S, APP_VERSION } from '../lib/constants'
+import { C, S, APP_VERSION, DEFAULT_POSTAGE_TIERS } from '../lib/constants'
 import { sb } from '../lib/supabase'
 import { buildSkuPreview, SKU_TOKENS, DEFAULT_SKU_TEMPLATE, DEFAULT_SKU_PAD } from '../lib/sku'
 import TeamAccess from './TeamAccess'
@@ -87,7 +87,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
   const [footer, setFooter] = useState(DEFAULT_FOOTER)
   const [aiSettings, setAiSettings] = useState(DEFAULT_AI_SETTINGS)
   const [captureAssess, setCaptureAssess] = useState({ category: true, price: true })
-  const [costing, setCosting] = useState({ labourRate: 60, adminPct: 10, adminMin: 5 })
+  const [costing, setCosting] = useState({ labourRate: 60, adminPct: 10, adminMin: 5, handlingFee: 2, postageDefaultG: 1000, postageTiers: DEFAULT_POSTAGE_TIERS })
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -1474,6 +1474,47 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
               </div>
             </div>
             <div style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>Admin cost per part = the greater of {costing.adminPct || 0}% of sale price or ${costing.adminMin || 0}.</div>
+
+            <div style={{ marginTop: 22, paddingTop: 18, borderTop: `1px solid ${C.border}` }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>📦 Postage & handling cost</div>
+              <p style={{ fontSize: 13, color: C.muted, marginBottom: 14, lineHeight: 1.6 }}>
+                eBay tells us what the buyer <em>paid</em> for shipping, but never what it <em>cost</em> you to post. When a sale has no recorded carrier cost (e.g. free-shipping listings), we estimate it from the part's weight using this rate table, plus a fixed handling charge. Any actual postage you record on a part always wins over the estimate.
+              </p>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+                <div style={{ flex: '1 1 140px' }}>
+                  <label style={S.label}>Handling fee ($/parcel)</label>
+                  <input type="number" style={S.input} value={costing.handlingFee} onChange={e => setCosting(s => ({ ...s, handlingFee: e.target.value }))} />
+                  <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>Packing time + materials per order.</div>
+                </div>
+                <div style={{ flex: '1 1 140px' }}>
+                  <label style={S.label}>Assumed weight if blank (g)</label>
+                  <input type="number" style={S.input} value={costing.postageDefaultG} onChange={e => setCosting(s => ({ ...s, postageDefaultG: e.target.value }))} />
+                  <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>Used when a part has no weight.</div>
+                </div>
+              </div>
+              <label style={S.label}>Carrier rate table (by parcel weight)</label>
+              <div style={{ marginTop: 6 }}>
+                {(costing.postageTiers || []).map((t, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                    <span style={{ fontSize: 12, color: C.muted, width: 56 }}>up to</span>
+                    <input type="number" style={{ ...S.input, width: 110 }} value={t.maxG}
+                      onChange={e => setCosting(s => ({ ...s, postageTiers: s.postageTiers.map((x, j) => j === i ? { ...x, maxG: e.target.value } : x) }))} />
+                    <span style={{ fontSize: 12, color: C.muted }}>g  →  $</span>
+                    <input type="number" step="0.01" style={{ ...S.input, width: 100 }} value={t.cost}
+                      onChange={e => setCosting(s => ({ ...s, postageTiers: s.postageTiers.map((x, j) => j === i ? { ...x, cost: e.target.value } : x) }))} />
+                    <button type="button" style={{ ...S.btn('secondary'), padding: '6px 10px' }}
+                      onClick={() => setCosting(s => ({ ...s, postageTiers: s.postageTiers.filter((_, j) => j !== i) }))}>✕</button>
+                  </div>
+                ))}
+                <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                  <button type="button" style={{ ...S.btn('secondary'), padding: '6px 12px' }}
+                    onClick={() => setCosting(s => ({ ...s, postageTiers: [...(s.postageTiers || []), { maxG: 0, cost: 0 }] }))}>+ Add tier</button>
+                  <button type="button" style={{ ...S.btn('secondary'), padding: '6px 12px' }}
+                    onClick={() => setCosting(s => ({ ...s, postageTiers: DEFAULT_POSTAGE_TIERS }))}>Reset to defaults</button>
+                </div>
+              </div>
+              <div style={{ fontSize: 12, color: C.muted, marginTop: 12 }}>The heaviest tier is used for anything over the top weight. Estimated postage = matching carrier rate + handling fee.</div>
+            </div>
           </Section>
 
           <Section title="🤖 AI Description Template">

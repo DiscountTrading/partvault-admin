@@ -316,8 +316,12 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
   const formCar = cars?.find(c => c.id === form.car_id)
   const carPartsValue = (allParts||[]).filter(p => p.car_id === form.car_id && !p.deletedAt)
     .reduce((a,p) => a + (p.id === form.id ? (+form.listPrice||0) : (+p.list_price||+p.listPrice||0)), 0)
-  const basis = estimateCostBasis({ list_price: +form.listPrice||0, removalMinutes: form.removalMinutes }, costing, +formCar?.purchase_price||0, carPartsValue)
-  const cost = manualCost + basis.total
+  const basis = estimateCostBasis({ list_price: +form.listPrice||0, removalMinutes: form.removalMinutes, weight: form.weight, costs: form.costs }, costing, +formCar?.purchase_price||0, carPartsValue)
+  // basis.postage is the actual recorded carrier cost when present (already inside
+  // manualCost) or a weight-based estimate when not. Only add it to the total when
+  // it's the estimate, so a manually-entered postage isn't counted twice.
+  const extraPostage = basis.postageEstimated ? basis.postage : 0
+  const cost = manualCost + basis.carShare + basis.labour + basis.admin + extraPostage
   const profit = (+form.listPrice||0) - cost
   const margin = +form.listPrice > 0 ? (profit / +form.listPrice) * 100 : 0
 
@@ -664,7 +668,8 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
               <span>Car share: <strong style={{ color:C.text }}>{fmt(basis.carShare)}</strong></span>
               <span>Removal labour: <strong style={{ color:C.text }}>{fmt(basis.labour)}</strong></span>
               <span>Admin: <strong style={{ color:C.text }}>{fmt(basis.admin)}</strong></span>
-              <span>Auto basis: <strong style={{ color:C.text }}>{fmt(basis.total)}</strong></span>
+              <span>Postage{basis.postageEstimated ? ' (est.)' : ''}: <strong style={{ color:C.text }}>{fmt(basis.postage)}</strong></span>
+              <span>Auto basis: <strong style={{ color:C.text }}>{fmt(basis.carShare + basis.labour + basis.admin + extraPostage)}</strong></span>
             </div>
           </div>
           <div style={{ display:'flex', gap:20, marginTop:12, fontSize:12 }}>

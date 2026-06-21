@@ -1,4 +1,4 @@
-import { C, S, fmt, pct, totalCost, CATEGORY_NAMES } from '../lib/constants'
+import { C, S, fmt, pct, totalCost, postageCostFor, CATEGORY_NAMES } from '../lib/constants'
 
 function StatCard({ label, value, sub, color }) {
   return (
@@ -10,7 +10,7 @@ function StatCard({ label, value, sub, color }) {
   )
 }
 
-export default function Dashboard({ parts }) {
+export default function Dashboard({ parts, costing }) {
   const active = parts.filter(p=>!p.deletedAt)
   const inStock = active.filter(p=>p.status==='in_stock')
   const listed = active.filter(p=>p.status==='listed')
@@ -21,8 +21,15 @@ export default function Dashboard({ parts }) {
   const gross = soldRev - soldCogs
   const margin = soldRev>0?(gross/soldRev)*100:0
   // Shipping: income the buyer paid vs the postage cost we paid the carrier.
+  // Cost uses the recorded carrier cost where present, else a weight-based
+  // estimate (so free-shipping sales don't show a $0 postage cost).
   const shipInc = sold.reduce((a,p)=>a+(+p.shippingCharged||0),0)
-  const shipCost = sold.reduce((a,p)=>a+(+p.costs?.postage||0),0)
+  let shipCostEstimated = false
+  const shipCost = sold.reduce((a,p)=>{
+    const c = postageCostFor(p, costing||{})
+    if (c.estimated && c.value>0) shipCostEstimated = true
+    return a + c.value
+  },0)
   const netShip = shipInc - shipCost
   const stockVal = [...inStock,...listed].reduce((a,p)=>a+totalCost(p),0)
 
@@ -81,7 +88,7 @@ export default function Dashboard({ parts }) {
             <div>
               <div style={{ fontSize:10, color:C.muted, marginBottom:4 }}>SHIPPING COST</div>
               <div style={{ fontSize:22, fontWeight:700, color:C.yellow }}>{fmt(shipCost)}</div>
-              <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>postage paid</div>
+              <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>{shipCostEstimated ? 'postage paid (incl. est.)' : 'postage paid'}</div>
             </div>
             <div>
               <div style={{ fontSize:10, color:C.muted, marginBottom:4 }}>NET SHIPPING</div>

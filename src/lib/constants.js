@@ -1,4 +1,4 @@
-export const APP_VERSION = '3.14.5'
+export const APP_VERSION = '3.14.6'
 
 export const C = {
   bg:'#f5f4f0', panel:'#edeae3', card:'#ffffff', border:'#ddd9d0',
@@ -66,11 +66,51 @@ export const today = () => new Date().toISOString().split('T')[0]
 export const totalCost = p => Object.values(p.costs||{}).reduce((a,v)=>a+(+v||0),0)
 export const partProfit = p => (+p.list_price||0) - totalCost(p)
 
+// Default Australia Post-ish parcel rate table (grams → AUD). Editable per store
+// in Settings → Costing. Used to estimate a postage *cost* when no actual carrier
+// cost has been recorded — critical for "free shipping" sales where eBay reports
+// $0 shipping income but the postage still cost us real money.
+export const DEFAULT_POSTAGE_TIERS = [
+  { maxG: 500,   cost: 10.30 },
+  { maxG: 1000,  cost: 13.40 },
+  { maxG: 3000,  cost: 16.55 },
+  { maxG: 5000,  cost: 19.90 },
+  { maxG: 22000, cost: 29.40 },
+]
+export const DEFAULT_HANDLING_FEE = 2      // fixed packing/handling labour per parcel ($)
+export const DEFAULT_POSTAGE_WEIGHT_G = 1000 // assumed weight when a part has none
+
+// Estimated postage cost for a part = carrier rate (by weight) + fixed handling.
+//  - carrier: first tier whose maxG >= the part's weight; falls back to the
+//    heaviest tier if over the table.
+//  - handling: a flat per-parcel packing/handling cost (costing.handlingFee).
+// Weight is in grams (part.weight); when unknown we assume costing.postageDefaultG.
+export const estimatePostage = (p = {}, costing = {}) => {
+  const tiers = (costing.postageTiers && costing.postageTiers.length ? costing.postageTiers : DEFAULT_POSTAGE_TIERS)
+    .map(t => ({ maxG: +t.maxG || 0, cost: +t.cost || 0 }))
+    .sort((a, b) => a.maxG - b.maxG)
+  const handling = costing.handlingFee === '' || costing.handlingFee == null ? DEFAULT_HANDLING_FEE : +costing.handlingFee || 0
+  const weightG = +p.weight > 0 ? +p.weight : (+costing.postageDefaultG || DEFAULT_POSTAGE_WEIGHT_G)
+  const tier = tiers.find(t => weightG <= t.maxG) || tiers[tiers.length - 1] || { cost: 0 }
+  const carrier = +tier.cost || 0
+  return { carrier, handling, total: carrier + handling, weightG }
+}
+
+// The postage cost we use for a part: the actual recorded carrier cost
+// (costs.postage) if present, otherwise the weight-based estimate. `estimated`
+// flags which one was used so the UI can show it's a projection.
+export const postageCostFor = (p = {}, costing = {}) => {
+  const actual = +(p.costs?.postage) || 0
+  if (actual > 0) return { value: actual, estimated: false }
+  return { value: estimatePostage(p, costing).total, estimated: true }
+}
+
 // Estimated cost basis for a part, from the store costing config:
 //  - carShare: the car's purchase price spread across its parts, proportional
 //    to each part's sale price (re-divides as more parts are added).
 //  - labour: removal_minutes / 60 * hourly labour rate.
 //  - admin: max(% of sale price, minimum $).
+//  - postage: actual carrier cost if recorded, else weight-based estimate + handling.
 // `carPartsValue` is the sum of list prices of all (non-deleted) parts for the
 // same car; `carPrice` is that car's purchase price.
 export const estimateCostBasis = (p, costing = {}, carPrice = 0, carPartsValue = 0) => {
@@ -81,5 +121,6 @@ export const estimateCostBasis = (p, costing = {}, carPrice = 0, carPartsValue =
   const carShare = (carPrice > 0 && carPartsValue > 0) ? carPrice * (price / carPartsValue) : 0
   const labour = (+p.removalMinutes || +p.removal_minutes || 0) / 60 * labourRate
   const admin = Math.max(price * adminPct / 100, adminMin)
-  return { carShare, labour, admin, total: carShare + labour + admin }
+  const post = postageCostFor(p, costing)
+  return { carShare, labour, admin, postage: post.value, postageEstimated: post.estimated, total: carShare + labour + admin + post.value }
 }
