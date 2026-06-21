@@ -321,7 +321,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
   // manualCost) or a weight-based estimate when not. Only add it to the total when
   // it's the estimate, so a manually-entered postage isn't counted twice.
   const extraPostage = basis.postageEstimated ? basis.postage : 0
-  const cost = manualCost + basis.carShare + basis.labour + basis.admin + extraPostage
+  const cost = manualCost + basis.carShare + basis.baseCost + basis.labour + basis.admin + extraPostage
   const profit = (+form.listPrice||0) - cost
   const margin = +form.listPrice > 0 ? (profit / +form.listPrice) * 100 : 0
 
@@ -665,11 +665,12 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
               </div>
             </div>
             <div style={{ display:'flex', gap:16, flexWrap:'wrap', fontSize:12, color:C.muted }}>
-              <span>Car share: <strong style={{ color:C.text }}>{fmt(basis.carShare)}</strong></span>
+              {basis.carShare > 0 && <span>Car share: <strong style={{ color:C.text }}>{fmt(basis.carShare)}</strong></span>}
+              {basis.baseCost > 0 && <span>Base cost (est.): <strong style={{ color:C.text }}>{fmt(basis.baseCost)}</strong></span>}
               <span>Removal labour: <strong style={{ color:C.text }}>{fmt(basis.labour)}</strong></span>
               <span>Admin: <strong style={{ color:C.text }}>{fmt(basis.admin)}</strong></span>
               <span>Postage{basis.postageEstimated ? ' (est.)' : ''}: <strong style={{ color:C.text }}>{fmt(basis.postage)}</strong></span>
-              <span>Auto basis: <strong style={{ color:C.text }}>{fmt(basis.carShare + basis.labour + basis.admin + extraPostage)}</strong></span>
+              <span>Auto basis: <strong style={{ color:C.text }}>{fmt(basis.carShare + basis.baseCost + basis.labour + basis.admin + extraPostage)}</strong></span>
             </div>
           </div>
           <div style={{ display:'flex', gap:20, marginTop:12, fontSize:12 }}>

@@ -87,7 +87,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
   const [footer, setFooter] = useState(DEFAULT_FOOTER)
   const [aiSettings, setAiSettings] = useState(DEFAULT_AI_SETTINGS)
   const [captureAssess, setCaptureAssess] = useState({ category: true, price: true })
-  const [costing, setCosting] = useState({ labourRate: 60, adminPct: 10, adminMin: 5, handlingFee: 2, postageDefaultG: 1000, postageTiers: DEFAULT_POSTAGE_TIERS })
+  const [costing, setCosting] = useState({ labourRate: 60, adminPct: 10, adminMin: 5, baseCostPct: 25, handlingFee: 2, postageDefaultG: 1000, postageTiers: DEFAULT_POSTAGE_TIERS })
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -1474,6 +1474,20 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
               </div>
             </div>
             <div style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>Admin cost per part = the greater of {costing.adminPct || 0}% of sale price or ${costing.adminMin || 0}.</div>
+
+            <div style={{ marginTop: 22, paddingTop: 18, borderTop: `1px solid ${C.border}` }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>🧱 Base cost (fallback)</div>
+              <p style={{ fontSize: 13, color: C.muted, marginBottom: 14, lineHeight: 1.6 }}>
+                When a part has <em>no</em> cost data at all — not linked to a car and no costs entered — we assume a base part cost as a % of its sale price, plus the estimated delivery cost below. This gives businesses with no cost history a realistic starting cost base (and stops the Dashboard showing fake 100% margins). The moment you link a car or enter any real cost, that wins over this fallback.
+              </p>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ flex: '1 1 140px' }}>
+                  <label style={S.label}>Base cost (% of sale)</label>
+                  <input type="number" style={S.input} value={costing.baseCostPct} onChange={e => setCosting(s => ({ ...s, baseCostPct: e.target.value }))} />
+                  <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>Set 0 to disable the fallback.</div>
+                </div>
+              </div>
+            </div>
 
             <div style={{ marginTop: 22, paddingTop: 18, borderTop: `1px solid ${C.border}` }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>📦 Postage & handling cost</div>

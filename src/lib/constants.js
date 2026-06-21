@@ -1,4 +1,4 @@
-export const APP_VERSION = '3.14.6'
+export const APP_VERSION = '3.14.7'
 
 export const C = {
   bg:'#f5f4f0', panel:'#edeae3', card:'#ffffff', border:'#ddd9d0',
@@ -105,9 +105,14 @@ export const postageCostFor = (p = {}, costing = {}) => {
   return { value: estimatePostage(p, costing).total, estimated: true }
 }
 
+export const DEFAULT_BASE_COST_PCT = 25 // fallback part cost as % of sale price
+
 // Estimated cost basis for a part, from the store costing config:
 //  - carShare: the car's purchase price spread across its parts, proportional
 //    to each part's sale price (re-divides as more parts are added).
+//  - baseCost: fallback part-acquisition cost (% of sale price) used ONLY when we
+//    have no other acquisition signal — no linked car and no manual acquisition
+//    cost. Gives disorganised businesses a sensible cost base to start from.
 //  - labour: removal_minutes / 60 * hourly labour rate.
 //  - admin: max(% of sale price, minimum $).
 //  - postage: actual carrier cost if recorded, else weight-based estimate + handling.
@@ -119,8 +124,22 @@ export const estimateCostBasis = (p, costing = {}, carPrice = 0, carPartsValue =
   const adminPct = +costing.adminPct || 0
   const adminMin = +costing.adminMin || 0
   const carShare = (carPrice > 0 && carPartsValue > 0) ? carPrice * (price / carPartsValue) : 0
+  const manualAcq = +p.costs?.acquisition || 0
+  const baseCostPct = costing.baseCostPct == null || costing.baseCostPct === '' ? DEFAULT_BASE_COST_PCT : +costing.baseCostPct || 0
+  const baseCost = (carShare === 0 && manualAcq === 0 && baseCostPct > 0) ? price * baseCostPct / 100 : 0
   const labour = (+p.removalMinutes || +p.removal_minutes || 0) / 60 * labourRate
   const admin = Math.max(price * adminPct / 100, adminMin)
   const post = postageCostFor(p, costing)
-  return { carShare, labour, admin, postage: post.value, postageEstimated: post.estimated, total: carShare + labour + admin + post.value }
+  return { carShare, baseCost, labour, admin, postage: post.value, postageEstimated: post.estimated, total: carShare + baseCost + labour + admin + post.value }
+}
+
+// Best single cost figure for a part, for roll-ups (Dashboard / Insights):
+// use the recorded costs when the business has entered any, otherwise fall back
+// to the full estimate (base cost + postage + admin + removal labour). This is
+// what lets a business with no cost history still see a realistic COGS/margin
+// instead of a fake 100%. `estimated` flags which path was used.
+export const partEffectiveCost = (p = {}, costing = {}) => {
+  const manual = totalCost(p)
+  if (manual > 0) return { value: manual, estimated: false }
+  return { value: estimateCostBasis(p, costing, 0, 0).total, estimated: true }
 }

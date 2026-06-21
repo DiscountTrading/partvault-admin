@@ -1,4 +1,4 @@
-import { C, S, fmt, pct, totalCost, postageCostFor, CATEGORY_NAMES } from '../lib/constants'
+import { C, S, fmt, pct, totalCost, postageCostFor, partEffectiveCost, CATEGORY_NAMES } from '../lib/constants'
 
 function StatCard({ label, value, sub, color }) {
   return (
@@ -17,7 +17,12 @@ export default function Dashboard({ parts, costing }) {
   const sold = active.filter(p=>p.status==='sold')
   // Revenue includes the shipping the buyer paid (income), not just the item price.
   const soldRev = sold.reduce((a,p)=>a+(+p.soldPrice||+p.list_price||0)+(+p.shippingCharged||0),0)
-  const soldCogs = sold.reduce((a,p)=>a+totalCost(p),0)
+  // COGS uses recorded costs where present, else a full estimate (base cost +
+  // postage + admin + labour) so parts with no cost history still show a margin.
+  let cogsEstimated = false
+  const soldCogs = sold.reduce((a,p)=>{
+    const c = partEffectiveCost(p, costing||{}); if (c.estimated) cogsEstimated = true; return a + c.value
+  },0)
   const gross = soldRev - soldCogs
   const margin = soldRev>0?(gross/soldRev)*100:0
   // Shipping: income the buyer paid vs the postage cost we paid the carrier.
@@ -31,7 +36,7 @@ export default function Dashboard({ parts, costing }) {
     return a + c.value
   },0)
   const netShip = shipInc - shipCost
-  const stockVal = [...inStock,...listed].reduce((a,p)=>a+totalCost(p),0)
+  const stockVal = [...inStock,...listed].reduce((a,p)=>a+partEffectiveCost(p, costing||{}).value,0)
 
   const catBreak = CATEGORY_NAMES.map(cat=>({ cat, count:active.filter(p=>p.category===cat).length }))
     .filter(x=>x.count>0).sort((a,b)=>b.count-a.count).slice(0,8)
@@ -50,7 +55,7 @@ export default function Dashboard({ parts, costing }) {
         <StatCard label="Total Parts" value={active.length} sub={`${inStock.length} in stock`} />
         <StatCard label="Listed on eBay" value={listed.length} color={C.accent} />
         <StatCard label="Total Sold" value={sold.length} color={C.green} sub={fmt(soldRev)+' revenue'} />
-        <StatCard label="Gross Profit" value={fmt(gross)} color={margin>30?C.green:C.yellow} sub={pct(margin)+' margin'} />
+        <StatCard label="Gross Profit" value={fmt(gross)} color={margin>30?C.green:C.yellow} sub={pct(margin)+' margin'+(cogsEstimated?' · incl. est. cost':'')} />
       </div>
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20, marginBottom:20 }}>
         <div style={S.card}>
