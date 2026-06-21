@@ -15,7 +15,8 @@ export default function Dashboard({ parts }) {
   const inStock = active.filter(p=>p.status==='in_stock')
   const listed = active.filter(p=>p.status==='listed')
   const sold = active.filter(p=>p.status==='sold')
-  const soldRev = sold.reduce((a,p)=>a+(+p.soldPrice||+p.list_price||0),0)
+  // Revenue includes the shipping the buyer paid (income), not just the item price.
+  const soldRev = sold.reduce((a,p)=>a+(+p.soldPrice||+p.list_price||0)+(+p.shippingCharged||0),0)
   const soldCogs = sold.reduce((a,p)=>a+totalCost(p),0)
   const gross = soldRev - soldCogs
   const margin = soldRev>0?(gross/soldRev)*100:0

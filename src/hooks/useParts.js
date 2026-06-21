@@ -22,6 +22,7 @@ const mapRow = r => ({
   marketPrice: r.market_price ?? null,
   marketCount: r.market_count ?? null,
   marketCheckedAt: r.market_checked_at || null,
+  shippingCharged: r.shipping_charged ?? null,
 })
 
 const mapToRow = p => ({
@@ -37,6 +38,7 @@ const mapToRow = p => ({
   deleted_at: p.deletedAt||null, car_id: p.car_id||null,
   ai_assessed: p.ai_assessed||false,
   removal_minutes: p.removalMinutes ?? null,
+  shipping_charged: p.shippingCharged ?? null,
 })
 
 export function useParts(storeId) {

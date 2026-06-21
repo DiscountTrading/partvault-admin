@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.2'
+const EDGE_FN_VERSION         = '3.14.3'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 25 * 1000
@@ -315,8 +315,8 @@ async function handleRequest(req: Request): Promise<Response> {
     return result
   }
 
-  const parseTransactions = (xml: string): Array<{ itemId: string; title: string; salePrice: number; soldAt: string | null }> => {
-    const results: Array<{ itemId: string; title: string; salePrice: number; soldAt: string | null }> = []
+  const parseTransactions = (xml: string): Array<{ itemId: string; title: string; salePrice: number; shipping: number; soldAt: string | null }> => {
+    const results: Array<{ itemId: string; title: string; salePrice: number; shipping: number; soldAt: string | null }> = []
     for (const txMatch of xml.matchAll(/<Transaction>([\s\S]*?)<\/Transaction>/g)) {
       const txXml = txMatch[1]
       const itemSection = txXml.match(/<Item>([\s\S]*?)<\/Item>/)?.[1] ?? ''
@@ -324,8 +324,13 @@ async function handleRequest(req: Request): Promise<Response> {
       if (!itemId) continue
       const title     = getTag(itemSection, 'Title')
       const salePrice = parseFloat(getTag(txXml, 'TransactionPrice')) || 0
+      // Shipping the buyer paid: prefer the explicit shipping cost, else infer
+      // from total paid minus item price.
+      const explicitShip = parseFloat(getTag(txXml, 'ShippingServiceCost'))
+      const amountPaid   = parseFloat(getTag(txXml, 'AmountPaid'))
+      const shipping = !isNaN(explicitShip) ? explicitShip : (!isNaN(amountPaid) ? Math.max(0, amountPaid - salePrice) : 0)
       const soldAt    = getTag(txXml, 'PaidTime') || getTag(txXml, 'CreatedDate') || null
-      results.push({ itemId, title, salePrice, soldAt })
+      results.push({ itemId, title, salePrice, shipping, soldAt })
     }
     return results
   }
@@ -815,6 +820,7 @@ async function handleRequest(req: Request): Promise<Response> {
               status: 'sold',
               ...(tx.salePrice ? { sold_price: tx.salePrice } : {}),
               ...(tx.soldAt    ? { sold_date:  tx.soldAt }    : {}),
+              ...(tx.shipping  ? { shipping_charged: tx.shipping } : {}),
             }).eq('id', listing.part_id)
 
             updated++
@@ -839,7 +845,7 @@ async function handleRequest(req: Request): Promise<Response> {
       if (!fromDate) throw new Error('fromDate is required')
 
       // Collect all transactions for this window
-      const allTransactions: Array<{ itemId: string; title: string; salePrice: number; soldAt: string | null }> = []
+      const allTransactions: Array<{ itemId: string; title: string; salePrice: number; shipping: number; soldAt: string | null }> = []
       let page    = 1
       let hasMoreTx = true
 
@@ -913,6 +919,7 @@ async function handleRequest(req: Request): Promise<Response> {
               status:     'sold',
               sold_price: tx.salePrice,
               sold_date:  tx.soldAt || null,
+              shipping_charged: tx.shipping || null,
               list_price: tx.salePrice,
               condition:  detail?.ConditionDisplayName || 'Used – Good',
               source:     'ebay_history',
