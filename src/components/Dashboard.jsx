@@ -41,10 +41,16 @@ export default function Dashboard({ parts, costing }) {
   const catBreak = CATEGORY_NAMES.map(cat=>({ cat, count:active.filter(p=>p.category===cat).length }))
     .filter(x=>x.count>0).sort((a,b)=>b.count-a.count).slice(0,8)
 
-  const aged = listed.filter(p=>{
-    if (!p.listedDate) return false
-    return Math.floor((Date.now()-new Date(p.listedDate))/86400000)>60
-  })
+  // Age of a still-unsold part. The eBay sync doesn't set listed_date, so fall
+  // back to acquired_date (the listing's start) then created_at, else nothing.
+  const ageDays = p => {
+    const d = p.listedDate || p.acquiredDate || p.createdAt
+    if (!d) return null
+    const days = Math.floor((Date.now() - new Date(d)) / 86400000)
+    return Number.isFinite(days) ? days : null
+  }
+  const aged = listed.filter(p => { const d = ageDays(p); return d != null && d > 60 })
+    .sort((a,b) => (ageDays(b)||0) - (ageDays(a)||0))
 
   return (
     <div>
@@ -73,7 +79,7 @@ export default function Dashboard({ parts, costing }) {
           <h2 style={S.h2}>Aged Stock & Alerts</h2>
           {!aged.length && <p style={{ color:C.muted, fontSize:12 }}>No aged stock alerts.</p>}
           {aged.slice(0,6).map(p=>{
-            const days = Math.floor((Date.now()-new Date(p.listedDate))/86400000)
+            const days = ageDays(p)
             return (
               <div key={p.id} style={{ padding:'6px 0', borderBottom:`1px solid ${C.border}` }}>
                 <div style={{ fontSize:14, color:days>90?C.red:C.yellow, fontWeight:500 }}>{p.title}</div>
@@ -81,6 +87,7 @@ export default function Dashboard({ parts, costing }) {
               </div>
             )
           })}
+          {aged.length>6 && <div style={{ fontSize:11, color:C.muted, marginTop:6 }}>+{aged.length-6} more aged over 60 days</div>}
           <div style={{ marginTop:14, borderTop:`1px solid ${C.border}`, paddingTop:12, display:'flex', gap:24, flexWrap:'wrap' }}>
             <div>
               <div style={{ fontSize:10, color:C.muted, marginBottom:4 }}>INVENTORY VALUE (at cost)</div>
