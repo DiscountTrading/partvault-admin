@@ -1,4 +1,4 @@
-export const APP_VERSION = '3.14.15'
+export const APP_VERSION = '3.14.16'
 
 export const C = {
   bg:'#f5f4f0', panel:'#edeae3', card:'#ffffff', border:'#ddd9d0',
@@ -137,8 +137,9 @@ export const bucketByAge = (parts, brackets = DEFAULT_AGE_BRACKETS, ageOf, value
 //  - baseCost: fallback part-acquisition cost (% of sale price) used ONLY when we
 //    have no other acquisition signal — no linked car and no manual acquisition
 //    cost. Gives disorganised businesses a sensible cost base to start from.
-//  - labour: removal_minutes / 60 * hourly labour rate.
-//  - admin: max(% of sale price, minimum $).
+//  - labour: 'fixed' mode = removal_minutes/60 * hourly rate; 'percent' = % of sale.
+//  - admin: max(base, floor) where base & floor are each % of sale or a fixed $,
+//    per adminMode / adminMinMode.
 //  - postage: actual carrier cost if recorded, else weight-based estimate + handling.
 // `carPartsValue` is the sum of list prices of all (non-deleted) parts for the
 // same car; `carPrice` is that car's purchase price.
@@ -151,8 +152,13 @@ export const estimateCostBasis = (p, costing = {}, carPrice = 0, carPartsValue =
   const manualAcq = +p.costs?.acquisition || 0
   const baseCostPct = costing.baseCostPct == null || costing.baseCostPct === '' ? DEFAULT_BASE_COST_PCT : +costing.baseCostPct || 0
   const baseCost = (carShare === 0 && manualAcq === 0 && baseCostPct > 0) ? price * baseCostPct / 100 : 0
-  const labour = (+p.removalMinutes || +p.removal_minutes || 0) / 60 * labourRate
-  const admin = Math.max(price * adminPct / 100, adminMin)
+  // Each of labour / admin / admin-minimum can be a % of sale price or a fixed $.
+  const labour = (costing.labourMode === 'percent')
+    ? price * labourRate / 100
+    : (+p.removalMinutes || +p.removal_minutes || 0) / 60 * labourRate
+  const adminBase  = (costing.adminMode === 'fixed')    ? adminPct : price * adminPct / 100
+  const adminFloor = (costing.adminMinMode === 'percent') ? price * adminMin / 100 : adminMin
+  const admin = Math.max(adminBase, adminFloor)
   const post = postageCostFor(p, costing)
   return { carShare, baseCost, labour, admin, postage: post.value, postageEstimated: post.estimated, total: carShare + baseCost + labour + admin + post.value }
 }

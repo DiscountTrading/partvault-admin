@@ -7,6 +7,18 @@ import Activity from './Activity'
 import { compressImage } from '../lib/image'
 import ShippingSettings from './ShippingSettings'
 
+// Small inline %/$ (or rate) toggle used on the costing fields.
+function ModeToggle({ mode, onChange, opts }) {
+  return (
+    <span style={{ display: 'inline-flex', border: `1px solid ${C.border}`, borderRadius: 6, overflow: 'hidden', marginLeft: 8, verticalAlign: 'middle' }}>
+      {opts.map(([val, lbl]) => (
+        <button key={val} type="button" onClick={() => onChange(val)}
+          style={{ padding: '1px 8px', fontSize: 11, fontWeight: 700, border: 'none', cursor: 'pointer', background: mode === val ? C.accent : '#fff', color: mode === val ? '#fff' : C.muted }}>{lbl}</button>
+      ))}
+    </span>
+  )
+}
+
 // Vertical-neutral starting template — each store edits this to its own wording.
 // (Must NOT assume auto parts or name a specific business; PartVault is multi-store.)
 const DEFAULT_FOOTER = `All photos are of the exact item you will receive — no stock images. Items are sold as described, so please review the photos and details, and message us with any questions before you buy.
@@ -87,7 +99,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   const [footer, setFooter] = useState(DEFAULT_FOOTER)
   const [aiSettings, setAiSettings] = useState(DEFAULT_AI_SETTINGS)
   const [captureAssess, setCaptureAssess] = useState({ category: true, price: true })
-  const [costing, setCosting] = useState({ labourRate: 60, adminPct: 10, adminMin: 5, baseCostPct: 25, handlingFee: 2, postageDefaultG: 1000, postageTiers: DEFAULT_POSTAGE_TIERS })
+  const [costing, setCosting] = useState({ labourRate: 60, adminPct: 10, adminMin: 5, baseCostPct: 25, handlingFee: 2, postageDefaultG: 1000, postageTiers: DEFAULT_POSTAGE_TIERS, labourMode: 'fixed', adminMode: 'percent', adminMinMode: 'fixed' })
   const [inventory, setInventory] = useState({ agedThresholdDays: DEFAULT_AGED_THRESHOLD_DAYS, ageBrackets: DEFAULT_AGE_BRACKETS })
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -1464,20 +1476,32 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
               Used to estimate each part's cost basis: the car's purchase price spread across its parts (by sale price), plus removal labour (AI-estimated minutes × your rate), plus an admin cost.
             </p>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-              <div style={{ flex: '1 1 140px' }}>
-                <label style={S.label}>Labour rate ($/hour)</label>
+              <div style={{ flex: '1 1 160px' }}>
+                <label style={{ ...S.label, display: 'flex', alignItems: 'center' }}>
+                  {(costing.labourMode === 'percent') ? 'Labour (% of sale)' : 'Labour rate ($/hour)'}
+                  <ModeToggle mode={costing.labourMode || 'fixed'} onChange={m => setCosting(s => ({ ...s, labourMode: m }))} opts={[['fixed', '$/hr'], ['percent', '%']]} />
+                </label>
                 <input type="number" style={S.input} value={costing.labourRate} onChange={e => setCosting(s => ({ ...s, labourRate: e.target.value }))} />
               </div>
-              <div style={{ flex: '1 1 140px' }}>
-                <label style={S.label}>Admin cost (% of sale)</label>
+              <div style={{ flex: '1 1 160px' }}>
+                <label style={{ ...S.label, display: 'flex', alignItems: 'center' }}>
+                  {(costing.adminMode === 'fixed') ? 'Admin cost ($/part)' : 'Admin cost (% of sale)'}
+                  <ModeToggle mode={costing.adminMode || 'percent'} onChange={m => setCosting(s => ({ ...s, adminMode: m }))} opts={[['percent', '%'], ['fixed', '$']]} />
+                </label>
                 <input type="number" style={S.input} value={costing.adminPct} onChange={e => setCosting(s => ({ ...s, adminPct: e.target.value }))} />
               </div>
-              <div style={{ flex: '1 1 140px' }}>
-                <label style={S.label}>Admin cost minimum ($)</label>
+              <div style={{ flex: '1 1 160px' }}>
+                <label style={{ ...S.label, display: 'flex', alignItems: 'center' }}>
+                  {(costing.adminMinMode === 'percent') ? 'Admin minimum (% of sale)' : 'Admin minimum ($)'}
+                  <ModeToggle mode={costing.adminMinMode || 'fixed'} onChange={m => setCosting(s => ({ ...s, adminMinMode: m }))} opts={[['fixed', '$'], ['percent', '%']]} />
+                </label>
                 <input type="number" style={S.input} value={costing.adminMin} onChange={e => setCosting(s => ({ ...s, adminMin: e.target.value }))} />
               </div>
             </div>
-            <div style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>Admin cost per part = the greater of {costing.adminPct || 0}% of sale price or ${costing.adminMin || 0}.</div>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>
+              Admin cost per part = the greater of {costing.adminPct || 0}{(costing.adminMode === 'fixed') ? ' $' : '% of sale'} or {costing.adminMin || 0}{(costing.adminMinMode === 'percent') ? '% of sale' : ' $'}.
+              {(costing.labourMode === 'percent') && ' Labour is a flat % of sale (ignores removal minutes).'}
+            </div>
 
             <div style={{ marginTop: 22, paddingTop: 18, borderTop: `1px solid ${C.border}` }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>🧱 Base cost (fallback)</div>
