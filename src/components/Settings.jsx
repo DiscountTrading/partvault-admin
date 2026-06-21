@@ -125,6 +125,35 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
   const [syncPhase, setSyncPhase] = useState('')
   const [syncStatus, setSyncStatus] = useState(null)
   const [statusLoading, setStatusLoading] = useState(false)
+  const [lastRun, setLastRun] = useState({})
+  useEffect(() => { try { setLastRun(JSON.parse(localStorage.getItem(`pv_lastrun_${storeId}`) || '{}')) } catch { setLastRun({}) } }, [storeId])
+  // Record when an import step last finished (per store), shown next to each.
+  const markRun = (op) => {
+    try {
+      const cur = JSON.parse(localStorage.getItem(`pv_lastrun_${storeId}`) || '{}')
+      cur[op] = new Date().toISOString()
+      localStorage.setItem(`pv_lastrun_${storeId}`, JSON.stringify(cur))
+      setLastRun(cur)
+    } catch { /* ignore */ }
+  }
+  const fmtLastRun = (iso) => iso ? `last run ${new Date(iso).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : 'not run yet'
+  const [salesMatch, setSalesMatch] = useState(null)
+  const [salesMatchLoading, setSalesMatchLoading] = useState(false)
+  const checkSalesMatch = async () => {
+    setSalesMatchLoading(true); setSalesMatch(null)
+    try {
+      const { data: { session } } = await sb.auth.getSession()
+      const res = await fetch(EDGE_FN, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ action: 'sales_match', storeId, days: 90 }),
+      })
+      const d = await res.json()
+      if (!res.ok || d.error) throw new Error(d.error || 'Sales match failed')
+      setSalesMatch(d)
+    } catch (e) { setSalesMatch({ error: e.message }) }
+    setSalesMatchLoading(false)
+  }
   const [backfilling, setBackfilling] = useState(false)
   const [backfillResult, setBackfillResult] = useState(null)
   const backfillCancelRef = useRef(false)
@@ -496,7 +525,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
                 : `Processing ${chunk.offset} of ${chunk.total}...`,
             }))
 
-            if (chunk.isComplete || chunk.status === 'completed') { setImporting(false); resolve(); return }
+            if (chunk.isComplete || chunk.status === 'completed') { markRun('import'); setImporting(false); resolve(); return }
             setTimeout(processNext, 500)
           } catch (e) {
             setImportJob(j => ({ ...j, status: 'failed', error_message: e.message })); setImporting(false); resolve()
@@ -557,6 +586,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
       }
 
       setBackfillResult({ done: true, cancelled: backfillCancelRef.current, updated: totalUpdated, alreadySold: totalAlready, notFound: totalNotFound, errors: allErrors.slice(0, 20) })
+      markRun('backfill')
     } catch (e) {
       setBackfillResult({ error: e.message, updated: totalUpdated })
     }
@@ -681,6 +711,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
       const data = await res.json()
       if (data.error) throw new Error(data.error)
       setReconcileResult(data)
+      markRun('reconcile')
       if (data.staleListings?.length > 0) {
         await enrichStaleParts(data.staleListings)
       }
@@ -1729,10 +1760,43 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
                 )
               })()}
 
+              {/* Sales match — verify our recorded sales against eBay's actual sold */}
+              {ebayConnected && (
+                <div style={{ background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 14px', marginBottom: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>💰 Sales match (last 90 days)</div>
+                    <button onClick={checkSalesMatch} disabled={salesMatchLoading} style={{ ...S.btn('secondary'), padding: '5px 12px', fontSize: 12, opacity: salesMatchLoading ? 0.6 : 1 }}>
+                      {salesMatchLoading ? 'Checking eBay…' : 'Check sales match'}
+                    </button>
+                  </div>
+                  {salesMatch?.error && <div style={{ fontSize: 12, color: C.red, marginTop: 8 }}>{salesMatch.error}</div>}
+                  {salesMatch && !salesMatch.error && (() => {
+                    const itemGap = (salesMatch.ebayItemTotal || 0) - (salesMatch.ourItemTotal || 0)
+                    const matched = salesMatch.missingSales === 0 && Math.abs(itemGap) < Math.max(50, salesMatch.ebayItemTotal * 0.02)
+                    return (
+                      <div style={{ fontSize: 13, marginTop: 10, lineHeight: 1.6 }}>
+                        <div><strong>eBay:</strong> {salesMatch.ebayCount} sales · item {fmt(salesMatch.ebayItemTotal)} + shipping {fmt(salesMatch.ebayShipping)} = <strong>{fmt(salesMatch.ebayPaidTotal)}</strong></div>
+                        <div><strong>PartVault:</strong> {salesMatch.ourCount} sales · {fmt(salesMatch.ourItemTotal)} <span style={{ color: C.muted }}>(item price only)</span></div>
+                        <div style={{ marginTop: 6, color: matched ? C.green : '#b45309' }}>
+                          {matched
+                            ? `✓ Item totals match — the difference vs eBay's headline is shipping (${fmt(salesMatch.ebayShipping)}), which we don't store on the sale.`
+                            : `⚠ ${salesMatch.missingSales} sale${salesMatch.missingSales === 1 ? '' : 's'} on eBay aren't recorded here (~${fmt(itemGap)} item value). Run Sync / Import sold history to capture them.`}
+                        </div>
+                      </div>
+                    )
+                  })()}
+                </div>
+              )}
+
               <button style={{ ...S.btn('primary'), width: '100%', marginBottom: syncPhase ? 6 : 12, opacity: (syncingAll || !ebayConnected) ? 0.6 : 1 }} onClick={syncEverything} disabled={syncingAll || importing || backfilling || reconciling || !ebayConnected}>
                 {syncingAll ? '⏳ Syncing with eBay…' : '🔄 Sync with eBay'}
               </button>
-              {syncPhase && <div style={{ fontSize: 12, color: syncPhase.startsWith('✓') ? C.green : C.muted, marginBottom: 12 }}>{syncPhase}</div>}
+              {syncPhase && <div style={{ fontSize: 12, color: syncPhase.startsWith('✓') ? C.green : C.muted, marginBottom: 8 }}>{syncPhase}</div>}
+              <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                <span>Import: {fmtLastRun(lastRun.import)}</span>
+                <span>Sold orders: {fmtLastRun(lastRun.backfill)}</span>
+                <span>Reconcile: {fmtLastRun(lastRun.reconcile)}</span>
+              </div>
               <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>One click: imports new listings, updates sold orders (last ~4 months), then reconciles against eBay. Or run a step on its own:</div>
 
               <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
