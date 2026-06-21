@@ -20,6 +20,10 @@ export default function Dashboard({ parts }) {
   const soldCogs = sold.reduce((a,p)=>a+totalCost(p),0)
   const gross = soldRev - soldCogs
   const margin = soldRev>0?(gross/soldRev)*100:0
+  // Shipping: income the buyer paid vs the postage cost we paid the carrier.
+  const shipInc = sold.reduce((a,p)=>a+(+p.shippingCharged||0),0)
+  const shipCost = sold.reduce((a,p)=>a+(+p.costs?.postage||0),0)
+  const netShip = shipInc - shipCost
   const stockVal = [...inStock,...listed].reduce((a,p)=>a+totalCost(p),0)
 
   const catBreak = CATEGORY_NAMES.map(cat=>({ cat, count:active.filter(p=>p.category===cat).length }))
@@ -64,9 +68,16 @@ export default function Dashboard({ parts }) {
               </div>
             )
           })}
-          <div style={{ marginTop:14, borderTop:`1px solid ${C.border}`, paddingTop:12 }}>
-            <div style={{ fontSize:10, color:C.muted, marginBottom:4 }}>INVENTORY VALUE (at cost)</div>
-            <div style={{ fontSize:22, fontWeight:700, color:C.blue }}>{fmt(stockVal)}</div>
+          <div style={{ marginTop:14, borderTop:`1px solid ${C.border}`, paddingTop:12, display:'flex', gap:24, flexWrap:'wrap' }}>
+            <div>
+              <div style={{ fontSize:10, color:C.muted, marginBottom:4 }}>INVENTORY VALUE (at cost)</div>
+              <div style={{ fontSize:22, fontWeight:700, color:C.blue }}>{fmt(stockVal)}</div>
+            </div>
+            <div>
+              <div style={{ fontSize:10, color:C.muted, marginBottom:4 }}>NET SHIPPING (income − cost)</div>
+              <div style={{ fontSize:22, fontWeight:700, color: netShip>=0?C.green:C.red }}>{fmt(netShip)}</div>
+              <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>{fmt(shipInc)} charged · {fmt(shipCost)} postage</div>
+            </div>
           </div>
         </div>
       </div>
