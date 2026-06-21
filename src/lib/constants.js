@@ -1,4 +1,4 @@
-export const APP_VERSION = '3.14.9'
+export const APP_VERSION = '3.14.10'
 
 export const C = {
   bg:'#f5f4f0', panel:'#edeae3', card:'#ffffff', border:'#ddd9d0',
@@ -106,6 +106,30 @@ export const postageCostFor = (p = {}, costing = {}) => {
 }
 
 export const DEFAULT_BASE_COST_PCT = 25 // fallback part cost as % of sale price
+
+// Aged-stock reporting. agedThresholdDays = when a still-unsold part is "aged".
+// ageBrackets = ascending day boundaries used to bucket aged stock for the chart;
+// an implicit "older" bucket catches anything beyond the last boundary.
+export const DEFAULT_AGED_THRESHOLD_DAYS = 60
+export const DEFAULT_AGE_BRACKETS = [90, 180, 365, 730, 1065]
+
+// Bucket parts into age brackets. Returns [{ label, min, max, count, value }]
+// where max=null is the open-ended "older" bucket. `ageOf` returns a part's age
+// in days (or null); `valueOf` returns the $ to total per bucket.
+export const bucketByAge = (parts, brackets = DEFAULT_AGE_BRACKETS, ageOf, valueOf = () => 0) => {
+  const bounds = [...brackets].map(Number).filter(n => n > 0).sort((a, b) => a - b)
+  const buckets = []
+  let prev = 0
+  for (const b of bounds) { buckets.push({ label: `${prev}–${b}d`, min: prev, max: b, count: 0, value: 0 }); prev = b }
+  buckets.push({ label: `${prev}d+`, min: prev, max: null, count: 0, value: 0 })
+  for (const p of parts) {
+    const d = ageOf(p)
+    if (d == null) continue
+    const bk = buckets.find(x => x.max == null ? d >= x.min : (d >= x.min && d < x.max))
+    if (bk) { bk.count++; bk.value += +valueOf(p) || 0 }
+  }
+  return buckets
+}
 
 // Estimated cost basis for a part, from the store costing config:
 //  - carShare: the car's purchase price spread across its parts, proportional

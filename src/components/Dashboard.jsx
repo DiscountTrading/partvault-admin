@@ -1,4 +1,4 @@
-import { C, S, fmt, pct, totalCost, postageCostFor, partEffectiveCost, CATEGORY_NAMES } from '../lib/constants'
+import { C, S, fmt, pct, totalCost, postageCostFor, partEffectiveCost, bucketByAge, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS, CATEGORY_NAMES } from '../lib/constants'
 
 function StatCard({ label, value, sub, color }) {
   return (
@@ -10,7 +10,7 @@ function StatCard({ label, value, sub, color }) {
   )
 }
 
-export default function Dashboard({ parts, costing }) {
+export default function Dashboard({ parts, costing, inventory }) {
   const active = parts.filter(p=>!p.deletedAt)
   const inStock = active.filter(p=>p.status==='in_stock')
   const listed = active.filter(p=>p.status==='listed')
@@ -49,8 +49,13 @@ export default function Dashboard({ parts, costing }) {
     const days = Math.floor((Date.now() - new Date(d)) / 86400000)
     return Number.isFinite(days) ? days : null
   }
-  const aged = listed.filter(p => { const d = ageDays(p); return d != null && d > 60 })
-    .sort((a,b) => (ageDays(b)||0) - (ageDays(a)||0))
+  const agedThreshold = +inventory?.agedThresholdDays || DEFAULT_AGED_THRESHOLD_DAYS
+  const brackets = (inventory?.ageBrackets?.length ? inventory.ageBrackets : DEFAULT_AGE_BRACKETS)
+  const aged = listed.filter(p => { const d = ageDays(p); return d != null && d > agedThreshold })
+  // Bucket aged stock into the configured day brackets; value = retail (list price) tied up.
+  const ageBuckets = bucketByAge(aged, brackets, ageDays, p => +p.listPrice || +p.list_price || 0)
+  const maxBucket = Math.max(1, ...ageBuckets.map(b => b.count))
+  const agedValue = aged.reduce((a,p) => a + (+p.listPrice || +p.list_price || 0), 0)
 
   return (
     <div>
@@ -76,18 +81,27 @@ export default function Dashboard({ parts, costing }) {
           {!catBreak.length && <p style={{ color:C.muted, fontSize:12 }}>No parts yet.</p>}
         </div>
         <div style={S.card}>
-          <h2 style={S.h2}>Aged Stock & Alerts</h2>
-          {!aged.length && <p style={{ color:C.muted, fontSize:12 }}>No aged stock alerts.</p>}
-          {aged.slice(0,6).map(p=>{
-            const days = ageDays(p)
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:14 }}>
+            <h2 style={{ ...S.h2, margin:0 }}>Aged Stock</h2>
+            <span style={{ fontSize:12, color:C.muted }}>{aged.length.toLocaleString()} items &gt;{agedThreshold}d · {fmt(agedValue)} listed</span>
+          </div>
+          {!aged.length && <p style={{ color:C.muted, fontSize:12 }}>No stock aged over {agedThreshold} days.</p>}
+          {aged.length>0 && ageBuckets.map((b,i)=>{
+            // Older brackets shade from yellow → red so the tail stands out.
+            const t = ageBuckets.length>1 ? i/(ageBuckets.length-1) : 0
+            const col = t<0.34?C.yellow:t<0.67?'#d9480f':C.red
             return (
-              <div key={p.id} style={{ padding:'6px 0', borderBottom:`1px solid ${C.border}` }}>
-                <div style={{ fontSize:14, color:days>90?C.red:C.yellow, fontWeight:500 }}>{p.title}</div>
-                <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>Listed {days} days · {fmt(p.listPrice)}</div>
+              <div key={b.label} style={{ marginBottom:8 }}>
+                <div style={{ display:'flex', justifyContent:'space-between', fontSize:12, marginBottom:3 }}>
+                  <span style={{ color:C.text }}>{b.label}</span>
+                  <span style={{ color:C.muted }}><strong style={{ color:C.text }}>{b.count.toLocaleString()}</strong> · {fmt(b.value)}</span>
+                </div>
+                <div style={{ height:10, background:C.bg, borderRadius:5, overflow:'hidden' }}>
+                  <div style={{ width:`${(b.count/maxBucket)*100}%`, height:'100%', background:col, borderRadius:5, minWidth:b.count?4:0 }} />
+                </div>
               </div>
             )
           })}
-          {aged.length>6 && <div style={{ fontSize:11, color:C.muted, marginTop:6 }}>+{aged.length-6} more aged over 60 days</div>}
           <div style={{ marginTop:14, borderTop:`1px solid ${C.border}`, paddingTop:12, display:'flex', gap:24, flexWrap:'wrap' }}>
             <div>
               <div style={{ fontSize:10, color:C.muted, marginBottom:4 }}>INVENTORY VALUE (at cost)</div>

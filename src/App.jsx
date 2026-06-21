@@ -157,6 +157,7 @@ export default function App() {
   const [aiSettings, setAiSettings] = useState(DEFAULT_AI_SETTINGS)
   const [footer, setFooter] = useState(DEFAULT_FOOTER)
   const [costing, setCosting] = useState({ labourRate: 60, adminPct: 10, adminMin: 5 })
+  const [inventory, setInventory] = useState({ agedThresholdDays: 60, ageBrackets: [90, 180, 365, 730, 1065] })
   const [cars, setCars] = useState([])
 
   // Name this window so the field app's "Open Admin" link returns to this tab
@@ -174,6 +175,7 @@ export default function App() {
       if (data?.settings?.aiDescription) setAiSettings(s => ({ ...s, ...data.settings.aiDescription }))
       if (data?.settings?.footer) setFooter(data.settings.footer)
       if (data?.settings?.costing) setCosting(s => ({ ...s, ...data.settings.costing }))
+      if (data?.settings?.inventory) setInventory(s => ({ ...s, ...data.settings.inventory }))
     })
     // Load cars
     sb.from('cars').select('*').eq('store_id', storeId).is('deleted_at', null).order('created_at', { ascending: false })
@@ -216,7 +218,7 @@ export default function App() {
         </div>
       </nav>
       <main style={S.main}>
-        {tab === 'dashboard' && <Dashboard parts={parts} costing={costing} />}
+        {tab === 'dashboard' && <Dashboard parts={parts} costing={costing} inventory={inventory} />}
         {tab === 'inventory' && (
           <Inventory
             parts={parts} cars={cars} storeId={storeId}

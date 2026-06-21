@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { C, S, APP_VERSION, DEFAULT_POSTAGE_TIERS } from '../lib/constants'
+import { C, S, APP_VERSION, DEFAULT_POSTAGE_TIERS, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS } from '../lib/constants'
 import { sb } from '../lib/supabase'
 import { buildSkuPreview, SKU_TOKENS, DEFAULT_SKU_TEMPLATE, DEFAULT_SKU_PAD } from '../lib/sku'
 import TeamAccess from './TeamAccess'
@@ -88,6 +88,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
   const [aiSettings, setAiSettings] = useState(DEFAULT_AI_SETTINGS)
   const [captureAssess, setCaptureAssess] = useState({ category: true, price: true })
   const [costing, setCosting] = useState({ labourRate: 60, adminPct: 10, adminMin: 5, baseCostPct: 25, handlingFee: 2, postageDefaultG: 1000, postageTiers: DEFAULT_POSTAGE_TIERS })
+  const [inventory, setInventory] = useState({ agedThresholdDays: DEFAULT_AGED_THRESHOLD_DAYS, ageBrackets: DEFAULT_AGE_BRACKETS })
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -230,6 +231,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
         if (data.settings.aiDescription) setAiSettings(s => ({ ...s, ...data.settings.aiDescription }))
         if (data.settings.captureAssess) setCaptureAssess(s => ({ ...s, ...data.settings.captureAssess }))
         if (data.settings.costing) setCosting(s => ({ ...s, ...data.settings.costing }))
+        if (data.settings.inventory) setInventory(s => ({ ...s, ...data.settings.inventory }))
         if (data.settings.shipAddress) setShipAddress(a => ({ ...a, ...data.settings.shipAddress }))
         if (data.settings.ebayLocationKey) setEbayLocationKey(data.settings.ebayLocationKey)
         if (data.settings.ebayUsername) setEbayUsername(data.settings.ebayUsername) // persisted — shows immediately
@@ -254,7 +256,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
     setSaving(true)
     try {
       const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const merged = { ...(current?.settings || {}), footer, aiDescription: aiSettings, captureAssess, costing }
+      const merged = { ...(current?.settings || {}), footer, aiDescription: aiSettings, captureAssess, costing, inventory }
       await sb.from('stores').update({ settings: merged }).eq('id', storeId)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
@@ -1529,6 +1531,39 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
               </div>
               <div style={{ fontSize: 12, color: C.muted, marginTop: 12 }}>The heaviest tier is used for anything over the top weight. Estimated postage = matching carrier rate + handling fee.</div>
             </div>
+          </Section>
+
+          <Section title="📦 Aged stock">
+            <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
+              Controls the Dashboard aged-stock report: when stock counts as "aged", and the age brackets the chart groups unsold stock into.
+            </p>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+              <div style={{ flex: '1 1 160px' }}>
+                <label style={S.label}>Aged after (days)</label>
+                <input type="number" style={S.input} value={inventory.agedThresholdDays} onChange={e => setInventory(s => ({ ...s, agedThresholdDays: e.target.value }))} />
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>Stock unsold longer than this is flagged aged.</div>
+              </div>
+            </div>
+            <label style={S.label}>Age brackets (days, ascending)</label>
+            <div style={{ marginTop: 6 }}>
+              {(inventory.ageBrackets || []).map((b, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                  <span style={{ fontSize: 12, color: C.muted, width: 56 }}>up to</span>
+                  <input type="number" style={{ ...S.input, width: 120 }} value={b}
+                    onChange={e => setInventory(s => ({ ...s, ageBrackets: s.ageBrackets.map((x, j) => j === i ? e.target.value : x) }))} />
+                  <span style={{ fontSize: 12, color: C.muted }}>days</span>
+                  <button type="button" style={{ ...S.btn('secondary'), padding: '6px 10px' }}
+                    onClick={() => setInventory(s => ({ ...s, ageBrackets: s.ageBrackets.filter((_, j) => j !== i) }))}>✕</button>
+                </div>
+              ))}
+              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                <button type="button" style={{ ...S.btn('secondary'), padding: '6px 12px' }}
+                  onClick={() => setInventory(s => ({ ...s, ageBrackets: [...(s.ageBrackets || []), 0].map(Number).sort((a, b) => a - b) }))}>+ Add bracket</button>
+                <button type="button" style={{ ...S.btn('secondary'), padding: '6px 12px' }}
+                  onClick={() => setInventory(s => ({ ...s, ageBrackets: DEFAULT_AGE_BRACKETS }))}>Reset to defaults</button>
+              </div>
+            </div>
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 12 }}>Anything older than the last bracket falls into an "older" group. Defaults: 90 · 180 · 365 · 730 · 1065 days.</div>
           </Section>
 
           <Section title="🤖 AI Description Template">
