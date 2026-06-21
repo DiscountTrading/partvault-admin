@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { C, S, fmt, pct, totalCost, postageCostFor, partEffectiveCost, bucketByAge, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS, CATEGORY_NAMES } from '../lib/constants'
 
 function StatCard({ label, value, sub, color }) {
@@ -11,10 +12,19 @@ function StatCard({ label, value, sub, color }) {
 }
 
 export default function Dashboard({ parts, costing, inventory, onDrill }) {
+  // Sales/P&L are shown for a selectable window (eBay reports last 90 days, so
+  // 90 is the default for a like-for-like comparison). 0 = all time.
+  const [periodDays, setPeriodDays] = useState(90)
+  const PERIODS = [[30,'30d'],[90,'90d'],[365,'12mo'],[0,'All']]
+
   const active = parts.filter(p=>!p.deletedAt)
   const inStock = active.filter(p=>p.status==='in_stock')
   const listed = active.filter(p=>p.status==='listed')
-  const sold = active.filter(p=>p.status==='sold')
+  const allSold = active.filter(p=>p.status==='sold')
+  // Restrict sold-derived figures to the selected period (by sold date).
+  const inPeriod = p => !periodDays || (p.soldDate && (Date.now()-new Date(p.soldDate)) <= periodDays*86400000)
+  const sold = allSold.filter(inPeriod)
+  const periodLabel = periodDays ? `last ${periodDays===365?'12 months':periodDays+' days'}` : 'all time'
   // Revenue includes the shipping the buyer paid (income), not just the item price.
   const soldRev = sold.reduce((a,p)=>a+(+p.soldPrice||+p.list_price||0)+(+p.shippingCharged||0),0)
   // COGS uses recorded costs where present, else a full estimate (base cost +
@@ -61,12 +71,21 @@ export default function Dashboard({ parts, costing, inventory, onDrill }) {
     <div>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12, paddingBottom:10, borderBottom:`1px solid ${C.border}` }}>
         <h2 style={{ ...S.h1 }}>📊 Dashboard</h2>
+        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+          <span style={{ fontSize:12, color:C.muted }}>Sales period:</span>
+          <div style={{ display:'inline-flex', border:`1px solid ${C.border}`, borderRadius:8, overflow:'hidden' }}>
+            {PERIODS.map(([d,lbl])=>(
+              <button key={d} type="button" onClick={()=>setPeriodDays(d)}
+                style={{ padding:'5px 12px', fontSize:12, fontWeight:600, border:'none', cursor:'pointer', background: periodDays===d?C.accent:'#fff', color: periodDays===d?'#fff':C.muted }}>{lbl}</button>
+            ))}
+          </div>
+        </div>
       </div>
       <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:14, marginBottom:12 }}>
         <StatCard label="Total Parts" value={active.length} sub={`${inStock.length} in stock`} />
         <StatCard label="Listed on eBay" value={listed.length} color={C.accent} />
-        <StatCard label="Total Sold" value={sold.length} color={C.blue} sub="orders" />
-        <StatCard label="Total Sales" value={fmt(soldRev)} color={C.green} sub="item + shipping (matches eBay)" />
+        <StatCard label="Sold" value={sold.length} color={C.blue} sub={periodLabel} />
+        <StatCard label="Sales" value={fmt(soldRev)} color={C.green} sub={`item + shipping · ${periodLabel}`} />
         <StatCard label="Gross Profit" value={fmt(gross)} color={margin>30?C.green:C.yellow} sub={pct(margin)+' margin'+(cogsEstimated?' · incl. est. cost':'')} />
       </div>
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, marginBottom:12 }}>
@@ -134,7 +153,7 @@ export default function Dashboard({ parts, costing, inventory, onDrill }) {
         </div>
       </div>
       <div style={{ ...S.card, padding:18 }}>
-        <h2 style={{ ...S.h2, marginBottom:10 }}>P&L Summary <span style={{ fontWeight:400, fontSize:12, color:C.muted }}>· sold to date{cogsEstimated?' (cost incl. estimates)':''}</span></h2>
+        <h2 style={{ ...S.h2, marginBottom:10 }}>P&L Summary <span style={{ fontWeight:400, fontSize:12, color:C.muted }}>· {periodLabel}{cogsEstimated?' · cost incl. estimates':''}</span></h2>
         <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:20 }}>
           {[['Total Revenue',fmt(soldRev),C.text],['Total COGS',fmt(soldCogs),C.red],['Gross Profit',fmt(gross),C.green],['Gross Margin',pct(margin),margin>30?C.green:C.yellow]].map(([l,v,col])=>(
             <div key={l}>
