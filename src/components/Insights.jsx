@@ -56,7 +56,7 @@ function Card({ label, value, sub }) {
   )
 }
 
-export default function Insights({ storeId }) {
+export default function Insights({ storeId, initial }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshingMkt, setRefreshingMkt] = useState(false)
@@ -80,6 +80,15 @@ export default function Insights({ storeId }) {
   }
   const [segment, setSegment] = useState('all')
   const [filters, setFilters] = useState({})        // colKey -> value (string | {min,max})
+
+  // Drill-down from the Dashboard (e.g. an aged-stock bracket): apply the passed
+  // column filters and focus the relevant segment. Re-runs when a new _ts arrives.
+  useEffect(() => {
+    if (!initial) return
+    setSegment(initial.segment || 'all')
+    setFilters(initial.filters || {})
+    if (initial.sort) setSort(initial.sort)
+  }, [initial?._ts])
   const [openFilter, setOpenFilter] = useState(null) // colKey whose popover is open
   const [sort, setSort] = useState({ key: 'days_on_shelf', dir: 'desc' })
   const [views, setViews] = useState([])

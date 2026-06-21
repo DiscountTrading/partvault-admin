@@ -82,7 +82,7 @@ function StatCard({ label, value, color, sub }) {
   )
 }
 
-export default function Settings({ profile, storeId, onSignOut, refreshStores }) {
+export default function Settings({ profile, storeId, onSignOut, refreshStores, onSettingsSaved }) {
   const [tab, setTab] = useState('account')
   const [footer, setFooter] = useState(DEFAULT_FOOTER)
   const [aiSettings, setAiSettings] = useState(DEFAULT_AI_SETTINGS)
@@ -258,6 +258,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores })
       const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
       const merged = { ...(current?.settings || {}), footer, aiDescription: aiSettings, captureAssess, costing, inventory }
       await sb.from('stores').update({ settings: merged }).eq('id', storeId)
+      onSettingsSaved?.(merged) // let the app refresh costing/inventory-driven views live
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (e) {

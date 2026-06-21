@@ -158,7 +158,11 @@ export default function App() {
   const [footer, setFooter] = useState(DEFAULT_FOOTER)
   const [costing, setCosting] = useState({ labourRate: 60, adminPct: 10, adminMin: 5 })
   const [inventory, setInventory] = useState({ agedThresholdDays: 60, ageBrackets: [90, 180, 365, 730, 1065] })
+  const [insightsInit, setInsightsInit] = useState(null) // drill-down filter from Dashboard
   const [cars, setCars] = useState([])
+
+  // Jump to Insights pre-filtered (e.g. clicking an aged-stock bracket).
+  const drillToInsights = (init) => { setInsightsInit({ ...init, _ts: Date.now() }); setTab('insights') }
 
   // Name this window so the field app's "Open Admin" link returns to this tab
   useEffect(() => { window.name = 'partvault-admin' }, [])
@@ -218,7 +222,7 @@ export default function App() {
         </div>
       </nav>
       <main style={S.main}>
-        {tab === 'dashboard' && <Dashboard parts={parts} costing={costing} inventory={inventory} />}
+        {tab === 'dashboard' && <Dashboard parts={parts} costing={costing} inventory={inventory} onDrill={drillToInsights} />}
         {tab === 'inventory' && (
           <Inventory
             parts={parts} cars={cars} storeId={storeId}
@@ -228,8 +232,9 @@ export default function App() {
           />
         )}
         {tab === 'ebay' && <Ebay storeId={storeId} onChanged={smartRefetch} />}
-        {tab === 'insights' && <Insights storeId={storeId} />}
-        {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores} />}
+        {tab === 'insights' && <Insights storeId={storeId} initial={insightsInit} />}
+        {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores}
+          onSettingsSaved={s => { if (s?.costing) setCosting(c => ({ ...c, ...s.costing })); if (s?.inventory) setInventory(i => ({ ...i, ...s.inventory })) }} />}
       </main>
       {toast && (
         <div style={{ position: 'fixed', bottom: 24, right: 24, background: toast.color, color: '#fff', padding: '12px 22px', borderRadius: 10, fontSize: 14, fontWeight: 600, zIndex: 1000, boxShadow: '0 8px 30px rgba(0,0,0,0.2)' }}>

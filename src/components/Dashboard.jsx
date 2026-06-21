@@ -10,7 +10,7 @@ function StatCard({ label, value, sub, color }) {
   )
 }
 
-export default function Dashboard({ parts, costing, inventory }) {
+export default function Dashboard({ parts, costing, inventory, onDrill }) {
   const active = parts.filter(p=>!p.deletedAt)
   const inStock = active.filter(p=>p.status==='in_stock')
   const listed = active.filter(p=>p.status==='listed')
@@ -39,7 +39,7 @@ export default function Dashboard({ parts, costing, inventory }) {
   const stockVal = [...inStock,...listed].reduce((a,p)=>a+partEffectiveCost(p, costing||{}).value,0)
 
   const catBreak = CATEGORY_NAMES.map(cat=>({ cat, count:active.filter(p=>p.category===cat).length }))
-    .filter(x=>x.count>0).sort((a,b)=>b.count-a.count).slice(0,8)
+    .filter(x=>x.count>0).sort((a,b)=>b.count-a.count).slice(0,6)
 
   // Age of a still-unsold part. The eBay sync doesn't set listed_date, so fall
   // back to acquired_date (the listing's start) then created_at, else nothing.
@@ -59,28 +59,28 @@ export default function Dashboard({ parts, costing, inventory }) {
 
   return (
     <div>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20, paddingBottom:16, borderBottom:`1px solid ${C.border}` }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12, paddingBottom:10, borderBottom:`1px solid ${C.border}` }}>
         <h2 style={{ ...S.h1 }}>📊 Dashboard</h2>
       </div>
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:20, marginBottom:20 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:14, marginBottom:12 }}>
         <StatCard label="Total Parts" value={active.length} sub={`${inStock.length} in stock`} />
         <StatCard label="Listed on eBay" value={listed.length} color={C.accent} />
         <StatCard label="Total Sold" value={sold.length} color={C.blue} sub="orders" />
         <StatCard label="Total Sales" value={fmt(soldRev)} color={C.green} sub="item + shipping (matches eBay)" />
         <StatCard label="Gross Profit" value={fmt(gross)} color={margin>30?C.green:C.yellow} sub={pct(margin)+' margin'+(cogsEstimated?' · incl. est. cost':'')} />
       </div>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:20, marginBottom:20 }}>
-        <div style={S.card}>
-          <h2 style={S.h2}>Stock by Category</h2>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, marginBottom:12 }}>
+        <div style={{ ...S.card, padding:18 }}>
+          <h2 style={{ ...S.h2, marginBottom:10 }}>Stock by Category</h2>
           {catBreak.map(({cat,count})=>(
-            <div key={cat} style={{ display:'flex', justifyContent:'space-between', padding:'8px 0', borderBottom:`1px solid ${C.border}`, fontSize:14 }}>
+            <div key={cat} style={{ display:'flex', justifyContent:'space-between', padding:'4px 0', borderBottom:`1px solid ${C.border}`, fontSize:13 }}>
               <span>{cat}</span>
               <span style={{ color:C.accent, fontWeight:700 }}>{count}</span>
             </div>
           ))}
           {!catBreak.length && <p style={{ color:C.muted, fontSize:12 }}>No parts yet.</p>}
         </div>
-        <div style={S.card}>
+        <div style={{ ...S.card, padding:18 }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:14 }}>
             <h2 style={{ ...S.h2, margin:0 }}>Aged Stock</h2>
             <span style={{ fontSize:12, color:C.muted }}>{aged.length.toLocaleString()} items &gt;{agedThreshold}d · {fmt(agedValue)} listed</span>
@@ -90,8 +90,14 @@ export default function Dashboard({ parts, costing, inventory }) {
             // Older brackets shade from yellow → red so the tail stands out.
             const t = ageBuckets.length>1 ? i/(ageBuckets.length-1) : 0
             const col = t<0.34?C.yellow:t<0.67?'#d9480f':C.red
+            const drill = () => onDrill?.({
+              segment:'all',
+              filters:{ days_on_shelf:{ min:b.min, max:b.max==null?undefined:b.max } },
+              sort:{ key:'days_on_shelf', dir:'desc' },
+            })
             return (
-              <div key={b.label} style={{ marginBottom:8 }}>
+              <div key={b.label} onClick={b.count?drill:undefined} title={b.count?`View ${b.count} items in ${b.label} in Insights`:undefined}
+                style={{ marginBottom:6, cursor:b.count?'pointer':'default' }}>
                 <div style={{ display:'flex', justifyContent:'space-between', fontSize:12, marginBottom:3 }}>
                   <span style={{ color:C.text }}>{b.label}</span>
                   <span style={{ color:C.muted }}><strong style={{ color:C.text }}>{b.count.toLocaleString()}</strong> · {fmt(b.value)}</span>
@@ -102,33 +108,31 @@ export default function Dashboard({ parts, costing, inventory }) {
               </div>
             )
           })}
-          <div style={{ marginTop:14, borderTop:`1px solid ${C.border}`, paddingTop:12, display:'flex', gap:24, flexWrap:'wrap' }}>
+          {aged.length>0 && <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>Click a band to see those parts in Insights.</div>}
+          <div style={{ marginTop:10, borderTop:`1px solid ${C.border}`, paddingTop:10, display:'flex', gap:20, flexWrap:'wrap' }}>
             <div>
-              <div style={{ fontSize:10, color:C.muted, marginBottom:4 }}>INVENTORY VALUE (at cost)</div>
-              <div style={{ fontSize:22, fontWeight:700, color:C.blue }}>{fmt(stockVal)}</div>
+              <div style={{ fontSize:10, color:C.muted, marginBottom:2 }}>INVENTORY VALUE (at cost)</div>
+              <div style={{ fontSize:18, fontWeight:700, color:C.blue }}>{fmt(stockVal)}</div>
             </div>
             <div>
-              <div style={{ fontSize:10, color:C.muted, marginBottom:4 }}>SHIPPING INCOME</div>
-              <div style={{ fontSize:22, fontWeight:700, color:C.green }}>{fmt(shipInc)}</div>
-              <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>buyer-paid (from eBay)</div>
+              <div style={{ fontSize:10, color:C.muted, marginBottom:2 }}>SHIPPING INCOME</div>
+              <div style={{ fontSize:18, fontWeight:700, color:C.green }}>{fmt(shipInc)}</div>
             </div>
             <div>
-              <div style={{ fontSize:10, color:C.muted, marginBottom:4 }}>SHIPPING COST</div>
-              <div style={{ fontSize:22, fontWeight:700, color:C.yellow }}>{fmt(shipCost)}</div>
-              <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>{shipCostEstimated ? 'postage paid (incl. est.)' : 'postage paid'}</div>
+              <div style={{ fontSize:10, color:C.muted, marginBottom:2 }}>SHIPPING COST</div>
+              <div style={{ fontSize:18, fontWeight:700, color:C.yellow }}>{fmt(shipCost)}</div>
             </div>
             <div>
-              <div style={{ fontSize:10, color:C.muted, marginBottom:4 }}>NET SHIPPING</div>
-              <div style={{ fontSize:22, fontWeight:700, color: netShip>=0?C.green:C.red }}>{fmt(netShip)}</div>
-              <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>income − cost</div>
+              <div style={{ fontSize:10, color:C.muted, marginBottom:2 }}>NET SHIPPING</div>
+              <div style={{ fontSize:18, fontWeight:700, color: netShip>=0?C.green:C.red }}>{fmt(netShip)}</div>
             </div>
           </div>
         </div>
       </div>
-      <div style={S.card}>
-        <h2 style={S.h2}>P&L Summary</h2>
+      <div style={{ ...S.card, padding:18 }}>
+        <h2 style={{ ...S.h2, marginBottom:10 }}>P&L Summary <span style={{ fontWeight:400, fontSize:12, color:C.muted }}>· sold to date{cogsEstimated?' (cost incl. estimates)':''}</span></h2>
         <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:20 }}>
-          {[['Total Revenue',fmt(soldRev),C.white],['Total COGS',fmt(soldCogs),C.red],['Gross Profit',fmt(gross),C.green],['Gross Margin',pct(margin),margin>30?C.green:C.yellow]].map(([l,v,col])=>(
+          {[['Total Revenue',fmt(soldRev),C.text],['Total COGS',fmt(soldCogs),C.red],['Gross Profit',fmt(gross),C.green],['Gross Margin',pct(margin),margin>30?C.green:C.yellow]].map(([l,v,col])=>(
             <div key={l}>
               <div style={{ ...S.statLbl, marginBottom:4 }}>{l}</div>
               <div style={{ fontSize:22, fontWeight:700, color:col }}>{v}</div>
