@@ -99,7 +99,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   const [footer, setFooter] = useState(DEFAULT_FOOTER)
   const [aiSettings, setAiSettings] = useState(DEFAULT_AI_SETTINGS)
   const [captureAssess, setCaptureAssess] = useState({ category: true, price: true })
-  const [costing, setCosting] = useState({ labourRate: 60, adminPct: 10, adminMin: 5, baseCostPct: 25, handlingFee: 2, postageDefaultG: 1000, postageTiers: DEFAULT_POSTAGE_TIERS, labourMode: 'fixed', adminMode: 'percent', adminMinMode: 'fixed' })
+  const [costing, setCosting] = useState({ labourRate: 60, adminPct: 10, adminMin: 5, baseCostPct: 25, handlingFee: 2, postageDefaultG: 1000, postageTiers: DEFAULT_POSTAGE_TIERS, labourMode: 'fixed', adminMode: 'percent', adminMinMode: 'fixed', baseCostMode: 'percent' })
   const [inventory, setInventory] = useState({ agedThresholdDays: DEFAULT_AGED_THRESHOLD_DAYS, ageBrackets: DEFAULT_AGE_BRACKETS })
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -1506,11 +1506,14 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
             <div style={{ marginTop: 22, paddingTop: 18, borderTop: `1px solid ${C.border}` }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>🧱 Base cost (fallback)</div>
               <p style={{ fontSize: 13, color: C.muted, marginBottom: 14, lineHeight: 1.6 }}>
-                When a part has <em>no</em> cost data at all — not linked to a car and no costs entered — we assume a base part cost as a % of its sale price, plus the estimated delivery cost below. This gives businesses with no cost history a realistic starting cost base (and stops the Dashboard showing fake 100% margins). The moment you link a car or enter any real cost, that wins over this fallback.
+                When a part has <em>no</em> cost data at all — not linked to a car and no costs entered — we assume a base part cost (a % of its sale price or a fixed $), plus the estimated delivery cost below. This gives businesses with no cost history a realistic starting cost base (and stops the Dashboard showing fake 100% margins). The moment you link a car or enter any real cost, that wins over this fallback.
               </p>
               <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                <div style={{ flex: '1 1 140px' }}>
-                  <label style={S.label}>Base cost (% of sale)</label>
+                <div style={{ flex: '1 1 160px' }}>
+                  <label style={{ ...S.label, display: 'flex', alignItems: 'center' }}>
+                    {(costing.baseCostMode === 'fixed') ? 'Base cost ($/part)' : 'Base cost (% of sale)'}
+                    <ModeToggle mode={costing.baseCostMode || 'percent'} onChange={m => setCosting(s => ({ ...s, baseCostMode: m }))} opts={[['percent', '%'], ['fixed', '$']]} />
+                  </label>
                   <input type="number" style={S.input} value={costing.baseCostPct} onChange={e => setCosting(s => ({ ...s, baseCostPct: e.target.value }))} />
                   <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>Set 0 to disable the fallback.</div>
                 </div>

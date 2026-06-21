@@ -1,4 +1,4 @@
-export const APP_VERSION = '3.14.16'
+export const APP_VERSION = '3.14.17'
 
 export const C = {
   bg:'#f5f4f0', panel:'#edeae3', card:'#ffffff', border:'#ddd9d0',
@@ -150,8 +150,12 @@ export const estimateCostBasis = (p, costing = {}, carPrice = 0, carPartsValue =
   const adminMin = +costing.adminMin || 0
   const carShare = (carPrice > 0 && carPartsValue > 0) ? carPrice * (price / carPartsValue) : 0
   const manualAcq = +p.costs?.acquisition || 0
-  const baseCostPct = costing.baseCostPct == null || costing.baseCostPct === '' ? DEFAULT_BASE_COST_PCT : +costing.baseCostPct || 0
-  const baseCost = (carShare === 0 && manualAcq === 0 && baseCostPct > 0) ? price * baseCostPct / 100 : 0
+  const baseCostVal = costing.baseCostPct == null || costing.baseCostPct === '' ? DEFAULT_BASE_COST_PCT : +costing.baseCostPct || 0
+  // Base cost only applies when there's no other acquisition signal; it's either a
+  // % of sale price or a fixed $ per part (costing.baseCostMode).
+  const baseCost = (carShare === 0 && manualAcq === 0 && baseCostVal > 0)
+    ? (costing.baseCostMode === 'fixed' ? baseCostVal : price * baseCostVal / 100)
+    : 0
   // Each of labour / admin / admin-minimum can be a % of sale price or a fixed $.
   const labour = (costing.labourMode === 'percent')
     ? price * labourRate / 100
