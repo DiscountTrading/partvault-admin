@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.32'
+const EDGE_FN_VERSION         = '3.14.33'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -1184,25 +1184,40 @@ async function handleRequest(req: Request): Promise<Response> {
       const startDate = new Date(Date.now() - days * 86400000)
       const { token } = await getToken()
       const headers = { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU', 'Accept': 'application/json' }
-      const filter = `transactionDate:[${startDate.toISOString()}..${new Date().toISOString()}],transactionType:{SALE}`
+      const dateRange = `transactionDate:[${startDate.toISOString()}..${new Date().toISOString()}]`
 
       const startedAt = Date.now()
-      let offset = 0, total = 0
       const feeByOrder: Record<string, number> = {}
-      do {
-        const url = `https://apiz.ebay.com/sell/finances/v1/transaction?filter=${encodeURIComponent(filter)}&limit=200&offset=${offset}`
-        const r = await fetch(url, { headers })
-        if (!r.ok) { const t = await r.text(); throw new Error(`getTransactions ${r.status}: ${t.slice(0, 300)}`) }
-        const d = await r.json()
-        total = +d.total || 0
-        for (const tx of (d.transactions ?? [])) {
-          if (tx.transactionType !== 'SALE') continue
-          const oid = tx.orderId
-          const fee = +tx.totalFeeAmount?.value || 0
-          if (oid && fee) feeByOrder[oid] = (feeByOrder[oid] || 0) + fee
-        }
-        offset += 200
-      } while (offset < total && offset < 5000 && Date.now() - startedAt < 60000)
+      let saleFees = 0, otherFees = 0, unattributed = 0
+
+      // Resolve an order id from a transaction: direct field, else its references.
+      const orderIdOf = (tx: any): string | undefined =>
+        tx.orderId || (tx.references ?? []).find((r: any) => r.referenceType === 'ORDER_ID')?.referenceId
+
+      // eBay splits selling costs across two transaction types: SALE (final value
+      // fee, fixed fee, international/regulatory) and NON_SALE_CHARGE (promoted
+      // listing fees, etc.). Both must be summed to match Seller Hub's total.
+      for (const txType of ['SALE', 'NON_SALE_CHARGE']) {
+        const filter = `${dateRange},transactionType:{${txType}}`
+        let offset = 0, total = 0
+        do {
+          const url = `https://apiz.ebay.com/sell/finances/v1/transaction?filter=${encodeURIComponent(filter)}&limit=200&offset=${offset}`
+          const r = await fetch(url, { headers })
+          if (!r.ok) { const t = await r.text(); throw new Error(`getTransactions ${r.status}: ${t.slice(0, 300)}`) }
+          const d = await r.json()
+          total = +d.total || 0
+          for (const tx of (d.transactions ?? [])) {
+            const oid = orderIdOf(tx)
+            // SALE fee is in totalFeeAmount; a NON_SALE_CHARGE's fee is its amount.
+            const fee = txType === 'SALE' ? (+tx.totalFeeAmount?.value || 0) : (+tx.amount?.value || 0)
+            if (!fee) continue
+            if (txType === 'SALE') saleFees += fee; else otherFees += fee
+            if (oid) feeByOrder[oid] = (feeByOrder[oid] || 0) + fee
+            else unattributed += fee
+          }
+          offset += 200
+        } while (offset < total && offset < 5000 && Date.now() - startedAt < 60000)
+      }
 
       // Attribute each order's fee to its part(s), split by sale price.
       let updated = 0, ordersMatched = 0, feeTotal = 0
@@ -1223,7 +1238,7 @@ async function handleRequest(req: Request): Promise<Response> {
       }
 
       const r2 = (n: number) => Math.round(n * 100) / 100
-      return json({ ok: true, version: EDGE_FN_VERSION, days, feeTotal: r2(feeTotal), ordersWithFees: Object.keys(feeByOrder).length, ordersMatched, updated })
+      return json({ ok: true, version: EDGE_FN_VERSION, days, feeTotal: r2(feeTotal), saleFees: r2(saleFees), otherFees: r2(otherFees), unattributed: r2(unattributed), ordersWithFees: Object.keys(feeByOrder).length, ordersMatched, updated })
     }
 
     if (action === 'sync_status') {
