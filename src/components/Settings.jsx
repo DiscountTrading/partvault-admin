@@ -812,6 +812,26 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     setSyncingAll(false)
   }
 
+  // Skips listing import — just sold orders → fees → reconcile. Fast (~30s).
+  // Use when listings are already up to date and you just need financials current.
+  const quickSync = async () => {
+    setSyncingAll(true)
+    try {
+      setSyncPhase('1/3 · Importing sold orders…')
+      const so = await runSoldOrders(120)
+      setSyncPhase(`1/3 · Sold orders: ${so.created} new, ${so.updated} updated`)
+      setSyncPhase('2/3 · Importing eBay fees…')
+      const f = await runFees(120)
+      setSyncPhase(`2/3 · eBay fees: $${f.feeTotal?.toFixed(2)} across ${f.ordersMatched} orders`)
+      setSyncPhase('3/3 · Reconciling with eBay…')
+      await runReconcile()
+      setSyncPhase('✓ Quick sync complete')
+    } catch (e) {
+      setSyncPhase(`Sync stopped: ${e.message}`)
+    }
+    setSyncingAll(false)
+  }
+
   const retryFailed = async () => {
     if (!reconcileResult?.failedItems?.length) return
     setRetrying(true)
@@ -2020,9 +2040,14 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                 </div>
               )}
 
-              <button style={{ ...S.btn('primary'), width: '100%', marginBottom: syncPhase ? 6 : 12, opacity: (syncingAll || !ebayConnected) ? 0.6 : 1 }} onClick={syncEverything} disabled={syncingAll || importing || backfilling || reconciling || !ebayConnected}>
-                {syncingAll ? '⏳ Syncing with eBay…' : '🔄 Sync with eBay'}
-              </button>
+              <div style={{ display: 'flex', gap: 8, marginBottom: syncPhase ? 6 : 12 }}>
+                <button style={{ ...S.btn('primary'), flex: 1, opacity: (syncingAll || !ebayConnected) ? 0.6 : 1 }} onClick={syncEverything} disabled={syncingAll || importing || backfilling || reconciling || !ebayConnected}>
+                  {syncingAll ? '⏳ Syncing…' : '🔄 Sync with eBay'}
+                </button>
+                <button style={{ ...S.btn('secondary'), flex: 1, opacity: (syncingAll || !ebayConnected) ? 0.6 : 1 }} onClick={quickSync} disabled={syncingAll || importing || backfilling || reconciling || !ebayConnected} title="Skip listing import — just sold orders, fees & reconcile (~30s)">
+                  ⚡ Quick Sync
+                </button>
+              </div>
               {syncPhase && <div style={{ fontSize: 12, color: syncPhase.startsWith('✓') ? C.green : C.muted, marginBottom: 8 }}>{syncPhase}</div>}
               <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
                 <span>Import: {fmtLastRun(lastRun.import)}</span>
