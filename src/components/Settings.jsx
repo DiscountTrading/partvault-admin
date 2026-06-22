@@ -813,21 +813,38 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   }
 
   // Skips listing import — just sold orders → fees → reconcile. Fast (~30s).
-  // Use when listings are already up to date and you just need financials current.
   const quickSync = async () => {
     setSyncingAll(true)
+    setImportJob({ status: 'running', current_item: 'Importing sold orders…', total_items: 100, imported: 0, skipped: 0, failed: 0 })
+    setDisplayProgress(5)
+    setRpm(60)
     try {
       setSyncPhase('1/3 · Importing sold orders…')
       const so = await runSoldOrders(120)
-      setSyncPhase(`1/3 · Sold orders: ${so.created} new, ${so.updated} updated`)
+      setDisplayProgress(33)
+      setRpm(80)
+      const soMsg = `Sold orders: ${so.created ?? 0} new, ${so.updated ?? 0} updated`
+      setSyncPhase(`1/3 · ${soMsg}`)
+      setImportJob(j => ({ ...j, current_item: 'Importing eBay fees…', imported: so.created ?? 0, skipped: so.updated ?? 0 }))
       setSyncPhase('2/3 · Importing eBay fees…')
+      setDisplayProgress(50)
       const f = await runFees(120)
-      setSyncPhase(`2/3 · eBay fees: $${f.feeTotal?.toFixed(2)} across ${f.ordersMatched} orders`)
+      setDisplayProgress(66)
+      setRpm(70)
+      const fMsg = `Fees: $${(f.feeTotal ?? 0).toFixed(2)} across ${f.ordersMatched ?? 0} orders`
+      setSyncPhase(`2/3 · ${fMsg}`)
+      setImportJob(j => ({ ...j, current_item: 'Reconciling with eBay…' }))
       setSyncPhase('3/3 · Reconciling with eBay…')
+      setDisplayProgress(80)
+      setRpm(50)
       await runReconcile()
+      setDisplayProgress(100)
+      setRpm(0)
+      setImportJob(j => ({ ...j, status: 'completed', current_item: `✓ ${soMsg} · ${fMsg}` }))
       setSyncPhase('✓ Quick sync complete')
     } catch (e) {
       setSyncPhase(`Sync stopped: ${e.message}`)
+      setImportJob(j => ({ ...j, status: 'failed', current_item: e.message }))
     }
     setSyncingAll(false)
   }
