@@ -825,7 +825,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       setRpm(80)
       const soMsg = `Sold orders: ${so.created ?? 0} new, ${so.updated ?? 0} updated`
       setSyncPhase(`1/3 · ${soMsg}`)
-      setImportJob(j => ({ ...j, current_item: 'Importing eBay fees…', imported: so.created ?? 0, skipped: so.updated ?? 0 }))
+      setImportJob(j => ({ ...j, current_item: 'Importing eBay fees…' }))
       setSyncPhase('2/3 · Importing eBay fees…')
       setDisplayProgress(50)
       const f = await runFees(120)
@@ -1140,7 +1140,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   const importProgress = importJob ? (() => {
     const total = importJob.total_items || 0
     const done = (importJob.imported || 0) + (importJob.skipped || 0) + (importJob.failed || 0)
-    return total > 0 ? Math.round((done / total) * 100) : 0
+    return total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0
   })() : 0
 
   // Smooth display progress: trickles forward between real updates so the bar
