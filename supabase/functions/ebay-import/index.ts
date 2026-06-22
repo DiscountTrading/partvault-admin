@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.35'
+const EDGE_FN_VERSION         = '3.14.36'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -568,6 +568,26 @@ async function handleRequest(req: Request): Promise<Response> {
       headers: { ...CORS, 'Content-Type': 'application/json' },
     })
 
+  // One summary row per eBay sync into the existing audit_log (table_name 'sync',
+  // action 'SYNC'). Shows in the Activity view as a single readable line instead
+  // of the hundreds of per-row part/listing changes the triggers already record.
+  // Best-effort: a logging failure must never fail the sync itself.
+  const logSyncEvent = async (sid: string, summary: string, data: Record<string, unknown> = {}) => {
+    try {
+      await sb.from('audit_log').insert({
+        id:         crypto.randomUUID(),
+        store_id:   sid,
+        table_name: 'sync',
+        record_id:  crypto.randomUUID(),
+        action:     'SYNC',
+        old_data:   null,
+        new_data:   { summary, ...data },
+        changed_by: null, // unattended → shows as 'system' in the Activity view
+        changed_at: new Date().toISOString(),
+      })
+    } catch (_) { /* logging is best-effort */ }
+  }
+
   // ── ACTIONS ─────────────────────────────────────────────────────────────────
 
   try {
@@ -780,6 +800,13 @@ async function handleRequest(req: Request): Promise<Response> {
       }
     }
 
+    // Record a single summary line for a manual (client-driven) sync into the
+    // audit log. The client passes the composed summary + totals on completion.
+    if (action === 'log_sync') {
+      await logSyncEvent(storeId, body.summary || 'eBay sync', { kind: 'manual', ...(body.data || {}) })
+      return json({ ok: true })
+    }
+
     // Server-side nightly orchestrator (driven by pg_cron). Advances one store's
     // daily run: import → sold orders (backfill) → reconcile. Resumable: state
     // lives in sync_runs, so a later tick picks up exactly where this left off.
@@ -810,6 +837,8 @@ async function handleRequest(req: Request): Promise<Response> {
       const BUDGET_MS = 110 * 1000
       let phase: string = run.phase
       let jobIdLocal: string | null = run.job_id
+      // Capture each phase's result so the 'done' summary can report real totals.
+      let bRes: any = null, fRes: any = null, recRes: any = null
 
       try {
         while (Date.now() - started < BUDGET_MS && phase !== 'done') {
@@ -827,22 +856,39 @@ async function handleRequest(req: Request): Promise<Response> {
               if (c.isComplete || c.status === 'completed') { phase = 'backfill'; await save({ phase }) }
             }
           } else if (phase === 'backfill') {
-            const b = await selfCall({ action: 'import_sold_orders', storeId, days: 120 })
+            bRes = await selfCall({ action: 'import_sold_orders', storeId, days: 120 })
             phase = 'fees'
-            await save({ phase, detail: `sold orders: ${b.created ?? 0} new, ${b.updated ?? 0} updated` })
+            await save({ phase, detail: `sold orders: ${bRes.created ?? 0} new, ${bRes.updated ?? 0} updated` })
           } else if (phase === 'fees') {
-            const f = await selfCall({ action: 'import_fees', storeId, days: 120 })
+            fRes = await selfCall({ action: 'import_fees', storeId, days: 120 })
             phase = 'reconcile'
-            await save({ phase, detail: `eBay fees: $${f.feeTotal ?? 0} across ${f.ordersMatched ?? 0} orders` })
+            await save({ phase, detail: `eBay fees: $${fRes.feeTotal ?? 0} across ${fRes.ordersMatched ?? 0} orders` })
           } else if (phase === 'reconcile') {
-            const rec = await selfCall({ action: 'reconcile', storeId })
+            recRes = await selfCall({ action: 'reconcile', storeId })
             phase = 'done'
-            await save({ phase, done: true, detail: `done · ${rec.missingCount ?? 0} missing, ${rec.staleCount ?? 0} stale on eBay` })
+            await save({ phase, done: true, detail: `done · ${recRes.missingCount ?? 0} missing, ${recRes.staleCount ?? 0} stale on eBay` })
           }
         }
       } catch (e) {
         await save({ detail: `error in ${phase}: ${(e as Error).message}` })
+        await logSyncEvent(storeId, `Nightly sync failed in ${phase}: ${(e as Error).message}`, { kind: 'nightly', ok: false, phase })
         return json({ phase, error: (e as Error).message }, 200)
+      }
+      // Record one summary line per completed nightly run.
+      if (phase === 'done') {
+        const { data: jobRow } = jobIdLocal
+          ? await sb.from('jobs').select('result_summary, failed_items').eq('id', jobIdLocal).maybeSingle()
+          : { data: null as any }
+        const imp = jobRow?.result_summary?.imported ?? 0
+        const summary = `Nightly sync ✓ · ${imp} listings imported · `
+          + `${bRes?.created ?? 0} sold new/${bRes?.updated ?? 0} updated · `
+          + `$${fRes?.feeTotal ?? 0} fees · `
+          + `${recRes?.missingCount ?? 0} missing, ${recRes?.staleCount ?? 0} stale`
+        await logSyncEvent(storeId, summary, {
+          kind: 'nightly', ok: true,
+          listingsImported: imp, soldNew: bRes?.created ?? 0, soldUpdated: bRes?.updated ?? 0,
+          feeTotal: fRes?.feeTotal ?? 0, missing: recRes?.missingCount ?? 0, stale: recRes?.staleCount ?? 0,
+        })
       }
       return json({ phase, done: phase === 'done' })
     }

@@ -10,6 +10,7 @@ const ACTION_STYLE = {
   member_added:   { label: 'Member +', color: C.green },
   member_removed: { label: 'Member −', color: C.red },
   member_updated: { label: 'Access',   color: C.blue },
+  sync:           { label: 'Sync',     color: C.accent },
 }
 
 function Section({ title, action, children }) {
@@ -29,16 +30,23 @@ export default function Activity({ storeId }) {
   const [loading, setLoading] = useState(true)
   const [noAccess, setNoAccess] = useState(false)
   const [userFilter, setUserFilter] = useState('')
+  const [search, setSearch] = useState('')
 
-  const load = async () => {
+  const load = async (term = search) => {
     setLoading(true); setNoAccess(false)
-    const { data, error } = await sb.rpc('get_audit_log', { p_store_id: storeId, p_limit: 300 })
+    const { data, error } = await sb.rpc('get_audit_log', { p_store_id: storeId, p_limit: 300, p_search: term || null })
     if (error) { setNoAccess(true); setLoading(false); return }
     setRows(data || [])
     setLoading(false)
   }
 
-  useEffect(() => { load() }, [storeId])
+  useEffect(() => { load('') }, [storeId])
+  // Debounce server-side search so typing doesn't fire a query per keystroke.
+  useEffect(() => {
+    const id = setTimeout(() => load(search), 300)
+    return () => clearTimeout(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search])
 
   const users = [...new Set(rows.map(r => r.user_email).filter(Boolean))]
   const visible = userFilter ? rows.filter(r => r.user_email === userFilter) : rows
@@ -55,6 +63,8 @@ export default function Activity({ storeId }) {
     <Section title="Activity"
       action={
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search activity…"
+            style={{ border: `1px solid ${C.border}`, borderRadius: 6, padding: '5px 8px', fontSize: 12, background: '#fff', width: 160 }} />
           {users.length > 0 && (
             <select value={userFilter} onChange={e => setUserFilter(e.target.value)}
               style={{ border: `1px solid ${C.border}`, borderRadius: 6, padding: '5px 8px', fontSize: 12, background: '#fff' }}>
@@ -62,7 +72,7 @@ export default function Activity({ storeId }) {
               {users.map(u => <option key={u} value={u}>{u}</option>)}
             </select>
           )}
-          <button onClick={load} style={{ background: 'none', border: 'none', color: C.blue, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>↻ Refresh</button>
+          <button onClick={() => load(search)} style={{ background: 'none', border: 'none', color: C.blue, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>↻ Refresh</button>
         </div>
       }>
       {visible.length === 0 ? (

@@ -741,6 +741,8 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       if (data.staleListings?.length > 0) {
         await enrichStaleParts(data.staleListings)
       }
+      setReconciling(false)
+      return data
     } catch (e) {
       setReconcileError(e.message)
     }
@@ -815,6 +817,17 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     return d
   }
 
+  // Write one summary line per manual sync into the audit log (Activity view).
+  const logSync = async (summary, data = {}) => {
+    try {
+      await fetch(EDGE_FN, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'log_sync', storeId, summary, data }),
+      })
+      fetchNightly()
+    } catch { /* best-effort */ }
+  }
+
   const syncEverything = async () => {
     setSyncingAll(true)
     try {
@@ -827,10 +840,15 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       const f = await runFees(120)
       setSyncPhase(`3/4 · eBay fees: $${f.feeTotal} across ${f.ordersMatched} orders`)
       setSyncPhase('4/4 · Reconciling with eBay…')
-      await runReconcile()
+      const rec = await runReconcile()
       setSyncPhase('✓ Sync complete')
+      await logSync(
+        `Manual full sync ✓ · ${so.created ?? 0} sold new/${so.updated ?? 0} updated · $${f.feeTotal ?? 0} fees`,
+        { soldNew: so.created ?? 0, soldUpdated: so.updated ?? 0, feeTotal: f.feeTotal ?? 0, missing: rec?.missingCount ?? 0, stale: rec?.staleCount ?? 0 },
+      )
     } catch (e) {
       setSyncPhase(`Sync stopped: ${e.message}`)
+      await logSync(`Manual full sync failed: ${e.message}`, { ok: false })
     }
     setSyncingAll(false)
   }
@@ -861,14 +879,19 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       setSyncPhase('3/3 · Reconciling with eBay…')
       setDisplayProgress(80)
       setRpm(50)
-      await runReconcile()
+      const rec = await runReconcile()
       setDisplayProgress(100)
       setRpm(0)
       setImportJob(j => ({ ...j, status: 'completed', current_item: `✓ ${soMsg} · ${fMsg}` }))
       setSyncPhase('✓ Quick sync complete')
+      await logSync(
+        `Quick sync ✓ · ${so.created ?? 0} sold new/${so.updated ?? 0} updated · $${f.feeTotal ?? 0} fees`,
+        { soldNew: so.created ?? 0, soldUpdated: so.updated ?? 0, feeTotal: f.feeTotal ?? 0, missing: rec?.missingCount ?? 0, stale: rec?.staleCount ?? 0 },
+      )
     } catch (e) {
       setSyncPhase(`Sync stopped: ${e.message}`)
       setImportJob(j => ({ ...j, status: 'failed', current_item: e.message }))
+      await logSync(`Quick sync failed: ${e.message}`, { ok: false })
     }
     setSyncingAll(false)
   }
