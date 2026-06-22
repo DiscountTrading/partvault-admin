@@ -35,6 +35,10 @@ export default function Dashboard({ parts, costing, inventory, onDrill }) {
   },0)
   const gross = soldRev - soldCogs
   const margin = soldRev>0?(gross/soldRev)*100:0
+  // eBay selling fees (from Finances API, stored per part) and net sales after them
+  // — mirrors eBay's report: Total sales − Selling costs = Net sales.
+  const ebayFees = sold.reduce((a,p)=>a+(+p.costs?.ebay_fees||0),0)
+  const netSales = soldRev - ebayFees
   // Shipping: income the buyer paid vs the postage cost we paid the carrier.
   // Cost uses the recorded carrier cost where present, else a weight-based
   // estimate (so free-shipping sales don't show a $0 postage cost).
@@ -154,14 +158,22 @@ export default function Dashboard({ parts, costing, inventory, onDrill }) {
       </div>
       <div style={{ ...S.card, padding:18 }}>
         <h2 style={{ ...S.h2, marginBottom:10 }}>P&L Summary <span style={{ fontWeight:400, fontSize:12, color:C.muted }}>· {periodLabel}{cogsEstimated?' · cost incl. estimates':''}</span></h2>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:20 }}>
-          {[['Total Revenue',fmt(soldRev),C.text],['Total COGS',fmt(soldCogs),C.red],['Gross Profit',fmt(gross),C.green],['Gross Margin',pct(margin),margin>30?C.green:C.yellow]].map(([l,v,col])=>(
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:20, rowGap:14 }}>
+          {[
+            ['Total Sales',fmt(soldRev),C.text],
+            ['eBay Fees',ebayFees?('−'+fmt(ebayFees)):'—',C.red],
+            ['Net Sales (after fees)',fmt(netSales),C.text],
+            ['Total COGS',fmt(soldCogs),C.red],
+            ['Gross Profit',fmt(gross),C.green],
+            ['Gross Margin',pct(margin),margin>30?C.green:C.yellow],
+          ].map(([l,v,col])=>(
             <div key={l}>
               <div style={{ ...S.statLbl, marginBottom:4 }}>{l}</div>
               <div style={{ fontSize:22, fontWeight:700, color:col }}>{v}</div>
             </div>
           ))}
         </div>
+        <div style={{ fontSize:11, color:C.muted, marginTop:8 }}>Total Sales − eBay Fees = Net Sales (matches eBay's report). Gross Profit also subtracts part cost, postage & admin.</div>
       </div>
     </div>
   )

@@ -782,15 +782,28 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     return d
   }
 
+  const runFees = async (days = 120) => {
+    const res = await fetch(EDGE_FN, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'import_fees', storeId, days }),
+    })
+    const d = await res.json()
+    if (!res.ok || d.error) throw new Error(d.error || 'Fee import failed')
+    return d
+  }
+
   const syncEverything = async () => {
     setSyncingAll(true)
     try {
-      setSyncPhase('1/3 · Importing listings from eBay…')
+      setSyncPhase('1/4 · Importing listings from eBay…')
       await importAllListings()
-      setSyncPhase('2/3 · Importing sold orders…')
+      setSyncPhase('2/4 · Importing sold orders…')
       const so = await runSoldOrders(120)
-      setSyncPhase(`2/3 · Sold orders: ${so.created} new, ${so.updated} updated`)
-      setSyncPhase('3/3 · Reconciling with eBay…')
+      setSyncPhase(`2/4 · Sold orders: ${so.created} new, ${so.updated} updated`)
+      setSyncPhase('3/4 · Importing eBay fees…')
+      const f = await runFees(120)
+      setSyncPhase(`3/4 · eBay fees: $${f.feeTotal} across ${f.ordersMatched} orders`)
+      setSyncPhase('4/4 · Reconciling with eBay…')
       await runReconcile()
       setSyncPhase('✓ Sync complete')
     } catch (e) {

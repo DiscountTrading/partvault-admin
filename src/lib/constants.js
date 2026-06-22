@@ -1,4 +1,4 @@
-export const APP_VERSION = '3.14.23'
+export const APP_VERSION = '3.14.24'
 
 export const C = {
   bg:'#f5f4f0', panel:'#edeae3', card:'#ffffff', border:'#ddd9d0',
@@ -167,13 +167,16 @@ export const estimateCostBasis = (p, costing = {}, carPrice = 0, carPartsValue =
   return { carShare, baseCost, labour, admin, postage: post.value, postageEstimated: post.estimated, total: carShare + baseCost + labour + admin + post.value }
 }
 
-// Best single cost figure for a part, for roll-ups (Dashboard / Insights):
-// use the recorded costs when the business has entered any, otherwise fall back
-// to the full estimate (base cost + postage + admin + removal labour). This is
-// what lets a business with no cost history still see a realistic COGS/margin
-// instead of a fake 100%. `estimated` flags which path was used.
+// Best single cost figure for a part, for roll-ups (Dashboard / Insights).
+// Additive: recorded costs (acquisition, postage, eBay fees, …) PLUS the estimated
+// components not already captured (base cost when no acquisition, removal labour,
+// admin, and a postage estimate when none recorded). This way real eBay fees are
+// counted on top of the cost estimate rather than replacing it. `estimated` flags
+// whether any of the figure is a projection.
 export const partEffectiveCost = (p = {}, costing = {}) => {
-  const manual = totalCost(p)
-  if (manual > 0) return { value: manual, estimated: false }
-  return { value: estimateCostBasis(p, costing, 0, 0).total, estimated: true }
+  const recorded = totalCost(p)                 // costs JSON: acquisition, postage, ebay_fees, …
+  const manualPost = +(p.costs?.postage) || 0
+  const b = estimateCostBasis(p, costing, 0, 0) // baseCost (gated on no acquisition), labour, admin, postage
+  const supplement = b.baseCost + b.labour + b.admin + (manualPost > 0 ? 0 : b.postage)
+  return { value: recorded + supplement, estimated: supplement > 0 }
 }

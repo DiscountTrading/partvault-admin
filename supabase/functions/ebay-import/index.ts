@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.23'
+const EDGE_FN_VERSION         = '3.14.24'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -826,8 +826,12 @@ async function handleRequest(req: Request): Promise<Response> {
             }
           } else if (phase === 'backfill') {
             const b = await selfCall({ action: 'import_sold_orders', storeId, days: 120 })
-            phase = 'reconcile'
+            phase = 'fees'
             await save({ phase, detail: `sold orders: ${b.created ?? 0} new, ${b.updated ?? 0} updated` })
+          } else if (phase === 'fees') {
+            const f = await selfCall({ action: 'import_fees', storeId, days: 120 })
+            phase = 'reconcile'
+            await save({ phase, detail: `eBay fees: $${f.feeTotal ?? 0} across ${f.ordersMatched ?? 0} orders` })
           } else if (phase === 'reconcile') {
             const rec = await selfCall({ action: 'reconcile', storeId })
             phase = 'done'
@@ -1129,14 +1133,16 @@ async function handleRequest(req: Request): Promise<Response> {
                 const { data: pr } = await sb.from('parts').select('id').eq('store_id', storeId).eq('sku', sku).maybeSingle()
                 if (pr) partId = pr.id
               }
+              const orderId: string | undefined = o.orderId
               if (partId) {
-                await sb.from('parts').update({ status: 'sold', sold_price: price, sold_date: soldDate, shipping_charged: shipPer }).eq('id', partId)
+                await sb.from('parts').update({ status: 'sold', sold_price: price, sold_date: soldDate, shipping_charged: shipPer, ebay_order_id: orderId }).eq('id', partId)
                 updated++
               } else {
                 const newSku = sku || (await sb.rpc('generate_next_sku', { p_store_id: storeId })).data
                 const { data: np, error: pErr } = await sb.from('parts').insert({
                   store_id: storeId, sku: newSku, title: li.title || 'eBay sale', status: 'sold',
                   sold_price: price, sold_date: soldDate, shipping_charged: shipPer, list_price: price,
+                  ebay_order_id: orderId,
                   source: 'ebay_order', condition: 'Used', ai_assessed: false,
                   costs: { acquisition: 0, labour: 0, storage: 0, packaging: 0, postage: 0, holding: 0 },
                 }).select('id').single()
@@ -1155,6 +1161,57 @@ async function handleRequest(req: Request): Promise<Response> {
       } while (offset < total && offset < 5000 && Date.now() - startedAt < 110000)
 
       return json({ ok: true, version: EDGE_FN_VERSION, days, ebayOrders: total, lineItems, created, updated, failed })
+    }
+
+    // eBay selling fees from the Finances API (the ledger eBay's reports are built
+    // from). Sums each SALE transaction's total fee per order, then attributes it to
+    // that order's part(s) (split by sale price) into costs->>'ebay_fees'. This is
+    // what makes net sales / margins match eBay's report — fees are ~24% of sales.
+    if (action === 'import_fees') {
+      const days = Math.min(+body.days || 120, 365)
+      const startDate = new Date(Date.now() - days * 86400000)
+      const { token } = await getToken()
+      const headers = { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU', 'Accept': 'application/json' }
+      const filter = `transactionDate:[${startDate.toISOString()}..${new Date().toISOString()}],transactionType:{SALE}`
+
+      const startedAt = Date.now()
+      let offset = 0, total = 0
+      const feeByOrder: Record<string, number> = {}
+      do {
+        const url = `https://apiz.ebay.com/sell/finances/v1/transaction?filter=${encodeURIComponent(filter)}&limit=200&offset=${offset}`
+        const r = await fetch(url, { headers })
+        if (!r.ok) { const t = await r.text(); throw new Error(`getTransactions ${r.status}: ${t.slice(0, 300)}`) }
+        const d = await r.json()
+        total = +d.total || 0
+        for (const tx of (d.transactions ?? [])) {
+          if (tx.transactionType !== 'SALE') continue
+          const oid = tx.orderId
+          const fee = +tx.totalFeeAmount?.value || 0
+          if (oid && fee) feeByOrder[oid] = (feeByOrder[oid] || 0) + fee
+        }
+        offset += 200
+      } while (offset < total && offset < 5000 && Date.now() - startedAt < 60000)
+
+      // Attribute each order's fee to its part(s), split by sale price.
+      let updated = 0, ordersMatched = 0, feeTotal = 0
+      for (const [oid, fee] of Object.entries(feeByOrder)) {
+        feeTotal += fee
+        const { data: parts } = await sb.from('parts').select('id, sold_price, costs')
+          .eq('store_id', storeId).eq('ebay_order_id', oid).is('deleted_at', null)
+        if (!parts?.length) continue
+        ordersMatched++
+        const totalVal = parts.reduce((a: number, p: any) => a + (+p.sold_price || 0), 0)
+        for (const p of parts) {
+          const share = totalVal > 0 ? fee * ((+p.sold_price || 0) / totalVal) : fee / parts.length
+          const costs = { ...(p.costs || {}), ebay_fees: Math.round(share * 100) / 100 }
+          await sb.from('parts').update({ costs }).eq('id', p.id)
+          updated++
+        }
+        if (Date.now() - startedAt > 110000) break
+      }
+
+      const r2 = (n: number) => Math.round(n * 100) / 100
+      return json({ ok: true, version: EDGE_FN_VERSION, days, feeTotal: r2(feeTotal), ordersWithFees: Object.keys(feeByOrder).length, ordersMatched, updated })
     }
 
     if (action === 'sync_status') {
