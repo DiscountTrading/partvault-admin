@@ -1128,6 +1128,20 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     return () => clearInterval(id)
   }, [importProgress, importJob?.status, importJob?.id])
 
+  // Tachometer RPM — spikes when chunks process fast, decays between updates
+  const [rpm, setRpm] = useState(0)
+  const rpmTrackRef = useRef({ time: Date.now(), progress: 0 })
+  useEffect(() => {
+    if (!importJob || importJob.status === 'completed') { setRpm(0); return }
+    const now = Date.now()
+    const dt = (now - rpmTrackRef.current.time) / 1000
+    const delta = importProgress - rpmTrackRef.current.progress
+    rpmTrackRef.current = { time: now, progress: importProgress }
+    if (delta > 0 && dt > 0) setRpm(prev => Math.min(100, Math.max(prev, (delta / dt) * 15)))
+    const decay = setInterval(() => setRpm(r => Math.max(0, r - 2.5)), 200)
+    return () => clearInterval(decay)
+  }, [importProgress, importJob?.id, importJob?.status])
+
   // ─── RECONCILE SECTION COMPONENT ─────────────────────────────────────────
   const ReconcileSection = () => (
     <>
@@ -1879,27 +1893,57 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
               {importJob && (() => {
                 const pct = importJob.status === 'completed' ? 100 : displayProgress
                 const done = importJob.status === 'completed'
-                // Car position: clamp so the car stays fully on the track
-                const carPct = Math.min(pct, 96)
+                const remaining = Math.max(0, 100 - pct)
+
+                // SVG gauge helpers — arc from 150° clockwise 240° to 30°
+                const MIN_A = 150, SWEEP_A = 240
+                const toRad = a => a * Math.PI / 180
+                const arcD = (cx, cy, r, a1, span) => {
+                  const a2 = a1 + span
+                  const [x1, y1] = [cx + r * Math.cos(toRad(a1)), cy + r * Math.sin(toRad(a1))]
+                  const [x2, y2] = [cx + r * Math.cos(toRad(a2)), cy + r * Math.sin(toRad(a2))]
+                  return `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${span > 180 ? 1 : 0} 1 ${x2.toFixed(2)} ${y2.toFixed(2)}`
+                }
+                const gauge = (value, max, label, color) => {
+                  const cx = 50, cy = 56, r = 36
+                  const span = (Math.min(Math.max(value, 0), max) / max) * SWEEP_A
+                  const needleAngle = MIN_A + span
+                  const ticks = Array.from({ length: 9 }, (_, i) => {
+                    const a = MIN_A + (i / 8) * SWEEP_A, rad = toRad(a), ri = r - (i % 2 === 0 ? 7 : 4)
+                    return { x1: (cx + ri * Math.cos(rad)).toFixed(1), y1: (cy + ri * Math.sin(rad)).toFixed(1), x2: (cx + r * Math.cos(rad)).toFixed(1), y2: (cy + r * Math.sin(rad)).toFixed(1), major: i % 2 === 0 }
+                  })
+                  return (
+                    <svg viewBox="0 0 100 84" style={{ width: '100%', overflow: 'visible' }}>
+                      <path d={arcD(cx, cy, r, MIN_A, SWEEP_A)} fill="none" stroke="#252525" strokeWidth="5" strokeLinecap="round" />
+                      {span > 1 && <path d={arcD(cx, cy, r, MIN_A, span)} fill="none" stroke={color} strokeWidth="5" strokeLinecap="round" opacity="0.85" />}
+                      {ticks.map((t, i) => <line key={i} x1={t.x1} y1={t.y1} x2={t.x2} y2={t.y2} stroke="#3a3a3a" strokeWidth={t.major ? 1.5 : 0.8} />)}
+                      <g transform={`rotate(${needleAngle}, ${cx}, ${cy})`} style={{ transition: 'transform 0.35s ease-out' }}>
+                        <line x1={cx - 8} y1={cy} x2={cx + r - 9} y2={cy} stroke="#eee" strokeWidth="1.8" strokeLinecap="round" />
+                      </g>
+                      <circle cx={cx} cy={cy} r="5" fill={color} opacity="0.9" />
+                      <circle cx={cx} cy={cy} r="2.5" fill="#111" />
+                      <text x={cx} y={cy + 19} textAnchor="middle" fill="#ccc" fontSize="13" fontWeight="700" fontFamily="monospace">
+                        {label === 'PROGRESS' ? `${Math.round(value)}%` : Math.round(value)}
+                      </text>
+                      <text x={cx} y={cy + 27} textAnchor="middle" fill="#555" fontSize="6" letterSpacing="0.8">{label}</text>
+                    </svg>
+                  )
+                }
+
                 return (
-                  <div style={{ marginBottom: 14 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 6 }}>
-                      <span style={{ color: C.text }}>{importJob.current_item || 'Processing...'}</span>
-                      <span style={{ color: C.muted, fontVariantNumeric: 'tabular-nums' }}>{importProgress}%</span>
+                  <div style={{ background: '#0e0e0e', borderRadius: 12, padding: '8px 12px 6px', marginBottom: 14, border: '1px solid #1c1c1c' }}>
+                    <div style={{ fontSize: 10, color: '#4a4a4a', letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {done ? '🏁 Sync complete' : `⚙ ${importJob.current_item || 'Processing...'}`}
                     </div>
-                    {/* Race track — car sits on top, not clipped */}
-                    <div style={{ position: 'relative', height: 48 }}>
-                      {/* Road */}
-                      <div style={{ position: 'absolute', top: '50%', left: 0, right: 0, height: 18, transform: 'translateY(-50%)', background: '#2d2d2d', borderRadius: 9, border: '2px solid #1a1a1a', overflow: 'hidden' }}>
-                        <div style={{ position: 'absolute', inset: 0, backgroundImage: 'repeating-linear-gradient(90deg, transparent, transparent 28px, rgba(255,255,255,0.06) 28px, rgba(255,255,255,0.06) 30px)' }} />
-                        <div style={{ position: 'absolute', top: '50%', left: 0, right: 0, height: 2, transform: 'translateY(-50%)', backgroundImage: 'repeating-linear-gradient(90deg, rgba(255,255,255,0.35) 0, rgba(255,255,255,0.35) 10px, transparent 10px, transparent 20px)' }} />
-                        <div style={{ position: 'absolute', inset: 0, width: `${pct}%`, background: done ? 'rgba(34,197,94,0.3)' : 'rgba(59,130,246,0.2)', transition: 'width 0.3s linear' }} />
-                        <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 8, backgroundImage: 'repeating-linear-gradient(180deg, #fff 0, #fff 3px, #000 3px, #000 6px)', opacity: 0.8 }} />
-                      </div>
-                      {/* Car — full height, not clipped by road */}
-                      <div style={{ position: 'absolute', top: '50%', left: `${carPct}%`, transform: 'translate(-50%, -50%) scaleX(-1)', fontSize: 40, lineHeight: 1, transition: 'left 0.3s linear', filter: done ? 'drop-shadow(0 0 6px #22c55e)' : 'none' }}>
-                        🏎️
-                      </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.25fr 1fr', gap: 2 }}>
+                      {gauge(rpm, 100, 'ACTIVITY', '#f59e0b')}
+                      {gauge(pct, 100, 'PROGRESS', done ? '#22c55e' : '#3b82f6')}
+                      {gauge(remaining, 100, 'REMAINING', '#ef4444')}
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-around', borderTop: '1px solid #1a1a1a', paddingTop: 4 }}>
+                      <span style={{ color: '#22c55e', fontSize: 10 }}>↑ {importJob.imported ?? 0} new</span>
+                      <span style={{ color: '#383838', fontSize: 10 }}>⤳ {importJob.skipped ?? 0} exist</span>
+                      <span style={{ color: '#7f1d1d', fontSize: 10 }}>✕ {importJob.failed ?? 0} failed</span>
                     </div>
                   </div>
                 )
