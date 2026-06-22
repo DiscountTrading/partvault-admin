@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.36'
+const EDGE_FN_VERSION         = '3.14.37'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -870,9 +870,18 @@ async function handleRequest(req: Request): Promise<Response> {
           }
         }
       } catch (e) {
-        await save({ detail: `error in ${phase}: ${(e as Error).message}` })
-        await logSyncEvent(storeId, `Nightly sync failed in ${phase}: ${(e as Error).message}`, { kind: 'nightly', ok: false, phase })
-        return json({ phase, error: (e as Error).message }, 200)
+        const msg = (e as Error).message
+        // eBay/proxy throttling is transient: don't fail the run or log a scary
+        // summary — just record a soft pause and leave done=false so the next
+        // 2-minute cron tick resumes from exactly where this left off.
+        const isRateLimit = /rate limit|retry after|429|call limit|throttl/i.test(msg)
+        if (isRateLimit) {
+          await save({ detail: `paused in ${phase} (rate-limited) — resumes next tick` })
+          return json({ phase, paused: true, reason: msg }, 200)
+        }
+        await save({ detail: `error in ${phase}: ${msg}` })
+        await logSyncEvent(storeId, `Nightly sync failed in ${phase}: ${msg}`, { kind: 'nightly', ok: false, phase })
+        return json({ phase, error: msg }, 200)
       }
       // Record one summary line per completed nightly run.
       if (phase === 'done') {
