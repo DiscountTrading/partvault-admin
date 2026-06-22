@@ -1929,9 +1929,9 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
             <Section title="📥 eBay Sync">
               {/* Car dashboard — always visible */}
               {(() => {
-                const active = importJob?.status === 'running'
-                const done   = importJob?.status === 'completed'
-                const pct    = done ? 100 : (active ? displayProgress : 0)
+                const active    = importJob?.status === 'running'
+                const done      = importJob?.status === 'completed'
+                const pct       = done ? 100 : (active ? displayProgress : 0)
                 const remaining = Math.max(0, 100 - pct)
 
                 // Steering wheel turns at each phase
@@ -1982,106 +1982,137 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                 }
 
                 return (
-                  <div style={{ borderRadius: 12, overflow: 'hidden', marginBottom: 12, border: '1px solid #1c1c1c', background: '#0a0a0a' }}>
+                  <div style={{ borderRadius: 10, overflow: 'hidden', marginBottom: 12, border: '2px solid #555', background: '#2a2a2a' }}>
                     <style>{`
-                      @keyframes signSlide { from { transform: translateX(70px) rotate(4deg); opacity: 0; } to { transform: translateX(0) rotate(0deg); opacity: 1; } }
-                      @keyframes roadScroll { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -26; } }
+                      @keyframes signRide { from { transform: translateX(120px) scale(0.7); opacity: 0; } to { transform: translateX(0) scale(1); opacity: 1; } }
+                      @keyframes dashScroll { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -30; } }
                     `}</style>
 
-                    {/* Windshield */}
-                    <div style={{ position: 'relative', height: 84, overflow: 'hidden' }}>
-                      <svg viewBox="0 0 300 84" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
-                        {/* Sky gradient */}
+                    {/* Windshield — tall, prominent */}
+                    <div style={{ position: 'relative', height: 150, overflow: 'hidden', background: '#5ba3d9' }}>
+                      <svg viewBox="0 0 320 150" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
                         <defs>
-                          <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="#0a1628" />
-                            <stop offset="60%" stopColor="#162840" />
-                            <stop offset="100%" stopColor="#1a2e1a" />
+                          <linearGradient id="pvSky" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#4a90d9" />
+                            <stop offset="70%" stopColor="#87c1ea" />
+                            <stop offset="100%" stopColor="#a8d5f0" />
+                          </linearGradient>
+                          <linearGradient id="pvGrass" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#5a9e3a" />
+                            <stop offset="100%" stopColor="#3a7a22" />
+                          </linearGradient>
+                          <linearGradient id="pvRoad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#666" />
+                            <stop offset="100%" stopColor="#555" />
                           </linearGradient>
                         </defs>
-                        <rect width="300" height="84" fill="url(#sky)" />
-                        {/* Stars */}
-                        {[[20,8],[60,14],[90,5],[130,10],[200,7],[240,12],[270,6],[40,20],[180,18]].map(([x,y],i) => (
-                          <circle key={i} cx={x} cy={y} r="0.8" fill="white" opacity="0.6" />
-                        ))}
-                        {/* Road vanishing */}
-                        <polygon points="100,84 200,84 168,46 132,46" fill="#1e1e1e" />
-                        <line x1="100" y1="84" x2="132" y2="46" stroke="#555" strokeWidth="0.5" />
-                        <line x1="200" y1="84" x2="168" y2="46" stroke="#555" strokeWidth="0.5" />
-                        {/* Scrolling centre dashes */}
-                        <line x1="150" y1="84" x2="150" y2="46" stroke="rgba(255,255,255,0.25)" strokeWidth="1.5" strokeDasharray="6 7"
-                          style={{ animation: active ? 'roadScroll 0.6s linear infinite' : 'none' }} />
-                        {/* Horizon */}
-                        <line x1="0" y1="46" x2="300" y2="46" stroke="#2a3a2a" strokeWidth="0.5" />
-                        {/* Roadside trees */}
-                        <ellipse cx="72" cy="54" rx="10" ry="14" fill="#0f2010" />
-                        <ellipse cx="68" cy="48" rx="7" ry="10" fill="#122812" />
-                        <ellipse cx="228" cy="54" rx="10" ry="14" fill="#0f2010" />
-                        <ellipse cx="232" cy="48" rx="7" ry="10" fill="#122812" />
-                        <ellipse cx="44" cy="62" rx="8" ry="11" fill="#0d1e0e" />
-                        <ellipse cx="256" cy="62" rx="8" ry="11" fill="#0d1e0e" />
+
+                        {/* Sky */}
+                        <rect width="320" height="90" fill="url(#pvSky)" />
+                        {/* Clouds */}
+                        <ellipse cx="60" cy="22" rx="28" ry="10" fill="white" opacity="0.85" />
+                        <ellipse cx="80" cy="18" rx="20" ry="8" fill="white" opacity="0.85" />
+                        <ellipse cx="240" cy="28" rx="22" ry="8" fill="white" opacity="0.8" />
+                        <ellipse cx="258" cy="24" rx="16" ry="7" fill="white" opacity="0.8" />
+                        <ellipse cx="150" cy="14" rx="18" ry="6" fill="white" opacity="0.6" />
+
+                        {/* Grass left */}
+                        <polygon points="0,90 85,90 160,150 0,150" fill="url(#pvGrass)" />
+                        {/* Grass right */}
+                        <polygon points="320,90 235,90 160,150 320,150" fill="url(#pvGrass)" />
+
+                        {/* Road */}
+                        <polygon points="85,90 235,90 320,150 0,150" fill="url(#pvRoad)" />
+
+                        {/* Road edge lines */}
+                        <line x1="85" y1="90" x2="0" y2="150" stroke="#fff" strokeWidth="1.5" opacity="0.6" />
+                        <line x1="235" y1="90" x2="320" y2="150" stroke="#fff" strokeWidth="1.5" opacity="0.6" />
+
+                        {/* Centre dashes — animate when active */}
+                        <line x1="160" y1="90" x2="160" y2="150" stroke="#fff" strokeWidth="2"
+                          strokeDasharray="12 10" opacity="0.7"
+                          style={{ animation: active ? 'dashScroll 0.5s linear infinite' : 'none' }} />
+
+                        {/* Left roadside: sign post + board */}
+                        <line x1="72" y1="90" x2="72" y2="130" stroke="#888" strokeWidth="3" />
+                        <line x1="72" y1="90" x2="72" y2="93" stroke="#aaa" strokeWidth="3" />
+                        {signLabel && (
+                          <g key={syncPhase} style={{ animation: 'signRide 0.5s cubic-bezier(0.22,1,0.36,1) forwards' }}>
+                            <rect x="18" y="66" width="108" height="28" rx="4"
+                              fill={done ? '#166534' : '#1a5c1a'} stroke={done ? '#22c55e' : '#f59e0b'} strokeWidth="2.5" />
+                            <text x="72" y="82" textAnchor="middle" fill={done ? '#22c55e' : '#f5d60b'}
+                              fontSize="11" fontWeight="800" letterSpacing="0.8" fontFamily="sans-serif">
+                              {signLabel}
+                            </text>
+                          </g>
+                        )}
+
+                        {/* Right roadside trees */}
+                        <ellipse cx="268" cy="88" rx="14" ry="18" fill="#2d6e1a" />
+                        <ellipse cx="264" cy="79" rx="10" ry="13" fill="#3a8a22" />
+                        <ellipse cx="295" cy="92" rx="11" ry="15" fill="#2d6e1a" />
+                        {/* Left trees */}
+                        <ellipse cx="28" cy="86" rx="13" ry="17" fill="#2d6e1a" />
+                        <ellipse cx="32" cy="78" rx="9" ry="12" fill="#3a8a22" />
+
+                        {/* A-pillar shading */}
+                        <polygon points="0,0 28,0 62,150 0,150" fill="rgba(0,0,0,0.35)" />
+                        <polygon points="320,0 292,0 258,150 320,150" fill="rgba(0,0,0,0.35)" />
+                        {/* Top frame */}
+                        <rect width="320" height="8" fill="rgba(0,0,0,0.4)" />
+                        {/* Rearview mirror */}
+                        <rect x="134" y="0" width="52" height="18" rx="3" fill="#1a1a1a" />
+                        <rect x="137" y="3" width="46" height="12" rx="2" fill="#2a3a4a" opacity="0.8" />
                       </svg>
-
-                      {/* Street sign slides in on phase change */}
-                      {signLabel && (
-                        <div key={syncPhase} style={{
-                          position: 'absolute', top: 10, right: 14,
-                          animation: 'signSlide 0.45s cubic-bezier(0.22,1,0.36,1) forwards',
-                          background: done ? '#052e16' : '#1c1108',
-                          border: `2px solid ${done ? '#22c55e' : '#f59e0b'}`,
-                          color: done ? '#22c55e' : '#f59e0b',
-                          padding: '4px 10px',
-                          borderRadius: 3,
-                          fontSize: 10,
-                          fontWeight: 800,
-                          letterSpacing: 1.2,
-                          textTransform: 'uppercase',
-                          fontFamily: 'monospace',
-                          boxShadow: `0 2px 8px ${done ? 'rgba(34,197,94,0.3)' : 'rgba(245,158,11,0.3)'}`,
-                        }}>
-                          {signLabel}
-                        </div>
-                      )}
-
-                      {/* Windshield frame overlay */}
-                      <div style={{ position: 'absolute', inset: 0, borderRadius: '0 0 40% 40% / 0 0 20px 20px', boxShadow: 'inset 0 0 0 3px #1a1a1a, inset 0 -4px 12px rgba(0,0,0,0.6)', pointerEvents: 'none' }} />
                     </div>
 
-                    {/* Dashboard panel */}
-                    <div style={{ background: '#0e0e0e', padding: '4px 8px 2px', display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <div style={{ flex: 1 }}>{gauge(active ? rpm : 0, 100, 'ACTIVITY', '#f59e0b')}</div>
+                    {/* Dashboard panel — charcoal, not black */}
+                    <div style={{ background: '#1e1e1e', padding: '6px 10px 4px', display: 'flex', alignItems: 'center', gap: 6, borderTop: '3px solid #333' }}>
+                      {/* Tacho */}
+                      <div style={{ width: 80, flexShrink: 0 }}>{gauge(active ? rpm : 0, 100, 'TACHO', '#f59e0b')}</div>
 
-                      {/* Steering wheel */}
-                      <svg viewBox="0 0 80 80" style={{ width: 58, flexShrink: 0, transform: `rotate(${steeringAngle}deg)`, transition: 'transform 0.7s cubic-bezier(0.34,1.56,0.64,1)' }}>
-                        <circle cx="40" cy="40" r="33" fill="none" stroke="#1a1a1a" strokeWidth="9" />
-                        <circle cx="40" cy="40" r="33" fill="none" stroke="#2e2e2e" strokeWidth="6" />
-                        <circle cx="40" cy="40" r="33" fill="none" stroke="#3a3a3a" strokeWidth="2" />
-                        <line x1="40" y1="7" x2="40" y2="30" stroke="#2e2e2e" strokeWidth="6" strokeLinecap="round" />
-                        <line x1="40" y1="50" x2="12" y2="67" stroke="#2e2e2e" strokeWidth="6" strokeLinecap="round" />
-                        <line x1="40" y1="50" x2="68" y2="67" stroke="#2e2e2e" strokeWidth="6" strokeLinecap="round" />
-                        <circle cx="40" cy="40" r="11" fill="#181818" />
-                        <circle cx="40" cy="40" r="5" fill="#222" />
-                        <circle cx="40" cy="40" r="2.5" fill="#3a3a3a" />
-                      </svg>
+                      {/* Steering wheel — large and prominent */}
+                      <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
+                        <svg viewBox="0 0 100 100" style={{ width: 100, transform: `rotate(${steeringAngle}deg)`, transition: 'transform 0.7s cubic-bezier(0.34,1.56,0.64,1)' }}>
+                          {/* Outer tyre */}
+                          <circle cx="50" cy="50" r="44" fill="none" stroke="#111" strokeWidth="12" />
+                          <circle cx="50" cy="50" r="44" fill="none" stroke="#333" strokeWidth="9" />
+                          <circle cx="50" cy="50" r="44" fill="none" stroke="#444" strokeWidth="1.5" />
+                          <circle cx="50" cy="50" r="36" fill="none" stroke="#444" strokeWidth="1" opacity="0.4" />
+                          {/* Spokes */}
+                          <line x1="50" y1="6" x2="50" y2="36" stroke="#333" strokeWidth="8" strokeLinecap="round" />
+                          <line x1="50" y1="64" x2="16" y2="84" stroke="#333" strokeWidth="8" strokeLinecap="round" />
+                          <line x1="50" y1="64" x2="84" y2="84" stroke="#333" strokeWidth="8" strokeLinecap="round" />
+                          {/* Spoke highlights */}
+                          <line x1="50" y1="6" x2="50" y2="36" stroke="#555" strokeWidth="3" strokeLinecap="round" />
+                          <line x1="50" y1="64" x2="16" y2="84" stroke="#555" strokeWidth="3" strokeLinecap="round" />
+                          <line x1="50" y1="64" x2="84" y2="84" stroke="#555" strokeWidth="3" strokeLinecap="round" />
+                          {/* Hub */}
+                          <circle cx="50" cy="50" r="14" fill="#1a1a1a" />
+                          <circle cx="50" cy="50" r="10" fill="#252525" />
+                          <circle cx="50" cy="50" r="5" fill="#333" />
+                          <circle cx="50" cy="50" r="2.5" fill="#555" />
+                        </svg>
+                      </div>
 
-                      <div style={{ flex: 1 }}>{gauge(pct, 100, 'PROGRESS', done ? '#22c55e' : active ? '#3b82f6' : '#1a2a4a')}</div>
+                      {/* Speedo */}
+                      <div style={{ width: 80, flexShrink: 0 }}>{gauge(pct, 100, 'SPEED', done ? '#22c55e' : active ? '#3b82f6' : '#2a3a5a')}</div>
                     </div>
 
-                    {/* Fuel/queue strip */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 12px 6px', background: '#0e0e0e' }}>
-                      <span style={{ fontSize: 8, color: '#2a2a2a', letterSpacing: 0.8 }}>QUEUE</span>
-                      <div style={{ flex: 1, height: 3, background: '#181818', borderRadius: 2, overflow: 'hidden' }}>
+                    {/* Queue strip */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 10px 5px', background: '#1a1a1a' }}>
+                      <span style={{ fontSize: 8, color: '#555', letterSpacing: 1 }}>QUEUE</span>
+                      <div style={{ flex: 1, height: 4, background: '#2a2a2a', borderRadius: 2, overflow: 'hidden' }}>
                         <div style={{ height: '100%', width: `${active || done ? remaining : 100}%`, background: remaining < 15 ? '#22c55e' : '#ef4444', transition: 'width 0.5s ease', borderRadius: 2 }} />
                       </div>
-                      <span style={{ fontSize: 8, color: '#2a2a2a', width: 22, textAlign: 'right' }}>{Math.round(active || done ? remaining : 100)}%</span>
+                      <span style={{ fontSize: 8, color: '#555', width: 24, textAlign: 'right' }}>{Math.round(active || done ? remaining : 100)}%</span>
                     </div>
 
-                    {/* Stats row */}
                     {(active || done) && (
-                      <div style={{ display: 'flex', justifyContent: 'space-around', padding: '3px 0 5px', background: '#080808', borderTop: '1px solid #141414' }}>
-                        <span style={{ color: '#166534', fontSize: 9 }}>↑ {importJob.imported ?? 0} new</span>
-                        <span style={{ color: '#2a2a2a', fontSize: 9 }}>⤳ {importJob.skipped ?? 0} exist</span>
-                        <span style={{ color: '#7f1d1d', fontSize: 9 }}>✕ {importJob.failed ?? 0} failed</span>
+                      <div style={{ display: 'flex', justifyContent: 'space-around', padding: '3px 0 4px', background: '#161616', borderTop: '1px solid #2a2a2a' }}>
+                        <span style={{ color: '#22c55e', fontSize: 9 }}>↑ {importJob.imported ?? 0} new</span>
+                        <span style={{ color: '#444', fontSize: 9 }}>⤳ {importJob.skipped ?? 0} exist</span>
+                        <span style={{ color: '#ef4444', fontSize: 9 }}>✕ {importJob.failed ?? 0} failed</span>
                       </div>
                     )}
                   </div>
