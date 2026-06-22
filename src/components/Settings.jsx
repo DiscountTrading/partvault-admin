@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { C, S, APP_VERSION, DEFAULT_POSTAGE_TIERS, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS } from '../lib/constants'
+import { C, S, fmt, APP_VERSION, DEFAULT_POSTAGE_TIERS, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS } from '../lib/constants'
 import { sb } from '../lib/supabase'
 import { buildSkuPreview, SKU_TOKENS, DEFAULT_SKU_TEMPLATE, DEFAULT_SKU_PAD } from '../lib/sku'
 import TeamAccess from './TeamAccess'
