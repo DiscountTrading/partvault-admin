@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { C, S, fmt, APP_VERSION, DEFAULT_POSTAGE_TIERS, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS } from '../lib/constants'
 import { sb } from '../lib/supabase'
 import { buildSkuPreview, SKU_TOKENS, DEFAULT_SKU_TEMPLATE, DEFAULT_SKU_PAD } from '../lib/sku'
@@ -151,6 +151,16 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     } catch { /* ignore */ }
   }
   const fmtLastRun = (iso) => iso ? `last run ${new Date(iso).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : 'not run yet'
+  // Nightly auto-sync state lives server-side in sync_runs (written by pg_cron),
+  // so the manual lastRun (localStorage) never reflects it. Read it directly.
+  const [nightly, setNightly] = useState(null)
+  const fetchNightly = useCallback(async () => {
+    if (!storeId) return
+    const { data } = await sb.from('sync_runs').select('phase, detail, done, updated_at')
+      .eq('store_id', storeId).order('updated_at', { ascending: false }).limit(1).maybeSingle()
+    setNightly(data || null)
+  }, [storeId])
+  useEffect(() => { fetchNightly() }, [fetchNightly])
   const [salesMatch, setSalesMatch] = useState(null)
   const [salesMatchLoading, setSalesMatchLoading] = useState(false)
   const checkSalesMatch = async () => {
@@ -2177,6 +2187,26 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                 <span>Sold orders: {fmtLastRun(lastRun.backfill)}</span>
                 <span>Reconcile: {fmtLastRun(lastRun.reconcile)}</span>
               </div>
+              {(() => {
+                const mins = nightly?.updated_at ? Math.floor((Date.now() - new Date(nightly.updated_at).getTime()) / 60000) : null
+                const ranToday = mins != null && mins < 60 * 18 // within ~18h = last night's window
+                const ts = nightly?.updated_at ? new Date(nightly.updated_at).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null
+                return (
+                  <div style={{ fontSize: 11, marginBottom: 8, padding: '6px 10px', borderRadius: 6,
+                    background: !nightly ? '#f9f8f5' : nightly.done && ranToday ? '#ecfdf5' : '#fffbeb',
+                    border: `1px solid ${!nightly ? C.border : nightly.done && ranToday ? '#a7f3d0' : '#fcd34d'}`,
+                    color: C.text, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                    <span>
+                      🌙 <strong>Nightly sync:</strong>{' '}
+                      {!nightly ? 'no run recorded yet — first run is tonight (Sydney midnight)'
+                        : nightly.done
+                          ? `✓ completed ${ts}${nightly.detail ? ` · ${nightly.detail}` : ''}`
+                          : `⏳ ${nightly.phase || 'in progress'}${nightly.detail ? ` · ${nightly.detail}` : ''} (as of ${ts})`}
+                    </span>
+                    <button onClick={fetchNightly} style={{ ...S.btn('secondary'), padding: '3px 10px', fontSize: 11 }}>↻</button>
+                  </div>
+                )
+              })()}
               <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>One click imports new listings, updates sold orders (last ~4 months), then reconciles against eBay. It only reads from eBay — it never changes your live listings.</div>
               <div style={{ fontSize: 11, color: C.green, marginBottom: 8 }}>🌙 Auto-syncs every night around midnight (Sydney) — no need to click unless you want an update now.</div>
 
