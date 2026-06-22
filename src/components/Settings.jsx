@@ -1106,6 +1106,27 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     return total > 0 ? Math.round((done / total) * 100) : 0
   })() : 0
 
+  // Smooth display progress: trickles forward between real updates so the bar
+  // always moves. Snaps forward when real progress advances; never outruns it.
+  const [displayProgress, setDisplayProgress] = useState(0)
+  useEffect(() => {
+    if (!importJob || importJob.status === 'completed') {
+      setDisplayProgress(importProgress)
+      return
+    }
+    // Snap forward immediately if real progress jumped ahead of display
+    setDisplayProgress(p => p < importProgress ? importProgress : p)
+    // Trickle toward a ceiling 2% below the next expected real jump
+    const ceiling = Math.max(importProgress, Math.min(importProgress + 2, 99))
+    const id = setInterval(() => {
+      setDisplayProgress(p => {
+        if (p >= ceiling) return p
+        return Math.min(p + 0.4, ceiling)
+      })
+    }, 300)
+    return () => clearInterval(id)
+  }, [importProgress, importJob?.status])
+
   // ─── RECONCILE SECTION COMPONENT ─────────────────────────────────────────
   const ReconcileSection = () => (
     <>
@@ -1861,7 +1882,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                     <span style={{ color: C.muted }}>{importProgress}%</span>
                   </div>
                   <div style={{ height: 6, background: C.border, borderRadius: 3, overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${importProgress}%`, background: importJob.status === 'completed' ? C.green : C.accent, transition: 'width 0.5s' }} />
+                    <div style={{ height: '100%', width: `${importJob.status === 'completed' ? 100 : displayProgress}%`, background: importJob.status === 'completed' ? C.green : C.accent, transition: 'width 0.3s linear' }} />
                   </div>
                 </div>
               )}
