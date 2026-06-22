@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.31'
+const EDGE_FN_VERSION         = '3.14.32'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -1137,9 +1137,8 @@ async function handleRequest(req: Request): Promise<Response> {
                 if (pr) partId = pr.id
               }
               if (partId) {
-                // Skip if already stamped with this exact order — no DB write needed.
-                const { data: cur } = await sb.from('parts').select('ebay_order_id').eq('id', partId).single()
-                if (cur?.ebay_order_id === orderId) { skipped++; continue }
+                // Idempotent: re-stamping the same values is cheap and safe, so we
+                // skip the extra read and just update (avoids a 3rd round-trip/item).
                 await sb.from('parts').update({ status: 'sold', sold_price: price, sold_date: soldDate, shipping_charged: shipPer, ebay_order_id: orderId }).eq('id', partId)
                 updated++
               } else {
@@ -1170,7 +1169,7 @@ async function handleRequest(req: Request): Promise<Response> {
           }
         }
         offset += 200
-      } while (offset < total && offset < 5000 && Date.now() - startedAt < 100000)
+      } while (offset < total && offset < 5000 && Date.now() - startedAt < 45000)
 
       const hasMore = offset < total
       return json({ ok: true, version: EDGE_FN_VERSION, days, ebayOrders: total, lineItems, created, updated, skipped, failed, failedReasons, hasMore, nextOffset: offset })
