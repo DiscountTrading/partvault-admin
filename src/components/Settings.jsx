@@ -772,14 +772,27 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   // months) → reconcile against eBay. Each step shows its own progress below.
   // Order-complete sold import via eBay getOrders (matches Seller Hub exactly).
   const runSoldOrders = async (days = 120) => {
-    const res = await fetch(EDGE_FN, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'import_sold_orders', storeId, days }),
-    })
-    const d = await res.json()
-    if (!res.ok || d.error) throw new Error(d.error || 'Sold-orders import failed')
+    let created = 0, updated = 0, skipped = 0, failed = 0
+    const failedReasons = []
+    let startOffset = 0, ebayOrders = 0
+    do {
+      const res = await fetch(EDGE_FN, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'import_sold_orders', storeId, days, startOffset }),
+      })
+      const d = await res.json()
+      if (!res.ok || d.error) throw new Error(d.error || 'Sold-orders import failed')
+      created += d.created || 0
+      updated += d.updated || 0
+      skipped += d.skipped || 0
+      failed  += d.failed  || 0
+      if (d.failedReasons) failedReasons.push(...d.failedReasons)
+      ebayOrders = d.ebayOrders || ebayOrders
+      startOffset = d.nextOffset || 0
+      if (!d.hasMore) break
+    } while (startOffset < 5000)
     markRun('backfill')
-    return d
+    return { created, updated, skipped, failed, failedReasons, ebayOrders }
   }
 
   const runFees = async (days = 120) => {
@@ -823,7 +836,8 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       const so = await runSoldOrders(120)
       setDisplayProgress(33)
       setRpm(80)
-      const soMsg = `Sold orders: ${so.created ?? 0} new, ${so.updated ?? 0} updated`
+      const soFail = so.failed > 0 ? ` · ${so.failed} failed${so.failedReasons?.length ? ': ' + so.failedReasons[0] : ''}` : ''
+      const soMsg = `Sold orders: ${so.created ?? 0} new, ${so.updated ?? 0} updated${soFail}`
       setSyncPhase(`1/3 · ${soMsg}`)
       setImportJob(j => ({ ...j, current_item: 'Importing eBay fees…' }))
       setSyncPhase('2/3 · Importing eBay fees…')
@@ -1165,9 +1179,10 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     return () => clearInterval(id)
   }, [importProgress, importJob?.status, importJob?.id])
 
-  // Tachometer RPM — spikes when chunks process fast, decays between updates
+  // Tachometer RPM — spikes when chunks process fast, decays slowly to idle floor
   const [rpm, setRpm] = useState(0)
   const rpmTrackRef = useRef({ time: Date.now(), progress: 0 })
+  const rpmOscRef = useRef(0)
   useEffect(() => {
     if (!importJob || importJob.status === 'completed') { setRpm(0); return }
     const now = Date.now()
@@ -1175,7 +1190,12 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     const delta = importProgress - rpmTrackRef.current.progress
     rpmTrackRef.current = { time: now, progress: importProgress }
     if (delta > 0 && dt > 0) setRpm(prev => Math.min(100, Math.max(prev, (delta / dt) * 15)))
-    const decay = setInterval(() => setRpm(r => Math.max(0, r - 2.5)), 200)
+    // Decay slowly to a breathing idle floor — never drops to zero while active
+    const decay = setInterval(() => {
+      rpmOscRef.current += 0.12
+      const idleFloor = 18 + Math.sin(rpmOscRef.current) * 6
+      setRpm(r => Math.max(idleFloor, r - 0.7))
+    }, 200)
     return () => clearInterval(decay)
   }, [importProgress, importJob?.id, importJob?.status])
 
@@ -1932,13 +1952,6 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                 const active    = importJob?.status === 'running'
                 const done      = importJob?.status === 'completed'
                 const pct       = done ? 100 : (active ? displayProgress : 0)
-                const remaining = Math.max(0, 100 - pct)
-
-                // Steering wheel turns at each phase
-                const steeringAngle = syncPhase.includes('1/') ? -28
-                  : syncPhase.includes('2/') ? 22
-                  : syncPhase.includes('3/') ? -14
-                  : done ? 0 : 0
 
                 // Short sign label per phase
                 const signLabel = done ? '✓ COMPLETE'
@@ -1956,163 +1969,197 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                   const [x2, y2] = [cx + r * Math.cos(toRad(a2)), cy + r * Math.sin(toRad(a2))]
                   return `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${span > 180 ? 1 : 0} 1 ${x2.toFixed(2)} ${y2.toFixed(2)}`
                 }
-                const gauge = (value, max, label, color) => {
-                  const cx = 50, cy = 46, r = 30
+                const gaugeSvg = (value, max, label, color) => {
+                  const cx = 60, cy = 55, r = 38
                   const span = (Math.min(Math.max(value, 0), max) / max) * SWEEP_A
-                  const ticks = Array.from({ length: 7 }, (_, i) => {
-                    const a = MIN_A + (i / 6) * SWEEP_A, rad = toRad(a), ri = r - (i % 2 === 0 ? 6 : 3)
+                  const ticks = Array.from({ length: 9 }, (_, i) => {
+                    const a = MIN_A + (i / 8) * SWEEP_A, rad = toRad(a), ri = r - (i % 2 === 0 ? 8 : 4)
                     return { x1: (cx + ri * Math.cos(rad)).toFixed(1), y1: (cy + ri * Math.sin(rad)).toFixed(1), x2: (cx + r * Math.cos(rad)).toFixed(1), y2: (cy + r * Math.sin(rad)).toFixed(1), major: i % 2 === 0 }
                   })
+                  const needleA = MIN_A + span
+                  const nRad = toRad(needleA)
                   return (
-                    <svg viewBox="0 0 100 70" style={{ width: '100%' }}>
-                      <path d={arcD(cx, cy, r, MIN_A, SWEEP_A)} fill="none" stroke="#1e1e1e" strokeWidth="4" strokeLinecap="round" />
-                      {span > 1 && <path d={arcD(cx, cy, r, MIN_A, span)} fill="none" stroke={color} strokeWidth="4" strokeLinecap="round" opacity="0.9" />}
-                      {ticks.map((t, i) => <line key={i} x1={t.x1} y1={t.y1} x2={t.x2} y2={t.y2} stroke="#2a2a2a" strokeWidth={t.major ? 1.2 : 0.7} />)}
-                      <g transform={`rotate(${MIN_A + span}, ${cx}, ${cy})`} style={{ transition: 'transform 0.4s ease-out' }}>
-                        <line x1={cx - 6} y1={cy} x2={cx + r - 7} y2={cy} stroke="#ccc" strokeWidth="1.5" strokeLinecap="round" />
-                      </g>
-                      <circle cx={cx} cy={cy} r="4" fill={color} opacity="0.85" />
-                      <circle cx={cx} cy={cy} r="2" fill="#0a0a0a" />
-                      <text x={cx} y={cy + 15} textAnchor="middle" fill="#aaa" fontSize="11" fontWeight="700" fontFamily="monospace">
+                    <svg viewBox="0 0 120 90" style={{ width: '100%' }}>
+                      {/* Track */}
+                      <path d={arcD(cx, cy, r, MIN_A, SWEEP_A)} fill="none" stroke="#1e1e1e" strokeWidth="6" strokeLinecap="round" />
+                      {/* Fill */}
+                      {span > 1 && <path d={arcD(cx, cy, r, MIN_A, span)} fill="none" stroke={color} strokeWidth="6" strokeLinecap="round" opacity="0.9" />}
+                      {/* Glow on fill */}
+                      {span > 1 && <path d={arcD(cx, cy, r, MIN_A, span)} fill="none" stroke={color} strokeWidth="10" strokeLinecap="round" opacity="0.15" />}
+                      {/* Ticks */}
+                      {ticks.map((t, i) => <line key={i} x1={t.x1} y1={t.y1} x2={t.x2} y2={t.y2} stroke={t.major ? '#3a3a3a' : '#2a2a2a'} strokeWidth={t.major ? 1.5 : 0.8} />)}
+                      {/* Needle */}
+                      <line
+                        x1={(cx - 8 * Math.cos(nRad)).toFixed(1)} y1={(cy - 8 * Math.sin(nRad)).toFixed(1)}
+                        x2={(cx + (r - 6) * Math.cos(nRad)).toFixed(1)} y2={(cy + (r - 6) * Math.sin(nRad)).toFixed(1)}
+                        stroke="#e5e5e5" strokeWidth="2" strokeLinecap="round"
+                        style={{ transition: 'all 0.35s ease-out' }}
+                      />
+                      {/* Hub */}
+                      <circle cx={cx} cy={cy} r="6" fill={color} opacity="0.9" />
+                      <circle cx={cx} cy={cy} r="3" fill="#0a0a0a" />
+                      {/* Value */}
+                      <text x={cx} y={cy + 20} textAnchor="middle" fill="#dddddd" fontSize="14" fontWeight="700" fontFamily="monospace">
                         {label === 'PROGRESS' ? `${Math.round(value)}%` : Math.round(value)}
                       </text>
-                      <text x={cx} y={cy + 23} textAnchor="middle" fill="#3a3a3a" fontSize="5.5" letterSpacing="0.8">{label}</text>
+                      <text x={cx} y={cy + 30} textAnchor="middle" fill="#444" fontSize="7" letterSpacing="1.5" fontFamily="sans-serif">{label}</text>
                     </svg>
                   )
                 }
 
                 return (
-                  <div style={{ borderRadius: 10, overflow: 'hidden', marginBottom: 12, border: '2px solid #555', background: '#2a2a2a' }}>
+                  <div style={{ borderRadius: 10, overflow: 'hidden', marginBottom: 12, border: '2px solid #444', background: '#181818' }}>
                     <style>{`
-                      @keyframes signRide { from { transform: translateX(120px) scale(0.7); opacity: 0; } to { transform: translateX(0) scale(1); opacity: 1; } }
-                      @keyframes dashScroll { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -30; } }
+                      @keyframes pvRoadScroll { from { transform: translateX(0); } to { transform: translateX(-80px); } }
+                      @keyframes pvCarBounce { 0%,100% { transform: translateY(0px); } 50% { transform: translateY(-1.5px); } }
+                      @keyframes pvSignIn { from { opacity:0; transform: translateX(60px); } to { opacity:1; transform: translateX(0); } }
                     `}</style>
 
-                    {/* Windshield — tall, prominent */}
-                    <div style={{ position: 'relative', height: 150, overflow: 'hidden', background: '#5ba3d9' }}>
-                      <svg viewBox="0 0 320 150" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
+                    {/* Road scene — side view */}
+                    <div style={{ position: 'relative', height: 120, overflow: 'hidden' }}>
+                      <svg viewBox="0 0 380 120" preserveAspectRatio="xMidYMid slice" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
                         <defs>
-                          <linearGradient id="pvSky" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="#4a90d9" />
-                            <stop offset="70%" stopColor="#87c1ea" />
-                            <stop offset="100%" stopColor="#a8d5f0" />
+                          <linearGradient id="pvSky2" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#1a3a5c" />
+                            <stop offset="100%" stopColor="#2d6a9f" />
                           </linearGradient>
-                          <linearGradient id="pvGrass" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="#5a9e3a" />
-                            <stop offset="100%" stopColor="#3a7a22" />
+                          <linearGradient id="pvGnd2" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#4a8a30" />
+                            <stop offset="100%" stopColor="#2d5a1a" />
                           </linearGradient>
-                          <linearGradient id="pvRoad" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="#666" />
-                            <stop offset="100%" stopColor="#555" />
+                          <linearGradient id="pvRd2" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#5a5a5a" />
+                            <stop offset="100%" stopColor="#444" />
+                          </linearGradient>
+                          <linearGradient id="pvCarBody" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#c0392b" />
+                            <stop offset="100%" stopColor="#922b21" />
                           </linearGradient>
                         </defs>
 
                         {/* Sky */}
-                        <rect width="320" height="90" fill="url(#pvSky)" />
-                        {/* Clouds */}
-                        <ellipse cx="60" cy="22" rx="28" ry="10" fill="white" opacity="0.85" />
-                        <ellipse cx="80" cy="18" rx="20" ry="8" fill="white" opacity="0.85" />
-                        <ellipse cx="240" cy="28" rx="22" ry="8" fill="white" opacity="0.8" />
-                        <ellipse cx="258" cy="24" rx="16" ry="7" fill="white" opacity="0.8" />
-                        <ellipse cx="150" cy="14" rx="18" ry="6" fill="white" opacity="0.6" />
+                        <rect width="380" height="72" fill="url(#pvSky2)" />
+                        {/* Stars when idle, clouds when active */}
+                        {!active && !done && <>
+                          <circle cx="40" cy="15" r="1" fill="white" opacity="0.7" />
+                          <circle cx="90" cy="8" r="1.2" fill="white" opacity="0.8" />
+                          <circle cx="160" cy="20" r="0.8" fill="white" opacity="0.6" />
+                          <circle cx="220" cy="10" r="1" fill="white" opacity="0.7" />
+                          <circle cx="300" cy="18" r="1.2" fill="white" opacity="0.6" />
+                          <circle cx="350" cy="8" r="0.9" fill="white" opacity="0.8" />
+                        </>}
+                        {(active || done) && <>
+                          <ellipse cx="60" cy="18" rx="26" ry="9" fill="white" opacity="0.18" />
+                          <ellipse cx="82" cy="14" rx="18" ry="7" fill="white" opacity="0.18" />
+                          <ellipse cx="260" cy="22" rx="22" ry="8" fill="white" opacity="0.15" />
+                          <ellipse cx="280" cy="17" rx="15" ry="6" fill="white" opacity="0.15" />
+                        </>}
 
-                        {/* Grass left */}
-                        <polygon points="0,90 85,90 160,150 0,150" fill="url(#pvGrass)" />
-                        {/* Grass right */}
-                        <polygon points="320,90 235,90 160,150 320,150" fill="url(#pvGrass)" />
-
+                        {/* Grass strip */}
+                        <rect y="72" width="380" height="12" fill="url(#pvGnd2)" />
                         {/* Road */}
-                        <polygon points="85,90 235,90 320,150 0,150" fill="url(#pvRoad)" />
+                        <rect y="84" width="380" height="36" fill="url(#pvRd2)" />
+                        {/* Road kerb top */}
+                        <line x1="0" y1="84" x2="380" y2="84" stroke="#fff" strokeWidth="1.5" opacity="0.4" />
+                        {/* Road bottom kerb */}
+                        <line x1="0" y1="119" x2="380" y2="119" stroke="#fff" strokeWidth="1" opacity="0.3" />
 
-                        {/* Road edge lines */}
-                        <line x1="85" y1="90" x2="0" y2="150" stroke="#fff" strokeWidth="1.5" opacity="0.6" />
-                        <line x1="235" y1="90" x2="320" y2="150" stroke="#fff" strokeWidth="1.5" opacity="0.6" />
+                        {/* Scrolling road dashes */}
+                        <g style={{ animation: active ? 'pvRoadScroll 0.7s linear infinite' : 'none' }}>
+                          {[-80,-40,0,40,80,120,160,200,240,280,320,360,400].map(x => (
+                            <rect key={x} x={x} y="99" width="28" height="3" rx="1.5" fill="white" opacity="0.5" />
+                          ))}
+                        </g>
 
-                        {/* Centre dashes — animate when active */}
-                        <line x1="160" y1="90" x2="160" y2="150" stroke="#fff" strokeWidth="2"
-                          strokeDasharray="12 10" opacity="0.7"
-                          style={{ animation: active ? 'dashScroll 0.5s linear infinite' : 'none' }} />
-
-                        {/* Left roadside: sign post + board */}
-                        <line x1="72" y1="90" x2="72" y2="130" stroke="#888" strokeWidth="3" />
-                        <line x1="72" y1="90" x2="72" y2="93" stroke="#aaa" strokeWidth="3" />
+                        {/* Roadside sign post */}
                         {signLabel && (
-                          <g key={syncPhase} style={{ animation: 'signRide 0.5s cubic-bezier(0.22,1,0.36,1) forwards' }}>
-                            <rect x="18" y="66" width="108" height="28" rx="4"
-                              fill={done ? '#166534' : '#1a5c1a'} stroke={done ? '#22c55e' : '#f59e0b'} strokeWidth="2.5" />
-                            <text x="72" y="82" textAnchor="middle" fill={done ? '#22c55e' : '#f5d60b'}
-                              fontSize="11" fontWeight="800" letterSpacing="0.8" fontFamily="sans-serif">
-                              {signLabel}
+                          <g key={syncPhase} style={{ animation: 'pvSignIn 0.5s cubic-bezier(0.22,1,0.36,1) forwards' }}>
+                            {/* Post */}
+                            <line x1="42" y1="72" x2="42" y2="90" stroke="#888" strokeWidth="2.5" />
+                            {/* Board */}
+                            <rect x="4" y="44" width="76" height="30" rx="4"
+                              fill={done ? '#14532d' : '#1e3a5f'} stroke={done ? '#22c55e' : '#f59e0b'} strokeWidth="2" />
+                            <text x="42" y="58" textAnchor="middle" fill={done ? '#4ade80' : '#fbbf24'}
+                              fontSize="8" fontWeight="800" letterSpacing="0.8" fontFamily="sans-serif">
+                              {signLabel.split(' ').slice(0, 2).join(' ')}
                             </text>
+                            {signLabel.split(' ').length > 2 && (
+                              <text x="42" y="68" textAnchor="middle" fill={done ? '#4ade80' : '#fbbf24'}
+                                fontSize="8" fontWeight="800" letterSpacing="0.8" fontFamily="sans-serif">
+                                {signLabel.split(' ').slice(2).join(' ')}
+                              </text>
+                            )}
                           </g>
                         )}
 
-                        {/* Right roadside trees */}
-                        <ellipse cx="268" cy="88" rx="14" ry="18" fill="#2d6e1a" />
-                        <ellipse cx="264" cy="79" rx="10" ry="13" fill="#3a8a22" />
-                        <ellipse cx="295" cy="92" rx="11" ry="15" fill="#2d6e1a" />
-                        {/* Left trees */}
-                        <ellipse cx="28" cy="86" rx="13" ry="17" fill="#2d6e1a" />
-                        <ellipse cx="32" cy="78" rx="9" ry="12" fill="#3a8a22" />
+                        {/* Trees — far right */}
+                        <ellipse cx="340" cy="66" rx="18" ry="24" fill="#1a4a0a" />
+                        <ellipse cx="336" cy="56" rx="13" ry="18" fill="#246010" />
+                        <ellipse cx="368" cy="68" rx="14" ry="20" fill="#1a4a0a" />
+                        <ellipse cx="365" cy="58" rx="10" ry="15" fill="#246010" />
 
-                        {/* A-pillar shading */}
-                        <polygon points="0,0 28,0 62,150 0,150" fill="rgba(0,0,0,0.35)" />
-                        <polygon points="320,0 292,0 258,150 320,150" fill="rgba(0,0,0,0.35)" />
-                        {/* Top frame */}
-                        <rect width="320" height="8" fill="rgba(0,0,0,0.4)" />
-                        {/* Rearview mirror */}
-                        <rect x="134" y="0" width="52" height="18" rx="3" fill="#1a1a1a" />
-                        <rect x="137" y="3" width="46" height="12" rx="2" fill="#2a3a4a" opacity="0.8" />
+                        {/* Car — side silhouette, centre-right of scene */}
+                        <g style={{ animation: active ? 'pvCarBounce 0.5s ease-in-out infinite' : 'none' }}
+                           transform="translate(150, 0)">
+                          {/* Shadow */}
+                          <ellipse cx="90" cy="118" rx="72" ry="4" fill="black" opacity="0.25" />
+                          {/* Body lower */}
+                          <rect x="18" y="74" width="144" height="28" rx="6" fill="url(#pvCarBody)" />
+                          {/* Cabin / roof */}
+                          <path d="M 42 74 Q 50 50 75 48 L 130 48 Q 152 50 158 74 Z" fill="#a93226" />
+                          {/* Windscreen */}
+                          <path d="M 86 51 Q 95 50 110 51 L 155 72 L 86 72 Z" fill="#4a90d9" opacity="0.75" />
+                          {/* Rear window */}
+                          <path d="M 44 72 L 44 52 Q 56 50 80 50 L 85 72 Z" fill="#4a90d9" opacity="0.6" />
+                          {/* Door line */}
+                          <line x1="88" y1="52" x2="88" y2="100" stroke="#7b1e1e" strokeWidth="1.5" opacity="0.5" />
+                          {/* Front bumper */}
+                          <rect x="158" y="85" width="8" height="12" rx="3" fill="#888" />
+                          {/* Headlight */}
+                          <rect x="160" y="82" width="5" height="6" rx="1" fill={active ? '#fffde7' : '#bbb'} opacity={active ? 1 : 0.5} />
+                          {active && <rect x="160" y="82" width="5" height="6" rx="1" fill="#fff176" opacity="0.6" />}
+                          {/* Rear bumper */}
+                          <rect x="14" y="85" width="6" height="12" rx="3" fill="#888" />
+                          {/* Tail light */}
+                          <rect x="15" y="82" width="5" height="6" rx="1" fill={active ? '#ef4444' : '#888'} />
+                          {/* Exhaust puff when active */}
+                          {active && <>
+                            <circle cx="10" cy="98" r="4" fill="#aaa" opacity="0.2" />
+                            <circle cx="4" cy="95" r="2.5" fill="#aaa" opacity="0.12" />
+                          </>}
+                          {/* Wheels */}
+                          <circle cx="42" cy="100" r="17" fill="#1a1a1a" />
+                          <circle cx="42" cy="100" r="11" fill="#2a2a2a" />
+                          <circle cx="42" cy="100" r="5" fill="#555" />
+                          <circle cx="42" cy="100" r="2" fill="#333" />
+                          <circle cx="138" cy="100" r="17" fill="#1a1a1a" />
+                          <circle cx="138" cy="100" r="11" fill="#2a2a2a" />
+                          <circle cx="138" cy="100" r="5" fill="#555" />
+                          <circle cx="138" cy="100" r="2" fill="#333" />
+                        </g>
                       </svg>
                     </div>
 
-                    {/* Dashboard panel — charcoal, not black */}
-                    <div style={{ background: '#1e1e1e', padding: '6px 10px 4px', display: 'flex', alignItems: 'center', gap: 6, borderTop: '3px solid #333' }}>
-                      {/* Tacho */}
-                      <div style={{ width: 80, flexShrink: 0 }}>{gauge(active ? rpm : 0, 100, 'TACHO', '#f59e0b')}</div>
-
-                      {/* Steering wheel — large and prominent */}
-                      <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
-                        <svg viewBox="0 0 100 100" style={{ width: 100, transform: `rotate(${steeringAngle}deg)`, transition: 'transform 0.7s cubic-bezier(0.34,1.56,0.64,1)' }}>
-                          {/* Outer tyre */}
-                          <circle cx="50" cy="50" r="44" fill="none" stroke="#111" strokeWidth="12" />
-                          <circle cx="50" cy="50" r="44" fill="none" stroke="#333" strokeWidth="9" />
-                          <circle cx="50" cy="50" r="44" fill="none" stroke="#444" strokeWidth="1.5" />
-                          <circle cx="50" cy="50" r="36" fill="none" stroke="#444" strokeWidth="1" opacity="0.4" />
-                          {/* Spokes */}
-                          <line x1="50" y1="6" x2="50" y2="36" stroke="#333" strokeWidth="8" strokeLinecap="round" />
-                          <line x1="50" y1="64" x2="16" y2="84" stroke="#333" strokeWidth="8" strokeLinecap="round" />
-                          <line x1="50" y1="64" x2="84" y2="84" stroke="#333" strokeWidth="8" strokeLinecap="round" />
-                          {/* Spoke highlights */}
-                          <line x1="50" y1="6" x2="50" y2="36" stroke="#555" strokeWidth="3" strokeLinecap="round" />
-                          <line x1="50" y1="64" x2="16" y2="84" stroke="#555" strokeWidth="3" strokeLinecap="round" />
-                          <line x1="50" y1="64" x2="84" y2="84" stroke="#555" strokeWidth="3" strokeLinecap="round" />
-                          {/* Hub */}
-                          <circle cx="50" cy="50" r="14" fill="#1a1a1a" />
-                          <circle cx="50" cy="50" r="10" fill="#252525" />
-                          <circle cx="50" cy="50" r="5" fill="#333" />
-                          <circle cx="50" cy="50" r="2.5" fill="#555" />
-                        </svg>
+                    {/* Gauges — large and readable */}
+                    <div style={{ display: 'flex', background: '#111', borderTop: '3px solid #2a2a2a' }}>
+                      <div style={{ flex: 1, padding: '4px 8px 2px' }}>
+                        {gaugeSvg(active ? rpm : (done ? 0 : 0), 100, 'ACTIVITY', '#f59e0b')}
                       </div>
-
-                      {/* Speedo */}
-                      <div style={{ width: 80, flexShrink: 0 }}>{gauge(pct, 100, 'SPEED', done ? '#22c55e' : active ? '#3b82f6' : '#2a3a5a')}</div>
+                      <div style={{ width: 1, background: '#222' }} />
+                      <div style={{ flex: 1, padding: '4px 8px 2px' }}>
+                        {gaugeSvg(pct, 100, 'PROGRESS', done ? '#22c55e' : active ? '#3b82f6' : '#1e3a5c')}
+                      </div>
                     </div>
 
-                    {/* Queue strip */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 10px 5px', background: '#1a1a1a' }}>
-                      <span style={{ fontSize: 8, color: '#555', letterSpacing: 1 }}>QUEUE</span>
-                      <div style={{ flex: 1, height: 4, background: '#2a2a2a', borderRadius: 2, overflow: 'hidden' }}>
-                        <div style={{ height: '100%', width: `${active || done ? remaining : 100}%`, background: remaining < 15 ? '#22c55e' : '#ef4444', transition: 'width 0.5s ease', borderRadius: 2 }} />
-                      </div>
-                      <span style={{ fontSize: 8, color: '#555', width: 24, textAlign: 'right' }}>{Math.round(active || done ? remaining : 100)}%</span>
-                    </div>
-
+                    {/* Status strip */}
                     {(active || done) && (
-                      <div style={{ display: 'flex', justifyContent: 'space-around', padding: '3px 0 4px', background: '#161616', borderTop: '1px solid #2a2a2a' }}>
-                        <span style={{ color: '#22c55e', fontSize: 9 }}>↑ {importJob.imported ?? 0} new</span>
-                        <span style={{ color: '#444', fontSize: 9 }}>⤳ {importJob.skipped ?? 0} exist</span>
-                        <span style={{ color: '#ef4444', fontSize: 9 }}>✕ {importJob.failed ?? 0} failed</span>
+                      <div style={{ background: '#0d0d0d', borderTop: '1px solid #222', padding: '4px 10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: 11, color: done ? '#22c55e' : '#aaa', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {importJob?.current_item || ''}
+                        </span>
+                        <span style={{ fontSize: 10, color: '#555', marginLeft: 8, whiteSpace: 'nowrap' }}>
+                          ↑{importJob.imported ?? 0} ·{importJob.skipped ?? 0} ✕{importJob.failed ?? 0}
+                        </span>
                       </div>
                     )}
                   </div>

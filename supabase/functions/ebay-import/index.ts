@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.24'
+const EDGE_FN_VERSION         = '3.14.27'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -418,7 +418,7 @@ async function handleRequest(req: Request): Promise<Response> {
   const fetchAllIds = async (token: string, certId: string, listType: string): Promise<string[]> => {
     // eBay caps SoldList DurationInDays at 60; older sales come via backfill_orders
     // (GetSellerTransactions with ModifiedTimeFilter), not this listing query.
-    const durationParam = listType === 'SoldList' ? '<DurationInDays>60</DurationInDays>' : ''
+    const durationParam = listType === 'SoldList' ? '<DurationInDays>59</DurationInDays>' : ''
     const xml1 = await trading(token, certId, 'GetMyeBaySelling', `<?xml version="1.0" encoding="utf-8"?>
 <GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
   <${listType}><Include>true</Include>${durationParam}<Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>1</PageNumber></Pagination></${listType}>
@@ -1099,12 +1099,14 @@ async function handleRequest(req: Request): Promise<Response> {
     if (action === 'import_sold_orders') {
       const days = Math.min(+body.days || 120, 365)
       const startDate = new Date(Date.now() - days * 86400000)
+      const startOffset = Math.max(0, +body.startOffset || 0)
       const { token } = await getToken()
       const headers = { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU', 'Accept': 'application/json' }
       const filter = `creationdate:[${startDate.toISOString()}..${new Date().toISOString()}]`
 
       const startedAt = Date.now()
-      let offset = 0, total = 0, created = 0, updated = 0, failed = 0, lineItems = 0
+      let offset = startOffset, total = 0, created = 0, updated = 0, skipped = 0, failed = 0, lineItems = 0
+      const failedReasons: string[] = []
       do {
         const url = `https://api.ebay.com/sell/fulfillment/v1/order?filter=${encodeURIComponent(filter)}&limit=200&offset=${offset}`
         const r = await fetch(url, { headers })
@@ -1118,6 +1120,7 @@ async function handleRequest(req: Request): Promise<Response> {
           const lis = o.lineItems ?? []
           const ship = +o.pricingSummary?.deliveryCost?.value || 0
           const shipPer = lis.length ? Math.round((ship / lis.length) * 100) / 100 : 0
+          const orderId: string | undefined = o.orderId
           for (const li of lis) {
             lineItems++
             try {
@@ -1133,12 +1136,18 @@ async function handleRequest(req: Request): Promise<Response> {
                 const { data: pr } = await sb.from('parts').select('id').eq('store_id', storeId).eq('sku', sku).maybeSingle()
                 if (pr) partId = pr.id
               }
-              const orderId: string | undefined = o.orderId
               if (partId) {
+                // Skip if already stamped with this exact order — no DB write needed.
+                const { data: cur } = await sb.from('parts').select('ebay_order_id').eq('id', partId).single()
+                if (cur?.ebay_order_id === orderId) { skipped++; continue }
                 await sb.from('parts').update({ status: 'sold', sold_price: price, sold_date: soldDate, shipping_charged: shipPer, ebay_order_id: orderId }).eq('id', partId)
                 updated++
               } else {
-                const newSku = sku || (await sb.rpc('generate_next_sku', { p_store_id: storeId })).data
+                // Item sold on eBay but never imported — create a minimal sold record.
+                // Fallback SKU uses the eBay item ID so re-runs match it via the
+                // 'ended' listing inserted below (idempotent, no duplicates).
+                const { data: skuData } = await sb.rpc('generate_next_sku', { p_store_id: storeId })
+                const newSku = sku || skuData || `EB-${legacyId || orderId?.slice(-8) || lineItems}`
                 const { data: np, error: pErr } = await sb.from('parts').insert({
                   store_id: storeId, sku: newSku, title: li.title || 'eBay sale', status: 'sold',
                   sold_price: price, sold_date: soldDate, shipping_charged: shipPer, list_price: price,
@@ -1147,20 +1156,23 @@ async function handleRequest(req: Request): Promise<Response> {
                   costs: { acquisition: 0, labour: 0, storage: 0, packaging: 0, postage: 0, holding: 0 },
                 }).select('id').single()
                 if (pErr) throw pErr
-                // Link an 'ended' listing so future runs match by item id (no dupes).
                 if (legacyId) await sb.from('listings').insert({
                   store_id: storeId, part_id: np.id, platform: 'ebay', platform_listing_id: legacyId,
                   platform_sku: sku || newSku, status: 'ended', ended_at: soldDate,
                 })
                 created++
               }
-            } catch (_e) { failed++ }
+            } catch (e: any) {
+              failed++
+              if (failedReasons.length < 5) failedReasons.push(String(e?.message || e))
+            }
           }
         }
         offset += 200
-      } while (offset < total && offset < 5000 && Date.now() - startedAt < 110000)
+      } while (offset < total && offset < 5000 && Date.now() - startedAt < 100000)
 
-      return json({ ok: true, version: EDGE_FN_VERSION, days, ebayOrders: total, lineItems, created, updated, failed })
+      const hasMore = offset < total
+      return json({ ok: true, version: EDGE_FN_VERSION, days, ebayOrders: total, lineItems, created, updated, skipped, failed, failedReasons, hasMore, nextOffset: offset })
     }
 
     // eBay selling fees from the Finances API (the ledger eBay's reports are built
