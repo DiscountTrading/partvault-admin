@@ -1973,7 +1973,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
 
                 return (
                   <div style={{ background: '#0e0e0e', borderRadius: 10, padding: '6px 10px 4px', marginBottom: 12, border: '1px solid #1c1c1c' }}>
-                    <div style={{ fontSize: 9, color: active ? '#555' : '#333', letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <div style={{ fontSize: 11, color: done ? '#22c55e' : active ? '#aaa' : '#444', fontWeight: done || active ? 500 : 400, marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {statusText}
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1fr', gap: 0 }}>
@@ -2071,7 +2071,11 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                   ⚡ Quick Sync
                 </button>
               </div>
-              {syncPhase && <div style={{ fontSize: 12, color: syncPhase.startsWith('✓') ? C.green : C.muted, marginBottom: 8 }}>{syncPhase}</div>}
+              {syncPhase && (
+                <div style={{ fontSize: 12, color: syncPhase.startsWith('✓') ? C.green : syncPhase.startsWith('Sync stopped') ? C.red : C.text, marginBottom: 8, padding: '6px 10px', background: syncPhase.startsWith('✓') ? '#ecfdf5' : syncPhase.startsWith('Sync stopped') ? '#fef2f2' : C.bg, borderRadius: 6, border: `1px solid ${syncPhase.startsWith('✓') ? '#a7f3d0' : syncPhase.startsWith('Sync stopped') ? '#fecaca' : C.border}` }}>
+                  {syncPhase}
+                </div>
+              )}
               <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
                 <span>Import: {fmtLastRun(lastRun.import)}</span>
                 <span>Sold orders: {fmtLastRun(lastRun.backfill)}</span>
