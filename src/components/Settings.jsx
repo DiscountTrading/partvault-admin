@@ -1875,17 +1875,35 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
           <div>
             {/* Import */}
             <Section title="📥 eBay Sync">
-              {importJob && (
-                <div style={{ marginBottom: 12 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
-                    <span style={{ color: C.text }}>{importJob.current_item || 'Processing...'}</span>
-                    <span style={{ color: C.muted }}>{importProgress}%</span>
+              {importJob && (() => {
+                const pct = importJob.status === 'completed' ? 100 : displayProgress
+                const done = importJob.status === 'completed'
+                // Car position: clamp so the car stays fully on the track
+                const carPct = Math.min(pct, 96)
+                return (
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 6 }}>
+                      <span style={{ color: C.text }}>{importJob.current_item || 'Processing...'}</span>
+                      <span style={{ color: C.muted, fontVariantNumeric: 'tabular-nums' }}>{importProgress}%</span>
+                    </div>
+                    {/* Race track */}
+                    <div style={{ position: 'relative', height: 28, background: '#2d2d2d', borderRadius: 14, overflow: 'hidden', border: '2px solid #1a1a1a' }}>
+                      {/* Tarmac texture lines */}
+                      <div style={{ position: 'absolute', inset: 0, backgroundImage: 'repeating-linear-gradient(90deg, transparent, transparent 28px, rgba(255,255,255,0.06) 28px, rgba(255,255,255,0.06) 30px)', backgroundSize: '60px 100%' }} />
+                      {/* Centre dashed white line */}
+                      <div style={{ position: 'absolute', top: '50%', left: 0, right: 0, height: 2, transform: 'translateY(-50%)', backgroundImage: 'repeating-linear-gradient(90deg, rgba(255,255,255,0.35) 0, rgba(255,255,255,0.35) 12px, transparent 12px, transparent 24px)' }} />
+                      {/* Progress fill (green tarmac) */}
+                      <div style={{ position: 'absolute', inset: 0, width: `${pct}%`, background: done ? 'rgba(34,197,94,0.25)' : 'rgba(59,130,246,0.18)', transition: 'width 0.3s linear', borderRadius: '14px 0 0 14px' }} />
+                      {/* Finish line */}
+                      <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 10, backgroundImage: 'repeating-linear-gradient(180deg, #fff 0, #fff 4px, #000 4px, #000 8px)', opacity: 0.7 }} />
+                      {/* Car emoji */}
+                      <div style={{ position: 'absolute', top: '50%', left: `${carPct}%`, transform: 'translate(-50%, -50%)', fontSize: 18, lineHeight: 1, transition: 'left 0.3s linear', filter: done ? 'drop-shadow(0 0 4px #22c55e)' : 'none' }}>
+                        🏎️
+                      </div>
+                    </div>
                   </div>
-                  <div style={{ height: 6, background: C.border, borderRadius: 3, overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${importJob.status === 'completed' ? 100 : displayProgress}%`, background: importJob.status === 'completed' ? C.green : C.accent, transition: 'width 0.3s linear' }} />
-                  </div>
-                </div>
-              )}
+                )
+              })()}
 
               {/* Live sync-health checker */}
               {ebayConnected && (() => {
