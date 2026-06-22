@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.29'
+const EDGE_FN_VERSION         = '3.14.30'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -1147,7 +1147,7 @@ async function handleRequest(req: Request): Promise<Response> {
                 // Fallback SKU uses the eBay item ID so re-runs match it via the
                 // 'ended' listing inserted below (idempotent, no duplicates).
                 const { data: skuData } = await sb.rpc('generate_next_sku', { p_store_id: storeId })
-                const newSku = sku || skuData || `EB-${legacyId || orderId?.slice(-8) || lineItems}`
+                const newSku = sku || skuData || `EB-${orderId?.slice(-12) || legacyId || lineItems}`
                 const { data: np, error: pErr } = await sb.from('parts').insert({
                   store_id: storeId, sku: newSku, title: li.title || 'eBay sale', status: 'sold',
                   sold_price: price, sold_date: soldDate, shipping_charged: shipPer, list_price: price,
