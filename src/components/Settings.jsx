@@ -1910,12 +1910,16 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
           <div>
             {/* Import */}
             <Section title="📥 eBay Sync">
-              {importJob && (() => {
-                const pct = importJob.status === 'completed' ? 100 : displayProgress
-                const done = importJob.status === 'completed'
+              {/* Car dashboard — always visible, live during sync, idle when not */}
+              {(() => {
+                const active = importJob && importJob.status === 'running'
+                const done   = importJob?.status === 'completed'
+                const pct    = done ? 100 : (active ? displayProgress : 0)
                 const remaining = Math.max(0, 100 - pct)
+                const statusText = done ? '🏁 Sync complete'
+                  : active ? (importJob.current_item || 'Processing…')
+                  : 'Ready'
 
-                // SVG gauge helpers — arc from 150° clockwise 240° to 30°
                 const MIN_A = 150, SWEEP_A = 240
                 const toRad = a => a * Math.PI / 180
                 const arcD = (cx, cy, r, a1, span) => {
@@ -1925,46 +1929,48 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                   return `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${span > 180 ? 1 : 0} 1 ${x2.toFixed(2)} ${y2.toFixed(2)}`
                 }
                 const gauge = (value, max, label, color) => {
-                  const cx = 50, cy = 56, r = 36
+                  const cx = 50, cy = 46, r = 30
                   const span = (Math.min(Math.max(value, 0), max) / max) * SWEEP_A
                   const needleAngle = MIN_A + span
-                  const ticks = Array.from({ length: 9 }, (_, i) => {
-                    const a = MIN_A + (i / 8) * SWEEP_A, rad = toRad(a), ri = r - (i % 2 === 0 ? 7 : 4)
+                  const ticks = Array.from({ length: 7 }, (_, i) => {
+                    const a = MIN_A + (i / 6) * SWEEP_A, rad = toRad(a), ri = r - (i % 2 === 0 ? 6 : 3)
                     return { x1: (cx + ri * Math.cos(rad)).toFixed(1), y1: (cy + ri * Math.sin(rad)).toFixed(1), x2: (cx + r * Math.cos(rad)).toFixed(1), y2: (cy + r * Math.sin(rad)).toFixed(1), major: i % 2 === 0 }
                   })
                   return (
-                    <svg viewBox="0 0 100 84" style={{ width: '100%', overflow: 'visible' }}>
-                      <path d={arcD(cx, cy, r, MIN_A, SWEEP_A)} fill="none" stroke="#252525" strokeWidth="5" strokeLinecap="round" />
-                      {span > 1 && <path d={arcD(cx, cy, r, MIN_A, span)} fill="none" stroke={color} strokeWidth="5" strokeLinecap="round" opacity="0.85" />}
-                      {ticks.map((t, i) => <line key={i} x1={t.x1} y1={t.y1} x2={t.x2} y2={t.y2} stroke="#3a3a3a" strokeWidth={t.major ? 1.5 : 0.8} />)}
-                      <g transform={`rotate(${needleAngle}, ${cx}, ${cy})`} style={{ transition: 'transform 0.35s ease-out' }}>
-                        <line x1={cx - 8} y1={cy} x2={cx + r - 9} y2={cy} stroke="#eee" strokeWidth="1.8" strokeLinecap="round" />
+                    <svg viewBox="0 0 100 70" style={{ width: '100%' }}>
+                      <path d={arcD(cx, cy, r, MIN_A, SWEEP_A)} fill="none" stroke="#222" strokeWidth="4" strokeLinecap="round" />
+                      {span > 1 && <path d={arcD(cx, cy, r, MIN_A, span)} fill="none" stroke={color} strokeWidth="4" strokeLinecap="round" opacity="0.9" />}
+                      {ticks.map((t, i) => <line key={i} x1={t.x1} y1={t.y1} x2={t.x2} y2={t.y2} stroke="#333" strokeWidth={t.major ? 1.2 : 0.7} />)}
+                      <g transform={`rotate(${needleAngle}, ${cx}, ${cy})`} style={{ transition: 'transform 0.4s ease-out' }}>
+                        <line x1={cx - 6} y1={cy} x2={cx + r - 7} y2={cy} stroke="#ddd" strokeWidth="1.5" strokeLinecap="round" />
                       </g>
-                      <circle cx={cx} cy={cy} r="5" fill={color} opacity="0.9" />
-                      <circle cx={cx} cy={cy} r="2.5" fill="#111" />
-                      <text x={cx} y={cy + 19} textAnchor="middle" fill="#ccc" fontSize="13" fontWeight="700" fontFamily="monospace">
+                      <circle cx={cx} cy={cy} r="4" fill={color} opacity="0.85" />
+                      <circle cx={cx} cy={cy} r="2" fill="#111" />
+                      <text x={cx} y={cy + 15} textAnchor="middle" fill="#bbb" fontSize="11" fontWeight="700" fontFamily="monospace">
                         {label === 'PROGRESS' ? `${Math.round(value)}%` : Math.round(value)}
                       </text>
-                      <text x={cx} y={cy + 27} textAnchor="middle" fill="#555" fontSize="6" letterSpacing="0.8">{label}</text>
+                      <text x={cx} y={cy + 23} textAnchor="middle" fill="#444" fontSize="5.5" letterSpacing="0.6">{label}</text>
                     </svg>
                   )
                 }
 
                 return (
-                  <div style={{ background: '#0e0e0e', borderRadius: 12, padding: '8px 12px 6px', marginBottom: 14, border: '1px solid #1c1c1c' }}>
-                    <div style={{ fontSize: 10, color: '#4a4a4a', letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {done ? '🏁 Sync complete' : `⚙ ${importJob.current_item || 'Processing...'}`}
+                  <div style={{ background: '#0e0e0e', borderRadius: 10, padding: '6px 10px 4px', marginBottom: 12, border: '1px solid #1c1c1c' }}>
+                    <div style={{ fontSize: 9, color: active ? '#555' : '#333', letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {statusText}
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.25fr 1fr', gap: 2 }}>
-                      {gauge(rpm, 100, 'ACTIVITY', '#f59e0b')}
-                      {gauge(pct, 100, 'PROGRESS', done ? '#22c55e' : '#3b82f6')}
-                      {gauge(remaining, 100, 'REMAINING', '#ef4444')}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1fr', gap: 0 }}>
+                      {gauge(active ? rpm : 0, 100, 'ACTIVITY', '#f59e0b')}
+                      {gauge(pct, 100, 'PROGRESS', done ? '#22c55e' : active ? '#3b82f6' : '#1e3a5f')}
+                      {gauge(active || done ? remaining : 100, 100, 'REMAINING', '#ef4444')}
                     </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-around', borderTop: '1px solid #1a1a1a', paddingTop: 4 }}>
-                      <span style={{ color: '#22c55e', fontSize: 10 }}>↑ {importJob.imported ?? 0} new</span>
-                      <span style={{ color: '#383838', fontSize: 10 }}>⤳ {importJob.skipped ?? 0} exist</span>
-                      <span style={{ color: '#7f1d1d', fontSize: 10 }}>✕ {importJob.failed ?? 0} failed</span>
-                    </div>
+                    {(active || done) && (
+                      <div style={{ display: 'flex', justifyContent: 'space-around', borderTop: '1px solid #181818', paddingTop: 3 }}>
+                        <span style={{ color: '#22c55e', fontSize: 9 }}>↑ {importJob.imported ?? 0} new</span>
+                        <span style={{ color: '#333', fontSize: 9 }}>⤳ {importJob.skipped ?? 0} exist</span>
+                        <span style={{ color: '#7f1d1d', fontSize: 9 }}>✕ {importJob.failed ?? 0} failed</span>
+                      </div>
+                    )}
                   </div>
                 )
               })()}
