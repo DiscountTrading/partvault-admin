@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.18'
+const EDGE_FN_VERSION         = '3.14.19'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -416,7 +416,9 @@ async function handleRequest(req: Request): Promise<Response> {
   }
 
   const fetchAllIds = async (token: string, certId: string, listType: string): Promise<string[]> => {
-    const durationParam = listType === 'SoldList' ? '<DurationInDays>90</DurationInDays>' : ''
+    // eBay caps SoldList DurationInDays at 60; older sales come via backfill_orders
+    // (GetSellerTransactions with ModifiedTimeFilter), not this listing query.
+    const durationParam = listType === 'SoldList' ? '<DurationInDays>60</DurationInDays>' : ''
     const xml1 = await trading(token, certId, 'GetMyeBaySelling', `<?xml version="1.0" encoding="utf-8"?>
 <GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
   <${listType}><Include>true</Include>${durationParam}<Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>1</PageNumber></Pagination></${listType}>
