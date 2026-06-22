@@ -1979,7 +1979,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                   const needleA = MIN_A + span
                   const nRad = toRad(needleA)
                   return (
-                    <svg viewBox="0 0 120 90" style={{ width: '100%' }}>
+                    <svg viewBox="0 0 120 90" preserveAspectRatio="xMidYMid meet" style={{ height: 58, width: '100%', display: 'block' }}>
                       {/* Track */}
                       <path d={arcD(cx, cy, r, MIN_A, SWEEP_A)} fill="none" stroke="#1e1e1e" strokeWidth="6" strokeLinecap="round" />
                       {/* Fill */}
@@ -2017,7 +2017,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
 
                     {/* Road scene — top-down, compact */}
                     <div style={{ position: 'relative', height: 70, overflow: 'hidden' }}>
-                      <svg viewBox="0 0 320 70" preserveAspectRatio="xMidYMid slice" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
+                      <svg viewBox="0 0 320 70" preserveAspectRatio="xMidYMid meet" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
                         {/* Road surface */}
                         <rect width="320" height="70" fill="#3a3a3a" />
                         {/* Kerb lines */}
@@ -2044,31 +2044,31 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                         <g transform="translate(160,35)"
                            style={{ animation: active ? 'pvWheelWobble 1.2s ease-in-out infinite' : 'none' }}>
                           {/* Rim */}
-                          <circle cx="0" cy="0" r="26" fill="none" stroke="#222" strokeWidth="9" />
-                          <circle cx="0" cy="0" r="26" fill="none" stroke="#3a3a3a" strokeWidth="7" />
-                          <circle cx="0" cy="0" r="26" fill="none" stroke="#555" strokeWidth="1" />
+                          <circle cx="0" cy="0" r="20" fill="none" stroke="#222" strokeWidth="7" />
+                          <circle cx="0" cy="0" r="20" fill="none" stroke="#3a3a3a" strokeWidth="5" />
+                          <circle cx="0" cy="0" r="20" fill="none" stroke="#555" strokeWidth="0.8" />
                           {/* Spokes */}
-                          <line x1="0" y1="-26" x2="0" y2="-10" stroke="#333" strokeWidth="6" strokeLinecap="round" />
-                          <line x1="0" y1="-26" x2="0" y2="-10" stroke="#4a4a4a" strokeWidth="2.5" strokeLinecap="round" />
-                          <line x1="-22" y1="13" x2="-9" y2="5" stroke="#333" strokeWidth="6" strokeLinecap="round" />
-                          <line x1="-22" y1="13" x2="-9" y2="5" stroke="#4a4a4a" strokeWidth="2.5" strokeLinecap="round" />
-                          <line x1="22" y1="13" x2="9" y2="5" stroke="#333" strokeWidth="6" strokeLinecap="round" />
-                          <line x1="22" y1="13" x2="9" y2="5" stroke="#4a4a4a" strokeWidth="2.5" strokeLinecap="round" />
+                          <line x1="0" y1="-20" x2="0" y2="-8" stroke="#333" strokeWidth="5" strokeLinecap="round" />
+                          <line x1="0" y1="-20" x2="0" y2="-8" stroke="#4a4a4a" strokeWidth="2" strokeLinecap="round" />
+                          <line x1="-17" y1="10" x2="-7" y2="4" stroke="#333" strokeWidth="5" strokeLinecap="round" />
+                          <line x1="-17" y1="10" x2="-7" y2="4" stroke="#4a4a4a" strokeWidth="2" strokeLinecap="round" />
+                          <line x1="17" y1="10" x2="7" y2="4" stroke="#333" strokeWidth="5" strokeLinecap="round" />
+                          <line x1="17" y1="10" x2="7" y2="4" stroke="#4a4a4a" strokeWidth="2" strokeLinecap="round" />
                           {/* Hub */}
-                          <circle cx="0" cy="0" r="9" fill="#1a1a1a" />
-                          <circle cx="0" cy="0" r="6" fill="#252525" />
-                          <circle cx="0" cy="0" r="3" fill={active ? '#f59e0b' : done ? '#22c55e' : '#333'} />
+                          <circle cx="0" cy="0" r="7" fill="#1a1a1a" />
+                          <circle cx="0" cy="0" r="4.5" fill="#252525" />
+                          <circle cx="0" cy="0" r="2.5" fill={active ? '#f59e0b' : done ? '#22c55e' : '#333'} />
                         </g>
                       </svg>
                     </div>
 
                     {/* Gauges — compact */}
-                    <div style={{ display: 'flex', background: '#111', borderTop: '2px solid #222' }}>
-                      <div style={{ flex: 1, padding: '2px 6px 0', maxHeight: 68, overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', background: '#111', borderTop: '2px solid #222', padding: '3px 0' }}>
+                      <div style={{ flex: 1 }}>
                         {gaugeSvg(active ? rpm : 0, 100, 'ACTIVITY', '#f59e0b')}
                       </div>
                       <div style={{ width: 1, background: '#1e1e1e' }} />
-                      <div style={{ flex: 1, padding: '2px 6px 0', maxHeight: 68, overflow: 'hidden' }}>
+                      <div style={{ flex: 1 }}>
                         {gaugeSvg(pct, 100, 'PROGRESS', done ? '#22c55e' : active ? '#3b82f6' : '#1e3a5c')}
                       </div>
                     </div>
