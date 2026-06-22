@@ -770,13 +770,26 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
 
   // One-click full sync: import new listings → update sold orders (last ~4
   // months) → reconcile against eBay. Each step shows its own progress below.
+  // Order-complete sold import via eBay getOrders (matches Seller Hub exactly).
+  const runSoldOrders = async (days = 120) => {
+    const res = await fetch(EDGE_FN, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'import_sold_orders', storeId, days }),
+    })
+    const d = await res.json()
+    if (!res.ok || d.error) throw new Error(d.error || 'Sold-orders import failed')
+    markRun('backfill')
+    return d
+  }
+
   const syncEverything = async () => {
     setSyncingAll(true)
     try {
       setSyncPhase('1/3 · Importing listings from eBay…')
       await importAllListings()
-      setSyncPhase('2/3 · Updating sold orders…')
-      await runBackfill(120)
+      setSyncPhase('2/3 · Importing sold orders…')
+      const so = await runSoldOrders(120)
+      setSyncPhase(`2/3 · Sold orders: ${so.created} new, ${so.updated} updated`)
       setSyncPhase('3/3 · Reconciling with eBay…')
       await runReconcile()
       setSyncPhase('✓ Sync complete')

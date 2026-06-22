@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.22'
+const EDGE_FN_VERSION         = '3.14.23'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -825,10 +825,9 @@ async function handleRequest(req: Request): Promise<Response> {
               if (c.isComplete || c.status === 'completed') { phase = 'backfill'; await save({ phase }) }
             }
           } else if (phase === 'backfill') {
-            const fromDate = new Date(Date.now() - 120 * 86400 * 1000).toISOString()
-            const b = await selfCall({ action: 'backfill_orders', storeId, fromDate })
+            const b = await selfCall({ action: 'import_sold_orders', storeId, days: 120 })
             phase = 'reconcile'
-            await save({ phase, detail: `sold orders: ${b.updated ?? 0} updated` })
+            await save({ phase, detail: `sold orders: ${b.created ?? 0} new, ${b.updated ?? 0} updated` })
           } else if (phase === 'reconcile') {
             const rec = await selfCall({ action: 'reconcile', storeId })
             phase = 'done'
@@ -1086,6 +1085,76 @@ async function handleRequest(req: Request): Promise<Response> {
         ourCount, ourItemTotal: r2(ourItem), ourShipping: r2(ourShip),
         missingSales: Math.max(0, ebayItems - ourCount),
       })
+    }
+
+    // Order-complete sold import. Walks eBay getOrders by creation date and, for
+    // every line item, records the sale on the matching part (by eBay item id, then
+    // SKU) — creating a minimal sold part + an 'ended' listing row when the item was
+    // never imported (so re-runs match it and don't duplicate). This is what makes
+    // PartVault's sold figures match Seller Hub 100%.
+    if (action === 'import_sold_orders') {
+      const days = Math.min(+body.days || 120, 365)
+      const startDate = new Date(Date.now() - days * 86400000)
+      const { token } = await getToken()
+      const headers = { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU', 'Accept': 'application/json' }
+      const filter = `creationdate:[${startDate.toISOString()}..${new Date().toISOString()}]`
+
+      const startedAt = Date.now()
+      let offset = 0, total = 0, created = 0, updated = 0, failed = 0, lineItems = 0
+      do {
+        const url = `https://api.ebay.com/sell/fulfillment/v1/order?filter=${encodeURIComponent(filter)}&limit=200&offset=${offset}`
+        const r = await fetch(url, { headers })
+        if (!r.ok) { const t = await r.text(); throw new Error(`getOrders ${r.status}: ${t.slice(0, 300)}`) }
+        const d = await r.json()
+        total = +d.total || 0
+        for (const o of (d.orders ?? [])) {
+          const cs = o.cancelStatus?.cancelState
+          if (cs && cs !== 'NONE_REQUESTED') continue
+          const soldDate: string = o.creationDate
+          const lis = o.lineItems ?? []
+          const ship = +o.pricingSummary?.deliveryCost?.value || 0
+          const shipPer = lis.length ? Math.round((ship / lis.length) * 100) / 100 : 0
+          for (const li of lis) {
+            lineItems++
+            try {
+              const legacyId: string | undefined = li.legacyItemId
+              const sku: string | undefined = li.sku
+              const price = +li.lineItemCost?.value || +li.total?.value || 0
+              let partId: string | null = null
+              if (legacyId) {
+                const { data: lst } = await sb.from('listings').select('part_id').eq('store_id', storeId).eq('platform', 'ebay').eq('platform_listing_id', legacyId).limit(1).maybeSingle()
+                if (lst) partId = lst.part_id
+              }
+              if (!partId && sku) {
+                const { data: pr } = await sb.from('parts').select('id').eq('store_id', storeId).eq('sku', sku).maybeSingle()
+                if (pr) partId = pr.id
+              }
+              if (partId) {
+                await sb.from('parts').update({ status: 'sold', sold_price: price, sold_date: soldDate, shipping_charged: shipPer }).eq('id', partId)
+                updated++
+              } else {
+                const newSku = sku || (await sb.rpc('generate_next_sku', { p_store_id: storeId })).data
+                const { data: np, error: pErr } = await sb.from('parts').insert({
+                  store_id: storeId, sku: newSku, title: li.title || 'eBay sale', status: 'sold',
+                  sold_price: price, sold_date: soldDate, shipping_charged: shipPer, list_price: price,
+                  source: 'ebay_order', condition: 'Used', ai_assessed: false,
+                  costs: { acquisition: 0, labour: 0, storage: 0, packaging: 0, postage: 0, holding: 0 },
+                }).select('id').single()
+                if (pErr) throw pErr
+                // Link an 'ended' listing so future runs match by item id (no dupes).
+                if (legacyId) await sb.from('listings').insert({
+                  store_id: storeId, part_id: np.id, platform: 'ebay', platform_listing_id: legacyId,
+                  platform_sku: sku || newSku, status: 'ended', ended_at: soldDate,
+                })
+                created++
+              }
+            } catch (_e) { failed++ }
+          }
+        }
+        offset += 200
+      } while (offset < total && offset < 5000 && Date.now() - startedAt < 110000)
+
+      return json({ ok: true, version: EDGE_FN_VERSION, days, ebayOrders: total, lineItems, created, updated, failed })
     }
 
     if (action === 'sync_status') {
