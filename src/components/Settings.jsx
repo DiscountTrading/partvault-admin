@@ -1890,17 +1890,21 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                   </div>
                   {salesMatch?.error && <div style={{ fontSize: 12, color: C.red, marginTop: 8 }}>{salesMatch.error}</div>}
                   {salesMatch && !salesMatch.error && (() => {
+                    const itemMiss = salesMatch.missingSales || 0
                     const itemGap = (salesMatch.ebayItemTotal || 0) - (salesMatch.ourItemTotal || 0)
-                    const matched = salesMatch.missingSales === 0 && Math.abs(itemGap) < Math.max(50, salesMatch.ebayItemTotal * 0.02)
+                    const matched = itemMiss === 0 && Math.abs(itemGap) < Math.max(20, salesMatch.ebayItemTotal * 0.005)
                     return (
                       <div style={{ fontSize: 13, marginTop: 10, lineHeight: 1.6 }}>
-                        <div><strong>eBay:</strong> {salesMatch.ebayCount} sales · item {fmt(salesMatch.ebayItemTotal)} + shipping {fmt(salesMatch.ebayShipping)} = <strong>{fmt(salesMatch.ebayPaidTotal)}</strong></div>
-                        <div><strong>PartVault:</strong> {salesMatch.ourCount} sales · {fmt(salesMatch.ourItemTotal)} <span style={{ color: C.muted }}>(item price only)</span></div>
+                        <div><strong>eBay</strong> ({salesMatch.ebayItems} items / {salesMatch.ebayOrders} orders{salesMatch.ebayCancelled ? `, ${salesMatch.ebayCancelled} cancelled` : ''}):</div>
+                        <div style={{ marginLeft: 10, color: C.muted }}>item {fmt(salesMatch.ebayItemTotal)} + shipping {fmt(salesMatch.ebayShipping)} + tax {fmt(salesMatch.ebayTax)} = <strong style={{ color: C.text }}>{fmt(salesMatch.ebayPaidTotal)}</strong></div>
+                        <div style={{ marginTop: 4 }}><strong>PartVault</strong> ({salesMatch.ourCount} items):</div>
+                        <div style={{ marginLeft: 10, color: C.muted }}>item {fmt(salesMatch.ourItemTotal)} + shipping {fmt(salesMatch.ourShipping)} = <strong style={{ color: C.text }}>{fmt((salesMatch.ourItemTotal || 0) + (salesMatch.ourShipping || 0))}</strong></div>
                         <div style={{ marginTop: 6, color: matched ? C.green : '#b45309' }}>
                           {matched
-                            ? `✓ Item totals match — the difference vs eBay's headline is shipping (${fmt(salesMatch.ebayShipping)}), which we don't store on the sale.`
-                            : `⚠ ${salesMatch.missingSales} sale${salesMatch.missingSales === 1 ? '' : 's'} on eBay aren't recorded here (~${fmt(itemGap)} item value). Run Sync / Import sold history to capture them.`}
+                            ? `✓ Matches eBay — item totals agree (the only remaining difference vs eBay's headline is GST/tax of ${fmt(salesMatch.ebayTax)}, which eBay collects & remits).`
+                            : `⚠ ${itemMiss} item${itemMiss === 1 ? '' : 's'} on eBay not recorded here${itemGap ? ` (~${fmt(itemGap)} item value)` : ''}. Run Sync / Import sold history to capture them.`}
                         </div>
+                        <div style={{ marginTop: 4, fontSize: 11, color: C.muted }}>Source: eBay getOrders · fn {salesMatch.version} · last {salesMatch.days}d</div>
                       </div>
                     )
                   })()}

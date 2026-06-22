@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.21'
+const EDGE_FN_VERSION         = '3.14.22'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -1031,60 +1031,60 @@ async function handleRequest(req: Request): Promise<Response> {
     }
 
     if (action === 'sales_match') {
-      // Compare eBay's actual sold transactions to our recorded sales for a period,
-      // separating item price from shipping so a "gap" can be explained.
+      // Reconcile against eBay's order-complete source (Fulfillment getOrders),
+      // which matches Seller Hub. Orders counted by creation date in-window; pricing
+      // broken into item / shipping / tax / total so any gap is fully explained.
       const authHeader = req.headers.get('Authorization') || ''
       const userClient = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: authHeader } } })
       const { data: member } = await userClient.rpc('is_store_member', { p_store_id: storeId })
       if (!member) return json({ error: 'Not authorised' }, 403)
 
-      const days = Math.min(+body.days || 90, 90)
+      const days = Math.min(+body.days || 90, 365)
       const startDate = new Date(Date.now() - days * 86400000)
-      const { token, certId } = await getToken()
-      const seenTx = new Set<string>()
-      let ebayCount = 0, itemTotal = 0, paidTotal = 0
-      const ebayItemIds = new Set<string>()
-      let windowEnd = new Date()
-      while (windowEnd > startDate) {
-        const windowStart = new Date(Math.max(windowEnd.getTime() - 30 * 86400000, startDate.getTime()))
-        let page = 1, more = true
-        while (more && page <= 40) {
-          const xml = await trading(token, certId, 'GetSellerTransactions', `<?xml version="1.0" encoding="utf-8"?>
-<GetSellerTransactionsRequest xmlns="urn:ebay:apis:eBLBaseComponents">
-  <ModifiedTimeFilter><TimeFrom>${windowStart.toISOString()}</TimeFrom><TimeTo>${windowEnd.toISOString()}</TimeTo></ModifiedTimeFilter>
-  <Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination>
-</GetSellerTransactionsRequest>`)
-          if (getTag(xml, 'Ack') === 'Failure') break
-          for (const m of xml.matchAll(/<Transaction>([\s\S]*?)<\/Transaction>/g)) {
-            const tx = m[1]
-            const txId = getTag(tx, 'TransactionID') || ''
-            const orderId = getTag(tx, 'OrderLineItemID') || txId
-            if (orderId && seenTx.has(orderId)) continue
-            const soldAt = getTag(tx, 'PaidTime') || getTag(tx, 'CreatedDate')
-            if (soldAt && new Date(soldAt) < startDate) continue
-            if (orderId) seenTx.add(orderId)
-            const item = parseFloat(getTag(tx, 'TransactionPrice')) || 0
-            const paid = parseFloat(getTag(tx, 'AmountPaid')) || item
-            const itemId = getTag(tx.match(/<Item>([\s\S]*?)<\/Item>/)?.[1] ?? '', 'ItemID')
-            if (itemId) ebayItemIds.add(itemId)
-            ebayCount++; itemTotal += item; paidTotal += paid
-          }
-          more = page < getTotalPages(xml)
-          page++
-        }
-        windowEnd = windowStart
-      }
+      const { token } = await getToken()
+      const headers = { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU', 'Accept': 'application/json' }
 
-      const { data: ourSold } = await sb.from('parts').select('sold_price, sold_date')
+      const filter = `creationdate:[${startDate.toISOString()}..${new Date().toISOString()}]`
+      let offset = 0, total = 0
+      let ebayOrders = 0, ebayItems = 0, cancelled = 0
+      let itemTotal = 0, shipTotal = 0, taxTotal = 0, grandTotal = 0
+      const ebayItemIds = new Set<string>()
+      do {
+        const url = `https://api.ebay.com/sell/fulfillment/v1/order?filter=${encodeURIComponent(filter)}&limit=200&offset=${offset}`
+        const r = await fetch(url, { headers })
+        if (!r.ok) { const t = await r.text(); throw new Error(`getOrders ${r.status}: ${t.slice(0, 300)}`) }
+        const d = await r.json()
+        total = +d.total || 0
+        for (const o of (d.orders ?? [])) {
+          const cs = o.cancelStatus?.cancelState
+          if (cs && cs !== 'NONE_REQUESTED') { cancelled++; continue }
+          const ps = o.pricingSummary ?? {}
+          ebayOrders++
+          itemTotal  += +ps.priceSubtotal?.value || 0
+          shipTotal  += +ps.deliveryCost?.value  || 0
+          taxTotal   += +ps.tax?.value           || 0
+          grandTotal += +ps.total?.value         || 0
+          for (const li of (o.lineItems ?? [])) {
+            ebayItems += +li.quantity || 1
+            if (li.legacyItemId) ebayItemIds.add(li.legacyItemId)
+          }
+        }
+        offset += 200
+      } while (offset < total && offset < 5000)
+
+      const { data: ourSold } = await sb.from('parts').select('sold_price, shipping_charged')
         .eq('store_id', storeId).eq('status', 'sold').gte('sold_date', startDate.toISOString()).is('deleted_at', null)
       const ourCount = (ourSold ?? []).length
-      const ourTotal = (ourSold ?? []).reduce((a: number, p: any) => a + (+p.sold_price || 0), 0)
+      const ourItem  = (ourSold ?? []).reduce((a: number, p: any) => a + (+p.sold_price || 0), 0)
+      const ourShip  = (ourSold ?? []).reduce((a: number, p: any) => a + (+p.shipping_charged || 0), 0)
       const r2 = (n: number) => Math.round(n * 100) / 100
+
       return json({
-        ok: true, version: EDGE_FN_VERSION, days,
-        ebayCount, ebayItemTotal: r2(itemTotal), ebayShipping: r2(paidTotal - itemTotal), ebayPaidTotal: r2(paidTotal),
-        ourCount, ourItemTotal: r2(ourTotal),
-        missingSales: Math.max(0, ebayCount - ourCount),
+        ok: true, version: EDGE_FN_VERSION, days, source: 'getOrders',
+        ebayOrders, ebayItems, ebayCancelled: cancelled,
+        ebayItemTotal: r2(itemTotal), ebayShipping: r2(shipTotal), ebayTax: r2(taxTotal), ebayPaidTotal: r2(grandTotal),
+        ourCount, ourItemTotal: r2(ourItem), ourShipping: r2(ourShip),
+        missingSales: Math.max(0, ebayItems - ourCount),
       })
     }
 
