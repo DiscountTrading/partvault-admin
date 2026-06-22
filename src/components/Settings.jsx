@@ -1887,18 +1887,17 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                       <span style={{ color: C.text }}>{importJob.current_item || 'Processing...'}</span>
                       <span style={{ color: C.muted, fontVariantNumeric: 'tabular-nums' }}>{importProgress}%</span>
                     </div>
-                    {/* Race track */}
-                    <div style={{ position: 'relative', height: 36, background: '#2d2d2d', borderRadius: 18, overflow: 'hidden', border: '2px solid #1a1a1a' }}>
-                      {/* Tarmac texture lines */}
-                      <div style={{ position: 'absolute', inset: 0, backgroundImage: 'repeating-linear-gradient(90deg, transparent, transparent 28px, rgba(255,255,255,0.06) 28px, rgba(255,255,255,0.06) 30px)', backgroundSize: '60px 100%' }} />
-                      {/* Centre dashed white line */}
-                      <div style={{ position: 'absolute', top: '50%', left: 0, right: 0, height: 2, transform: 'translateY(-50%)', backgroundImage: 'repeating-linear-gradient(90deg, rgba(255,255,255,0.35) 0, rgba(255,255,255,0.35) 12px, transparent 12px, transparent 24px)' }} />
-                      {/* Progress fill (green tarmac) */}
-                      <div style={{ position: 'absolute', inset: 0, width: `${pct}%`, background: done ? 'rgba(34,197,94,0.25)' : 'rgba(59,130,246,0.18)', transition: 'width 0.3s linear', borderRadius: '14px 0 0 14px' }} />
-                      {/* Finish line */}
-                      <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 10, backgroundImage: 'repeating-linear-gradient(180deg, #fff 0, #fff 4px, #000 4px, #000 8px)', opacity: 0.7 }} />
-                      {/* Car emoji */}
-                      <div style={{ position: 'absolute', top: '50%', left: `${carPct}%`, transform: 'translate(-50%, -50%) scaleX(-1)', fontSize: 26, lineHeight: 1, transition: 'left 0.3s linear', filter: done ? 'drop-shadow(0 0 5px #22c55e)' : 'none' }}>
+                    {/* Race track — car sits on top, not clipped */}
+                    <div style={{ position: 'relative', height: 48 }}>
+                      {/* Road */}
+                      <div style={{ position: 'absolute', top: '50%', left: 0, right: 0, height: 18, transform: 'translateY(-50%)', background: '#2d2d2d', borderRadius: 9, border: '2px solid #1a1a1a', overflow: 'hidden' }}>
+                        <div style={{ position: 'absolute', inset: 0, backgroundImage: 'repeating-linear-gradient(90deg, transparent, transparent 28px, rgba(255,255,255,0.06) 28px, rgba(255,255,255,0.06) 30px)' }} />
+                        <div style={{ position: 'absolute', top: '50%', left: 0, right: 0, height: 2, transform: 'translateY(-50%)', backgroundImage: 'repeating-linear-gradient(90deg, rgba(255,255,255,0.35) 0, rgba(255,255,255,0.35) 10px, transparent 10px, transparent 20px)' }} />
+                        <div style={{ position: 'absolute', inset: 0, width: `${pct}%`, background: done ? 'rgba(34,197,94,0.3)' : 'rgba(59,130,246,0.2)', transition: 'width 0.3s linear' }} />
+                        <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 8, backgroundImage: 'repeating-linear-gradient(180deg, #fff 0, #fff 3px, #000 3px, #000 6px)', opacity: 0.8 }} />
+                      </div>
+                      {/* Car — full height, not clipped by road */}
+                      <div style={{ position: 'absolute', top: '50%', left: `${carPct}%`, transform: 'translate(-50%, -50%) scaleX(-1)', fontSize: 40, lineHeight: 1, transition: 'left 0.3s linear', filter: done ? 'drop-shadow(0 0 6px #22c55e)' : 'none' }}>
                         🏎️
                       </div>
                     </div>
