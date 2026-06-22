@@ -1107,25 +1107,26 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   })() : 0
 
   // Smooth display progress: trickles forward between real updates so the bar
-  // always moves. Snaps forward when real progress advances; never outruns it.
+  // always moves. Resets to 0 on each new job, snaps forward on real updates.
   const [displayProgress, setDisplayProgress] = useState(0)
+  const lastJobId = useRef(null)
   useEffect(() => {
-    if (!importJob || importJob.status === 'completed') {
-      setDisplayProgress(importProgress)
-      return
+    if (!importJob) { setDisplayProgress(0); lastJobId.current = null; return }
+    // Reset to 0 whenever a brand-new job starts
+    if (importJob.id && importJob.id !== lastJobId.current) {
+      lastJobId.current = importJob.id
+      setDisplayProgress(0)
     }
-    // Snap forward immediately if real progress jumped ahead of display
+    if (importJob.status === 'completed') { setDisplayProgress(100); return }
+    // Snap forward if real progress jumped ahead
     setDisplayProgress(p => p < importProgress ? importProgress : p)
-    // Trickle toward a ceiling 2% below the next expected real jump
-    const ceiling = Math.max(importProgress, Math.min(importProgress + 2, 99))
+    // Trickle toward a ceiling just ahead of real progress
+    const ceiling = Math.min(importProgress + 2, 99)
     const id = setInterval(() => {
-      setDisplayProgress(p => {
-        if (p >= ceiling) return p
-        return Math.min(p + 0.4, ceiling)
-      })
+      setDisplayProgress(p => p >= ceiling ? p : Math.min(p + 0.4, ceiling))
     }, 300)
     return () => clearInterval(id)
-  }, [importProgress, importJob?.status])
+  }, [importProgress, importJob?.status, importJob?.id])
 
   // ─── RECONCILE SECTION COMPONENT ─────────────────────────────────────────
   const ReconcileSection = () => (
@@ -1887,7 +1888,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                       <span style={{ color: C.muted, fontVariantNumeric: 'tabular-nums' }}>{importProgress}%</span>
                     </div>
                     {/* Race track */}
-                    <div style={{ position: 'relative', height: 28, background: '#2d2d2d', borderRadius: 14, overflow: 'hidden', border: '2px solid #1a1a1a' }}>
+                    <div style={{ position: 'relative', height: 36, background: '#2d2d2d', borderRadius: 18, overflow: 'hidden', border: '2px solid #1a1a1a' }}>
                       {/* Tarmac texture lines */}
                       <div style={{ position: 'absolute', inset: 0, backgroundImage: 'repeating-linear-gradient(90deg, transparent, transparent 28px, rgba(255,255,255,0.06) 28px, rgba(255,255,255,0.06) 30px)', backgroundSize: '60px 100%' }} />
                       {/* Centre dashed white line */}
@@ -1897,7 +1898,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                       {/* Finish line */}
                       <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 10, backgroundImage: 'repeating-linear-gradient(180deg, #fff 0, #fff 4px, #000 4px, #000 8px)', opacity: 0.7 }} />
                       {/* Car emoji */}
-                      <div style={{ position: 'absolute', top: '50%', left: `${carPct}%`, transform: 'translate(-50%, -50%)', fontSize: 18, lineHeight: 1, transition: 'left 0.3s linear', filter: done ? 'drop-shadow(0 0 4px #22c55e)' : 'none' }}>
+                      <div style={{ position: 'absolute', top: '50%', left: `${carPct}%`, transform: 'translate(-50%, -50%) scaleX(-1)', fontSize: 26, lineHeight: 1, transition: 'left 0.3s linear', filter: done ? 'drop-shadow(0 0 5px #22c55e)' : 'none' }}>
                         🏎️
                       </div>
                     </div>
