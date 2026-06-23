@@ -1993,143 +1993,136 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
           <div>
             {/* Import */}
             <Section title="📥 eBay Sync">
-              {/* Car dashboard — always visible */}
+              {/* Sync dashboard — tacho (activity), speedo + odometer (progress), step flags */}
               {(() => {
-                const active    = importJob?.status === 'running'
-                const done      = importJob?.status === 'completed'
-                const pct       = done ? 100 : (active ? displayProgress : 0)
-
-                // Short sign label per phase
-                const signLabel = done ? '✓ COMPLETE'
-                  : syncPhase.includes('sold') || syncPhase.includes('Sold') ? 'SOLD ORDERS'
-                  : syncPhase.includes('fee') || syncPhase.includes('Fee') ? 'eBay FEES'
-                  : syncPhase.includes('reconcil') || syncPhase.includes('Reconcil') ? 'RECONCILING'
-                  : syncPhase.includes('Import') || syncPhase.includes('import') || (active && !syncPhase) ? 'IMPORTING'
-                  : null
+                const active = importJob?.status === 'running'
+                const done   = importJob?.status === 'completed'
+                const pct    = done ? 100 : (active ? displayProgress : 0)
+                const tacho  = done ? 0 : (active ? rpm : 0)
 
                 const MIN_A = 150, SWEEP_A = 240
                 const toRad = a => a * Math.PI / 180
+                const ptOn = (cx, cy, r, a) => [cx + r * Math.cos(toRad(a)), cy + r * Math.sin(toRad(a))]
                 const arcD = (cx, cy, r, a1, span) => {
-                  const a2 = a1 + span
-                  const [x1, y1] = [cx + r * Math.cos(toRad(a1)), cy + r * Math.sin(toRad(a1))]
-                  const [x2, y2] = [cx + r * Math.cos(toRad(a2)), cy + r * Math.sin(toRad(a2))]
+                  const [x1, y1] = ptOn(cx, cy, r, a1)
+                  const [x2, y2] = ptOn(cx, cy, r, a1 + span)
                   return `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${span > 180 ? 1 : 0} 1 ${x2.toFixed(2)} ${y2.toFixed(2)}`
                 }
-                const gaugeSvg = (value, max, label, color) => {
-                  const cx = 60, cy = 55, r = 38
+                // One round gauge (tacho or speedo) drawn into the shared SVG.
+                const Gauge = ({ cx, cy, r, value, max, color, label, unit }) => {
                   const span = (Math.min(Math.max(value, 0), max) / max) * SWEEP_A
-                  const ticks = Array.from({ length: 9 }, (_, i) => {
-                    const a = MIN_A + (i / 8) * SWEEP_A, rad = toRad(a), ri = r - (i % 2 === 0 ? 8 : 4)
-                    return { x1: (cx + ri * Math.cos(rad)).toFixed(1), y1: (cy + ri * Math.sin(rad)).toFixed(1), x2: (cx + r * Math.cos(rad)).toFixed(1), y2: (cy + r * Math.sin(rad)).toFixed(1), major: i % 2 === 0 }
-                  })
-                  const needleA = MIN_A + span
-                  const nRad = toRad(needleA)
+                  const nA = toRad(MIN_A + span)
+                  const [nx, ny] = ptOn(cx, cy, r - 7, MIN_A + span)
+                  const [bx, by] = [cx - 7 * Math.cos(nA), cy - 7 * Math.sin(nA)]
                   return (
-                    <svg viewBox="0 0 120 90" preserveAspectRatio="xMidYMid meet" style={{ height: 58, width: '100%', display: 'block' }}>
-                      {/* Track */}
-                      <path d={arcD(cx, cy, r, MIN_A, SWEEP_A)} fill="none" stroke="#1e1e1e" strokeWidth="6" strokeLinecap="round" />
-                      {/* Fill */}
-                      {span > 1 && <path d={arcD(cx, cy, r, MIN_A, span)} fill="none" stroke={color} strokeWidth="6" strokeLinecap="round" opacity="0.9" />}
-                      {/* Glow on fill */}
-                      {span > 1 && <path d={arcD(cx, cy, r, MIN_A, span)} fill="none" stroke={color} strokeWidth="10" strokeLinecap="round" opacity="0.15" />}
-                      {/* Ticks */}
-                      {ticks.map((t, i) => <line key={i} x1={t.x1} y1={t.y1} x2={t.x2} y2={t.y2} stroke={t.major ? '#3a3a3a' : '#2a2a2a'} strokeWidth={t.major ? 1.5 : 0.8} />)}
-                      {/* Needle */}
-                      <line
-                        x1={(cx - 8 * Math.cos(nRad)).toFixed(1)} y1={(cy - 8 * Math.sin(nRad)).toFixed(1)}
-                        x2={(cx + (r - 6) * Math.cos(nRad)).toFixed(1)} y2={(cy + (r - 6) * Math.sin(nRad)).toFixed(1)}
-                        stroke="#e5e5e5" strokeWidth="2" strokeLinecap="round"
-                        style={{ transition: 'all 0.35s ease-out' }}
-                      />
-                      {/* Hub */}
-                      <circle cx={cx} cy={cy} r="6" fill={color} opacity="0.9" />
-                      <circle cx={cx} cy={cy} r="3" fill="#0a0a0a" />
-                      {/* Value */}
-                      <text x={cx} y={cy + 20} textAnchor="middle" fill="#dddddd" fontSize="14" fontWeight="700" fontFamily="monospace">
-                        {label === 'PROGRESS' ? `${Math.round(value)}%` : Math.round(value)}
+                    <g>
+                      <circle cx={cx} cy={cy} r={r + 7} fill="#161616" stroke="#2a2a2a" strokeWidth="1.5" />
+                      <path d={arcD(cx, cy, r, MIN_A, SWEEP_A)} fill="none" stroke="#262626" strokeWidth="5" strokeLinecap="round" />
+                      {span > 1 && <path d={arcD(cx, cy, r, MIN_A, span)} fill="none" stroke={color} strokeWidth="5" strokeLinecap="round" />}
+                      {span > 1 && <path d={arcD(cx, cy, r, MIN_A, span)} fill="none" stroke={color} strokeWidth="10" strokeLinecap="round" opacity="0.12" />}
+                      {Array.from({ length: 9 }, (_, i) => {
+                        const a = MIN_A + (i / 8) * SWEEP_A, major = i % 2 === 0
+                        const [x1, y1] = ptOn(cx, cy, r - (major ? 7 : 4), a)
+                        const [x2, y2] = ptOn(cx, cy, r, a)
+                        return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="#3a3a3a" strokeWidth={major ? 1.4 : 0.8} />
+                      })}
+                      <line x1={bx.toFixed(1)} y1={by.toFixed(1)} x2={nx.toFixed(1)} y2={ny.toFixed(1)}
+                        stroke="#eee" strokeWidth="2.2" strokeLinecap="round" style={{ transition: 'all 0.35s ease-out' }} />
+                      <circle cx={cx} cy={cy} r="5" fill={color} />
+                      <circle cx={cx} cy={cy} r="2.5" fill="#0a0a0a" />
+                      <text x={cx} y={cy + 17} textAnchor="middle" fill="#e5e5e5" fontSize="13" fontWeight="700" fontFamily="monospace">
+                        {Math.round(value)}{unit}
                       </text>
-                      <text x={cx} y={cy + 30} textAnchor="middle" fill="#444" fontSize="7" letterSpacing="1.5" fontFamily="sans-serif">{label}</text>
-                    </svg>
+                      <text x={cx} y={cy + 27} textAnchor="middle" fill="#666" fontSize="7" letterSpacing="1.5">{label}</text>
+                    </g>
                   )
                 }
 
+                // Steps shown as flags; the last is a checkered finish flag.
+                const steps = ['IMPORT', 'SOLD', 'FEES', 'RECONCILE']
+                const curStep = done ? steps.length
+                  : /listing|import/i.test(syncPhase) && !/sold/i.test(syncPhase) ? 0
+                  : /sold/i.test(syncPhase) ? 1
+                  : /fee/i.test(syncPhase) ? 2
+                  : /reconcil/i.test(syncPhase) ? 3
+                  : active ? 0 : -1
+                const odo = String(Math.round(pct)).padStart(3, '0')
+
                 return (
-                  <div style={{ borderRadius: 8, overflow: 'hidden', marginBottom: 12, border: '1px solid #333', background: '#111' }}>
+                  <div style={{ borderRadius: 8, overflow: 'hidden', marginBottom: 12, border: '1px solid #333', background: '#0e0e0e' }}>
                     <style>{`
-                      @keyframes pvDashUp { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -40; } }
-                      @keyframes pvWheelWobble { 0%,100% { transform: rotate(-4deg); } 50% { transform: rotate(4deg); } }
-                      @keyframes pvSignIn { from { opacity:0; transform: translateX(60px); } to { opacity:1; transform: translateX(0); } }
+                      @keyframes pvFlagWave { 0%,100% { transform: skewY(0deg) scaleX(1); } 50% { transform: skewY(-6deg) scaleX(0.94); } }
+                      @keyframes pvOdoFlip { from { opacity:0.4; } to { opacity:1; } }
                     `}</style>
+                    <svg viewBox="0 0 320 210" style={{ width: '100%', display: 'block' }}>
+                      {/* Panel backdrop */}
+                      <rect width="320" height="210" fill="#0e0e0e" />
 
-                    {/* Road scene — top-down, compact */}
-                    <div style={{ position: 'relative', height: 70, overflow: 'hidden' }}>
-                      <svg viewBox="0 0 320 70" preserveAspectRatio="xMidYMid meet" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}>
-                        {/* Road surface */}
-                        <rect width="320" height="70" fill="#3a3a3a" />
-                        {/* Kerb lines */}
-                        <rect x="0" y="0" width="28" height="70" fill="#4a8a30" />
-                        <rect x="292" y="0" width="28" height="70" fill="#4a8a30" />
-                        <line x1="28" y1="0" x2="28" y2="70" stroke="#fff" strokeWidth="1.5" opacity="0.5" />
-                        <line x1="292" y1="0" x2="292" y2="70" stroke="#fff" strokeWidth="1.5" opacity="0.5" />
-                        {/* Centre dashes — scroll upward when active */}
-                        <g style={{ animation: active ? 'pvDashUp 0.45s linear infinite' : 'none' }}>
-                          {[-40,0,40,80,120].map(y => (
-                            <rect key={y} x="157" y={y} width="6" height="22" rx="2" fill="white" opacity="0.55" />
-                          ))}
-                        </g>
-                        {/* Sign board — slides in from right */}
-                        {signLabel && (
-                          <g key={syncPhase} style={{ animation: 'pvSignIn 0.4s cubic-bezier(0.22,1,0.36,1) forwards' }}>
-                            <rect x="234" y="18" width="78" height="24" rx="3"
-                              fill={done ? '#14532d' : '#1e3a5f'} stroke={done ? '#22c55e' : '#f59e0b'} strokeWidth="1.5" />
-                            <text x="273" y="33" textAnchor="middle" fill={done ? '#4ade80' : '#fbbf24'}
-                              fontSize="8" fontWeight="800" letterSpacing="0.5" fontFamily="sans-serif">{signLabel}</text>
+                      {/* TACHOMETER (left) — activity */}
+                      <Gauge cx={88} cy={66} r={46} value={tacho} max={100} unit="" label="ACTIVITY"
+                        color={done ? '#22c55e' : '#f59e0b'} />
+
+                      {/* SPEEDOMETER (right) — progress */}
+                      <Gauge cx={232} cy={66} r={46} value={pct} max={100} unit="%" label="PROGRESS"
+                        color={done ? '#22c55e' : active ? '#3b82f6' : '#2a3a5a'} />
+
+                      {/* ODOMETER under the speedo */}
+                      <g transform="translate(232,128)">
+                        <rect x="-34" y="-11" width="68" height="22" rx="3" fill="#000" stroke="#333" strokeWidth="1" />
+                        {odo.split('').map((d, i) => (
+                          <g key={i} transform={`translate(${-22 + i * 17}, 0)`}>
+                            <rect x="-7.5" y="-9" width="15" height="18" rx="2" fill="#1a1a1a" stroke="#2e2e2e" strokeWidth="0.6" />
+                            <text x="0" y="5" textAnchor="middle" fill="#ffb347" fontSize="13" fontWeight="800"
+                              fontFamily="monospace" style={{ animation: active ? 'pvOdoFlip 0.4s ease' : 'none' }}>{d}</text>
                           </g>
-                        )}
-                        {/* Steering wheel — centred */}
-                        <g transform="translate(160,35)"
-                           style={{ animation: active ? 'pvWheelWobble 1.2s ease-in-out infinite' : 'none' }}>
-                          {/* Rim */}
-                          <circle cx="0" cy="0" r="20" fill="none" stroke="#222" strokeWidth="7" />
-                          <circle cx="0" cy="0" r="20" fill="none" stroke="#3a3a3a" strokeWidth="5" />
-                          <circle cx="0" cy="0" r="20" fill="none" stroke="#555" strokeWidth="0.8" />
-                          {/* Spokes */}
-                          <line x1="0" y1="-20" x2="0" y2="-8" stroke="#333" strokeWidth="5" strokeLinecap="round" />
-                          <line x1="0" y1="-20" x2="0" y2="-8" stroke="#4a4a4a" strokeWidth="2" strokeLinecap="round" />
-                          <line x1="-17" y1="10" x2="-7" y2="4" stroke="#333" strokeWidth="5" strokeLinecap="round" />
-                          <line x1="-17" y1="10" x2="-7" y2="4" stroke="#4a4a4a" strokeWidth="2" strokeLinecap="round" />
-                          <line x1="17" y1="10" x2="7" y2="4" stroke="#333" strokeWidth="5" strokeLinecap="round" />
-                          <line x1="17" y1="10" x2="7" y2="4" stroke="#4a4a4a" strokeWidth="2" strokeLinecap="round" />
-                          {/* Hub */}
-                          <circle cx="0" cy="0" r="7" fill="#1a1a1a" />
-                          <circle cx="0" cy="0" r="4.5" fill="#252525" />
-                          <circle cx="0" cy="0" r="2.5" fill={active ? '#f59e0b' : done ? '#22c55e' : '#333'} />
-                        </g>
-                      </svg>
-                    </div>
+                        ))}
+                        <text x="0" y="22" textAnchor="middle" fill="#666" fontSize="7" letterSpacing="1.5">COMPLETE %</text>
+                      </g>
 
-                    {/* Gauges — compact */}
-                    <div style={{ display: 'flex', background: '#111', borderTop: '2px solid #222', padding: '3px 0' }}>
-                      <div style={{ flex: 1 }}>
-                        {gaugeSvg(active ? rpm : 0, 100, 'ACTIVITY', '#f59e0b')}
-                      </div>
-                      <div style={{ width: 1, background: '#1e1e1e' }} />
-                      <div style={{ flex: 1 }}>
-                        {gaugeSvg(pct, 100, 'PROGRESS', done ? '#22c55e' : active ? '#3b82f6' : '#1e3a5c')}
-                      </div>
-                    </div>
+                      {/* STEP FLAGS */}
+                      <g transform="translate(0,168)">
+                        {steps.map((s, i) => {
+                          const x = 30 + i * 56
+                          const reached = curStep > i
+                          const current = curStep === i && !done
+                          const flagCol = reached ? '#22c55e' : current ? '#f59e0b' : '#3a3a3a'
+                          return (
+                            <g key={s}>
+                              <line x1={x} y1="0" x2={x} y2="26" stroke="#555" strokeWidth="1.5" />
+                              <g transform={`translate(${x},2)`} style={{ transformOrigin: `${x}px 2px`, animation: current ? 'pvFlagWave 0.9s ease-in-out infinite' : 'none' }}>
+                                <path d="M0,0 L20,0 L17,5 L20,10 L0,10 Z" fill={flagCol} opacity={reached || current ? 1 : 0.5} />
+                              </g>
+                              <text x={x - 1} y="38" textAnchor="middle" fill={reached ? '#22c55e' : current ? '#f59e0b' : '#555'}
+                                fontSize="7" fontWeight="700" letterSpacing="0.3">{s}</text>
+                              {reached && <text x={x + 9} y="9" fontSize="7" fill="#0e0e0e" fontWeight="900">✓</text>}
+                            </g>
+                          )
+                        })}
+                        {/* FINISH flag (checkered) */}
+                        {(() => {
+                          const x = 30 + steps.length * 56
+                          const lit = done
+                          return (
+                            <g>
+                              <line x1={x} y1="0" x2={x} y2="26" stroke="#555" strokeWidth="1.5" />
+                              <g transform={`translate(${x},2)`} style={{ transformOrigin: `${x}px 2px`, animation: lit ? 'pvFlagWave 0.7s ease-in-out infinite' : 'none' }}>
+                                {Array.from({ length: 4 }).map((_, r) => Array.from({ length: 5 }).map((__, c) => (
+                                  <rect key={`${r}-${c}`} x={c * 4} y={r * 2.5} width="4" height="2.5"
+                                    fill={(r + c) % 2 === 0 ? (lit ? '#fff' : '#444') : (lit ? '#111' : '#222')} />
+                                )))}
+                              </g>
+                              <text x={x + 9} y="38" textAnchor="middle" fill={lit ? '#22c55e' : '#555'} fontSize="7" fontWeight="800">FINISH</text>
+                            </g>
+                          )
+                        })()}
+                      </g>
+                    </svg>
 
-                    {/* Status strip */}
-                    {(active || done) && (
-                      <div style={{ background: '#0d0d0d', borderTop: '1px solid #222', padding: '4px 10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ fontSize: 11, color: done ? '#22c55e' : '#aaa', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {importJob?.current_item || ''}
-                        </span>
-                        <span style={{ fontSize: 10, color: '#555', marginLeft: 8, whiteSpace: 'nowrap' }}>
-                          ↑{importJob.imported ?? 0} ·{importJob.skipped ?? 0} ✕{importJob.failed ?? 0}
-                        </span>
-                      </div>
-                    )}
+                    {/* Current-phase caption */}
+                    <div style={{ background: '#0a0a0a', borderTop: '1px solid #222', padding: '5px 10px', textAlign: 'center',
+                      fontSize: 11, color: done ? '#22c55e' : active ? '#ddd' : '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {done ? '🏁 Sync complete' : active ? (syncPhase || importJob?.current_item || 'Working…') : 'Idle — ready to sync'}
+                    </div>
                   </div>
                 )
               })()}
