@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.44'
+const EDGE_FN_VERSION         = '3.14.45'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -1113,12 +1113,15 @@ async function handleRequest(req: Request): Promise<Response> {
       const { data: member } = await userClient.rpc('is_store_member', { p_store_id: storeId })
       if (!member) return json({ error: 'Not authorised' }, 403)
 
+      // Window: either an explicit range (fromDate/toDate, already UTC ISO from the
+      // browser so it matches eBay Seller Hub's local calendar dates) or rolling Nd.
       const days = Math.min(+body.days || 90, 365)
-      const startDate = new Date(Date.now() - days * 86400000)
+      const startDate = body.fromDate ? new Date(body.fromDate) : new Date(Date.now() - days * 86400000)
+      const endDate   = body.toDate   ? new Date(body.toDate)   : new Date()
       const { token } = await getToken()
       const headers = { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU', 'Accept': 'application/json' }
 
-      const filter = `creationdate:[${startDate.toISOString()}..${new Date().toISOString()}]`
+      const filter = `creationdate:[${startDate.toISOString()}..${endDate.toISOString()}]`
       let offset = 0, total = 0
       let ebayOrders = 0, ebayItems = 0, cancelled = 0
       let itemTotal = 0, shipTotal = 0, taxTotal = 0, grandTotal = 0
@@ -1157,7 +1160,8 @@ async function handleRequest(req: Request): Promise<Response> {
       // "Our" side now reads the ebay_sales mirror (the source of truth), so it
       // equals eBay's getOrders by construction once an import has run.
       const { data: ourSold } = await sb.from('ebay_sales').select('sold_price, shipping, order_id')
-        .eq('store_id', storeId).eq('cancelled', false).gte('sold_at', startDate.toISOString())
+        .eq('store_id', storeId).eq('cancelled', false)
+        .gte('sold_at', startDate.toISOString()).lte('sold_at', endDate.toISOString())
       const ourCount = (ourSold ?? []).length
       const ourItem  = (ourSold ?? []).reduce((a: number, s: any) => a + (+s.sold_price || 0), 0)
       const ourShip  = (ourSold ?? []).reduce((a: number, s: any) => a + (+s.shipping || 0), 0)
@@ -1180,6 +1184,7 @@ async function handleRequest(req: Request): Promise<Response> {
 
       return json({
         ok: true, version: EDGE_FN_VERSION, days, source: 'getOrders',
+        windowFrom: startDate.toISOString(), windowTo: endDate.toISOString(),
         ebayOrders, ebayItems, ebayCancelled: cancelled,
         ebayItemTotal: r2(itemTotal), ebayShipping: r2(shipTotal), ebayTax: r2(taxTotal), ebayPaidTotal: r2(grandTotal),
         ourCount, ourItemTotal: r2(ourItem), ourShipping: r2(ourShip),

@@ -163,14 +163,22 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   useEffect(() => { fetchNightly() }, [fetchNightly])
   const [salesMatch, setSalesMatch] = useState(null)
   const [salesMatchLoading, setSalesMatchLoading] = useState(false)
+  // Sales-match window (local calendar dates, interpreted in the browser's TZ so
+  // they line up with eBay Seller Hub's local report dates). Default: last 90 days.
+  const toYmd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  const [smFrom, setSmFrom] = useState(toYmd(new Date(Date.now() - 90 * 86400000)))
+  const [smTo, setSmTo] = useState(toYmd(new Date()))
   const checkSalesMatch = async () => {
     setSalesMatchLoading(true); setSalesMatch(null)
     try {
       const { data: { session } } = await sb.auth.getSession()
+      // Build local-midnight bounds; .toISOString() converts to UTC (DST-correct).
+      const fromIso = new Date(`${smFrom}T00:00:00`).toISOString()
+      const toIso   = new Date(`${smTo}T23:59:59`).toISOString()
       const res = await fetch(EDGE_FN, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-        body: JSON.stringify({ action: 'sales_match', storeId, days: 90 }),
+        body: JSON.stringify({ action: 'sales_match', storeId, fromDate: fromIso, toDate: toIso }),
       })
       const d = await res.json()
       if (!res.ok || d.error) throw new Error(d.error || 'Sales match failed')
@@ -2168,10 +2176,19 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
               {ebayConnected && (
                 <div style={{ background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 14px', marginBottom: 12 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>💰 Sales match (last 90 days)</div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>💰 Sales match</div>
                     <button onClick={checkSalesMatch} disabled={salesMatchLoading} style={{ ...S.btn('secondary'), padding: '5px 12px', fontSize: 12, opacity: salesMatchLoading ? 0.6 : 1 }}>
                       {salesMatchLoading ? 'Checking eBay…' : 'Check sales match'}
                     </button>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap', fontSize: 12, color: C.muted }}>
+                    <span>From</span>
+                    <input type="date" value={smFrom} max={smTo} onChange={e => setSmFrom(e.target.value)}
+                      style={{ border: `1px solid ${C.border}`, borderRadius: 6, padding: '3px 6px', fontSize: 12 }} />
+                    <span>to</span>
+                    <input type="date" value={smTo} min={smFrom} onChange={e => setSmTo(e.target.value)}
+                      style={{ border: `1px solid ${C.border}`, borderRadius: 6, padding: '3px 6px', fontSize: 12 }} />
+                    <span style={{ color: C.muted }}>· match eBay's report window exactly (your local dates)</span>
                   </div>
                   {salesMatch?.error && <div style={{ fontSize: 12, color: C.red, marginTop: 8 }}>{salesMatch.error}</div>}
                   {salesMatch && !salesMatch.error && (() => {
@@ -2208,7 +2225,10 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                             </div>
                           </details>
                         )}
-                        <div style={{ marginTop: 4, fontSize: 11, color: C.muted }}>Source: eBay getOrders · fn {salesMatch.version} · last {salesMatch.days}d</div>
+                        <div style={{ marginTop: 4, fontSize: 11, color: C.muted }}>
+                          Source: eBay getOrders · fn {salesMatch.version}
+                          {salesMatch.windowFrom && ` · ${new Date(salesMatch.windowFrom).toLocaleDateString('en-AU')} – ${new Date(salesMatch.windowTo).toLocaleDateString('en-AU')}`}
+                        </div>
                       </div>
                     )
                   })()}
