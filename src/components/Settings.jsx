@@ -2209,12 +2209,17 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                     return (
                       <div style={{ fontSize: 13, marginTop: 10, lineHeight: 1.6 }}>
                         <div><strong>eBay</strong> ({salesMatch.ebayItems} items / {salesMatch.ebayOrders} orders{salesMatch.ebayCancelled ? `, ${salesMatch.ebayCancelled} cancelled` : ''}):</div>
-                        <div style={{ marginLeft: 10, color: C.muted }}>item {fmt(salesMatch.ebayItemTotal)} + shipping {fmt(salesMatch.ebayShipping)} + tax {fmt(salesMatch.ebayTax)} = <strong style={{ color: C.text }}>{fmt(salesMatch.ebayPaidTotal)}</strong></div>
+                        <div style={{ marginLeft: 10, color: C.muted }}>
+                          item {fmt(salesMatch.ebayItemTotal)} + shipping {fmt(salesMatch.ebayShipping)}
+                          {salesMatch.ebayDiscount > 0 && <> − discount {fmt(salesMatch.ebayDiscount)}</>}
+                          {salesMatch.ebayTax > 0 && <> + tax {fmt(salesMatch.ebayTax)}</>}
+                          {' '}= <strong style={{ color: C.text }}>{fmt(salesMatch.ebayPaidTotal)}</strong>
+                        </div>
                         <div style={{ marginTop: 4 }}><strong>PartVault</strong> ({salesMatch.ourCount} items):</div>
                         <div style={{ marginLeft: 10, color: C.muted }}>item {fmt(salesMatch.ourItemTotal)} + shipping {fmt(salesMatch.ourShipping)} = <strong style={{ color: C.text }}>{fmt((salesMatch.ourItemTotal || 0) + (salesMatch.ourShipping || 0))}</strong></div>
                         <div style={{ marginTop: 6, color: matched ? C.green : '#b45309' }}>
                           {matched
-                            ? `✓ Matches eBay — item totals agree (the only remaining difference vs eBay's headline is GST/tax of ${fmt(salesMatch.ebayTax)}, which eBay collects & remits).`
+                            ? `✓ Matches eBay — item + shipping totals agree to the cent. eBay's headline total is ${fmt(salesMatch.ebayPaidTotal)} after ${fmt(salesMatch.ebayDiscount)} seller discounts${salesMatch.ebayTax > 0 ? ` and ${fmt(salesMatch.ebayTax)} GST it collects & remits` : ''}.`
                             : `⚠ ${itemMiss} item${itemMiss === 1 ? '' : 's'} on eBay not recorded here${itemGap ? ` (~${fmt(itemGap)} item value)` : ''}. Run Sync / Import sold history to capture them.`}
                         </div>
                         {salesMatch.missingItems?.length > 0 && (

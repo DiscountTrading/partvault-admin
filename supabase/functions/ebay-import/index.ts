@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.48'
+const EDGE_FN_VERSION         = '3.14.49'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -1129,7 +1129,7 @@ async function handleRequest(req: Request): Promise<Response> {
       const filter = `creationdate:[${startDate.toISOString()}..${endDate.toISOString()}]`
       let offset = 0, total = 0
       let ebayOrders = 0, ebayItems = 0, cancelled = 0
-      let itemTotal = 0, shipTotal = 0, taxTotal = 0, grandTotal = 0
+      let itemTotal = 0, shipTotal = 0, taxTotal = 0, grandTotal = 0, discTotal = 0
       const ebayItemIds = new Set<string>()
       // Per-order line items, so we can pinpoint which exact sales we're missing
       // (an order with N line items needs N of our sold parts tagged with its id).
@@ -1149,6 +1149,8 @@ async function handleRequest(req: Request): Promise<Response> {
           shipTotal  += +ps.deliveryCost?.value  || 0
           taxTotal   += +ps.tax?.value           || 0
           grandTotal += +ps.total?.value         || 0
+          // Order-level seller discounts/promotions — eBay's `total` is net of these.
+          discTotal  += (+ps.priceDiscount?.value || 0) + (+ps.deliveryDiscount?.value || 0)
           const oid = o.orderId as string
           for (const li of (o.lineItems ?? [])) {
             ebayItems += +li.quantity || 1
@@ -1192,6 +1194,9 @@ async function handleRequest(req: Request): Promise<Response> {
         windowFrom: startDate.toISOString(), windowTo: endDate.toISOString(),
         ebayOrders, ebayItems, ebayCancelled: cancelled,
         ebayItemTotal: r2(itemTotal), ebayShipping: r2(shipTotal), ebayTax: r2(taxTotal), ebayPaidTotal: r2(grandTotal),
+        // Prefer eBay's reported discount; fall back to the gross-minus-net gap so
+        // item + shipping − discount + tax always reconciles to eBay's total.
+        ebayDiscount: r2(discTotal > 0 ? discTotal : Math.max(0, itemTotal + shipTotal + taxTotal - grandTotal)),
         ourCount, ourItemTotal: r2(ourItem), ourShipping: r2(ourShip),
         missingSales: Math.max(0, ebayItems - ourCount),
         missingCount, missingValue: r2(missingValue), missingItems,
