@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.38'
+const EDGE_FN_VERSION         = '3.14.39'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -1109,6 +1109,9 @@ async function handleRequest(req: Request): Promise<Response> {
       let ebayOrders = 0, ebayItems = 0, cancelled = 0
       let itemTotal = 0, shipTotal = 0, taxTotal = 0, grandTotal = 0
       const ebayItemIds = new Set<string>()
+      // Per-order line items, so we can pinpoint which exact sales we're missing
+      // (an order with N line items needs N of our sold parts tagged with its id).
+      const ebayByOrder: Record<string, { legacyItemId?: string, sku?: string, title?: string, price: number }[]> = {}
       do {
         const url = `https://api.ebay.com/sell/fulfillment/v1/order?filter=${encodeURIComponent(filter)}&limit=200&offset=${offset}`
         const r = await fetch(url, { headers })
@@ -1124,19 +1127,39 @@ async function handleRequest(req: Request): Promise<Response> {
           shipTotal  += +ps.deliveryCost?.value  || 0
           taxTotal   += +ps.tax?.value           || 0
           grandTotal += +ps.total?.value         || 0
+          const oid = o.orderId as string
           for (const li of (o.lineItems ?? [])) {
             ebayItems += +li.quantity || 1
             if (li.legacyItemId) ebayItemIds.add(li.legacyItemId)
+            ;(ebayByOrder[oid] ??= []).push({
+              legacyItemId: li.legacyItemId, sku: li.sku, title: li.title,
+              price: +li.lineItemCost?.value || +li.total?.value || 0,
+            })
           }
         }
         offset += 200
       } while (offset < total && offset < 5000)
 
-      const { data: ourSold } = await sb.from('parts').select('sold_price, shipping_charged')
+      const { data: ourSold } = await sb.from('parts').select('sold_price, shipping_charged, ebay_order_id')
         .eq('store_id', storeId).eq('status', 'sold').gte('sold_date', startDate.toISOString()).is('deleted_at', null)
       const ourCount = (ourSold ?? []).length
       const ourItem  = (ourSold ?? []).reduce((a: number, p: any) => a + (+p.sold_price || 0), 0)
       const ourShip  = (ourSold ?? []).reduce((a: number, p: any) => a + (+p.shipping_charged || 0), 0)
+
+      // How many sold parts we hold per eBay order, to find under-covered orders.
+      const ourByOrder: Record<string, number> = {}
+      for (const p of (ourSold ?? [])) if (p.ebay_order_id) ourByOrder[p.ebay_order_id] = (ourByOrder[p.ebay_order_id] || 0) + 1
+      const missingItems: any[] = []
+      let missingValue = 0, missingCount = 0
+      for (const [oid, items] of Object.entries(ebayByOrder)) {
+        const have = ourByOrder[oid] || 0
+        if (have < items.length) {
+          for (const m of items.slice(have)) {
+            missingCount++; missingValue += m.price
+            if (missingItems.length < 50) missingItems.push({ orderId: oid, ...m })
+          }
+        }
+      }
       const r2 = (n: number) => Math.round(n * 100) / 100
 
       return json({
@@ -1145,6 +1168,7 @@ async function handleRequest(req: Request): Promise<Response> {
         ebayItemTotal: r2(itemTotal), ebayShipping: r2(shipTotal), ebayTax: r2(taxTotal), ebayPaidTotal: r2(grandTotal),
         ourCount, ourItemTotal: r2(ourItem), ourShipping: r2(ourShip),
         missingSales: Math.max(0, ebayItems - ourCount),
+        missingCount, missingValue: r2(missingValue), missingItems,
       })
     }
 

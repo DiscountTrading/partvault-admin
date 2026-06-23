@@ -2198,6 +2198,25 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                             ? `✓ Matches eBay — item totals agree (the only remaining difference vs eBay's headline is GST/tax of ${fmt(salesMatch.ebayTax)}, which eBay collects & remits).`
                             : `⚠ ${itemMiss} item${itemMiss === 1 ? '' : 's'} on eBay not recorded here${itemGap ? ` (~${fmt(itemGap)} item value)` : ''}. Run Sync / Import sold history to capture them.`}
                         </div>
+                        {salesMatch.missingItems?.length > 0 && (
+                          <details style={{ marginTop: 8 }}>
+                            <summary style={{ cursor: 'pointer', fontSize: 12, color: '#b45309', fontWeight: 600 }}>
+                              Show {salesMatch.missingCount} missing sale{salesMatch.missingCount === 1 ? '' : 's'} (~{fmt(salesMatch.missingValue)})
+                            </summary>
+                            <div style={{ marginTop: 6, maxHeight: 220, overflowY: 'auto', border: `1px solid ${C.border}`, borderRadius: 6 }}>
+                              {salesMatch.missingItems.map((m, i) => (
+                                <div key={i} style={{ display: 'flex', gap: 8, padding: '5px 8px', borderBottom: `1px solid ${C.border}`, fontSize: 12 }}>
+                                  <span style={{ color: C.muted, fontFamily: 'monospace', flexShrink: 0 }}>{m.legacyItemId || m.sku || '—'}</span>
+                                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.title || 'eBay sale'}</span>
+                                  <span style={{ flexShrink: 0, color: C.text }}>{fmt(m.price)}</span>
+                                </div>
+                              ))}
+                            </div>
+                            <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
+                              These eBay sales have no distinct sold part here (likely a relisted/duplicate SKU whose later sale overwrote the earlier one). Run a sold-orders import to recreate them.
+                            </div>
+                          </details>
+                        )}
                         <div style={{ marginTop: 4, fontSize: 11, color: C.muted }}>Source: eBay getOrders · fn {salesMatch.version} · last {salesMatch.days}d</div>
                       </div>
                     )

@@ -1,4 +1,4 @@
-export const APP_VERSION = '3.14.38'
+export const APP_VERSION = '3.14.39'
 
 export const C = {
   bg:'#f5f4f0', panel:'#edeae3', card:'#ffffff', border:'#ddd9d0',
