@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useAuth } from './hooks/useAuth'
 import { useParts } from './hooks/useParts'
+import { useSales } from './hooks/useSales'
 import { sb } from './lib/supabase'
 import { C, S, APP_VERSION } from './lib/constants'
 import AuthScreen from './components/AuthScreen'
@@ -145,6 +146,7 @@ function StoreSwitcher({ stores, activeStoreId, setActiveStore, refreshStores })
 export default function App() {
   const { session, profile, storeId, stores, activeStoreId, setActiveStore, refreshStores, authReady, signOut } = useAuth()
   const { parts, loading, syncStatus, totalCount, addPart, editPart, softDelete, softDeleteCar, refetch } = useParts(storeId)
+  const { sales } = useSales(storeId)
   const [tab, setTab] = useState('dashboard')
   const [toast, setToast] = useState(null)
   const lastFetchRef = useRef(Date.now())
@@ -222,7 +224,7 @@ export default function App() {
         </div>
       </nav>
       <main style={S.main}>
-        {tab === 'dashboard' && <Dashboard parts={parts} costing={costing} inventory={inventory} onDrill={drillToInsights} />}
+        {tab === 'dashboard' && <Dashboard parts={parts} sales={sales} costing={costing} inventory={inventory} onDrill={drillToInsights} />}
         {tab === 'inventory' && (
           <Inventory
             parts={parts} cars={cars} storeId={storeId}

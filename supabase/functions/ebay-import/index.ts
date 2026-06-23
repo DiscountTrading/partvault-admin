@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.40'
+const EDGE_FN_VERSION         = '3.14.41'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -1140,15 +1140,17 @@ async function handleRequest(req: Request): Promise<Response> {
         offset += 200
       } while (offset < total && offset < 5000)
 
-      const { data: ourSold } = await sb.from('parts').select('sold_price, shipping_charged, ebay_order_id')
-        .eq('store_id', storeId).eq('status', 'sold').gte('sold_date', startDate.toISOString()).is('deleted_at', null)
+      // "Our" side now reads the ebay_sales mirror (the source of truth), so it
+      // equals eBay's getOrders by construction once an import has run.
+      const { data: ourSold } = await sb.from('ebay_sales').select('sold_price, shipping, order_id')
+        .eq('store_id', storeId).eq('cancelled', false).gte('sold_at', startDate.toISOString())
       const ourCount = (ourSold ?? []).length
-      const ourItem  = (ourSold ?? []).reduce((a: number, p: any) => a + (+p.sold_price || 0), 0)
-      const ourShip  = (ourSold ?? []).reduce((a: number, p: any) => a + (+p.shipping_charged || 0), 0)
+      const ourItem  = (ourSold ?? []).reduce((a: number, s: any) => a + (+s.sold_price || 0), 0)
+      const ourShip  = (ourSold ?? []).reduce((a: number, s: any) => a + (+s.shipping || 0), 0)
 
-      // How many sold parts we hold per eBay order, to find under-covered orders.
+      // How many sale rows we hold per eBay order, to find under-covered orders.
       const ourByOrder: Record<string, number> = {}
-      for (const p of (ourSold ?? [])) if (p.ebay_order_id) ourByOrder[p.ebay_order_id] = (ourByOrder[p.ebay_order_id] || 0) + 1
+      for (const s of (ourSold ?? [])) if (s.order_id) ourByOrder[s.order_id] = (ourByOrder[s.order_id] || 0) + 1
       const missingItems: any[] = []
       let missingValue = 0, missingCount = 0
       for (const [oid, items] of Object.entries(ebayByOrder)) {
@@ -1172,11 +1174,14 @@ async function handleRequest(req: Request): Promise<Response> {
       })
     }
 
-    // Order-complete sold import. Walks eBay getOrders by creation date and, for
-    // every line item, records the sale on the matching part (by eBay item id, then
-    // SKU) — creating a minimal sold part + an 'ended' listing row when the item was
-    // never imported (so re-runs match it and don't duplicate). This is what makes
-    // PartVault's sold figures match Seller Hub 100%.
+    // Order-complete sold import. Walks eBay getOrders and upserts EVERY line item
+    // into the ebay_sales mirror, keyed on (store_id, order_id, line_item_id) —
+    // eBay's own unique key. This is idempotent and collision-proof: a relist or
+    // repeat sale of the same SKU/item produces a SEPARATE row instead of
+    // overwriting. ebay_sales is the source of truth for sales revenue + fees, so
+    // the Dashboard P&L and Sales-match equal eBay's getOrders exactly. We also
+    // best-effort link each sale to an inventory part (for COGS) and mark a matched
+    // part sold — but the sale is recorded whether or not a part match exists.
     if (action === 'import_sold_orders') {
       const days = Math.min(+body.days || 120, 365)
       const startDate = new Date(Date.now() - days * 86400000)
@@ -1186,7 +1191,7 @@ async function handleRequest(req: Request): Promise<Response> {
       const filter = `creationdate:[${startDate.toISOString()}..${new Date().toISOString()}]`
 
       const startedAt = Date.now()
-      let offset = startOffset, total = 0, created = 0, updated = 0, skipped = 0, failed = 0, lineItems = 0
+      let offset = startOffset, total = 0, upserted = 0, linked = 0, lineItems = 0, failed = 0
       const failedReasons: string[] = []
       do {
         const url = `https://api.ebay.com/sell/fulfillment/v1/order?filter=${encodeURIComponent(filter)}&limit=200&offset=${offset}`
@@ -1196,18 +1201,22 @@ async function handleRequest(req: Request): Promise<Response> {
         total = +d.total || 0
         for (const o of (d.orders ?? [])) {
           const cs = o.cancelStatus?.cancelState
-          if (cs && cs !== 'NONE_REQUESTED') continue
+          const isCancelled = !!(cs && cs !== 'NONE_REQUESTED')
           const soldDate: string = o.creationDate
           const lis = o.lineItems ?? []
           const ship = +o.pricingSummary?.deliveryCost?.value || 0
           const shipPer = lis.length ? Math.round((ship / lis.length) * 100) / 100 : 0
-          const orderId: string | undefined = o.orderId
+          const orderId: string = o.orderId
           for (const li of lis) {
             lineItems++
             try {
               const legacyId: string | undefined = li.legacyItemId
               const sku: string | undefined = li.sku
+              const lineItemId: string = li.lineItemId || legacyId || `${orderId}-${lineItems}`
+              const qty = +li.quantity || 1
               const price = +li.lineItemCost?.value || +li.total?.value || 0
+
+              // Best-effort link to an inventory part (by listing item id, then SKU).
               let partId: string | null = null
               if (legacyId) {
                 const { data: lst } = await sb.from('listings').select('part_id').eq('store_id', storeId).eq('platform', 'ebay').eq('platform_listing_id', legacyId).limit(1).maybeSingle()
@@ -1217,31 +1226,23 @@ async function handleRequest(req: Request): Promise<Response> {
                 const { data: pr } = await sb.from('parts').select('id').eq('store_id', storeId).eq('sku', sku).maybeSingle()
                 if (pr) partId = pr.id
               }
-              if (partId) {
-                // Idempotent: re-stamping the same values is cheap and safe, so we
-                // skip the extra read and just update (avoids a 3rd round-trip/item).
+
+              // Upsert the authoritative sale row (collision-proof on the unique key).
+              const { error: upErr } = await sb.from('ebay_sales').upsert({
+                store_id: storeId, order_id: orderId, line_item_id: lineItemId,
+                legacy_item_id: legacyId || null, sku: sku || null, title: li.title || 'eBay sale',
+                quantity: qty, sold_price: price, shipping: shipPer,
+                sold_at: soldDate, cancelled: isCancelled, part_id: partId,
+                updated_at: new Date().toISOString(),
+              }, { onConflict: 'store_id,order_id,line_item_id' })
+              if (upErr) throw upErr
+              upserted++
+
+              // Keep inventory honest: mark a matched part sold (revenue still comes
+              // from ebay_sales, so a collision here only affects inventory display).
+              if (partId && !isCancelled) {
                 await sb.from('parts').update({ status: 'sold', sold_price: price, sold_date: soldDate, shipping_charged: shipPer, ebay_order_id: orderId }).eq('id', partId)
-                updated++
-              } else {
-                // Item sold on eBay but never imported — create a minimal sold record.
-                // Fallback SKU uses the eBay item ID so re-runs match it via the
-                // 'ended' listing inserted below (idempotent, no duplicates).
-                // For eBay-only records, always anchor the SKU to the order+item
-                // so it's globally unique and re-runs never collide.
-                const newSku = sku || `EB-${orderId?.slice(-12) || ''}-${legacyId || lineItems}`
-                const { data: np, error: pErr } = await sb.from('parts').insert({
-                  store_id: storeId, sku: newSku, title: li.title || 'eBay sale', status: 'sold',
-                  sold_price: price, sold_date: soldDate, shipping_charged: shipPer, list_price: price,
-                  ebay_order_id: orderId,
-                  source: 'ebay_import', condition: 'Used', ai_assessed: false,
-                  costs: { acquisition: 0, labour: 0, storage: 0, packaging: 0, postage: 0, holding: 0 },
-                }).select('id').single()
-                if (pErr) throw pErr
-                if (legacyId) await sb.from('listings').insert({
-                  store_id: storeId, part_id: np.id, platform: 'ebay', platform_listing_id: legacyId,
-                  platform_sku: sku || newSku, status: 'ended', ended_at: soldDate,
-                })
-                created++
+                linked++
               }
             } catch (e: any) {
               failed++
@@ -1253,7 +1254,8 @@ async function handleRequest(req: Request): Promise<Response> {
       } while (offset < total && offset < 5000 && Date.now() - startedAt < 45000)
 
       const hasMore = offset < total
-      return json({ ok: true, version: EDGE_FN_VERSION, days, ebayOrders: total, lineItems, created, updated, skipped, failed, failedReasons, hasMore, nextOffset: offset })
+      // `created`/`updated` kept for backwards-compatible client display.
+      return json({ ok: true, version: EDGE_FN_VERSION, days, ebayOrders: total, lineItems, upserted, linked, created: upserted, updated: linked, skipped: 0, failed, failedReasons, hasMore, nextOffset: offset })
     }
 
     // eBay selling fees from the Finances API (the ledger eBay's reports are built
@@ -1300,19 +1302,19 @@ async function handleRequest(req: Request): Promise<Response> {
         } while (offset < total && offset < 5000 && Date.now() - startedAt < 60000)
       }
 
-      // Attribute each order's fee to its part(s), split by sale price.
+      // Attribute each order's fee onto its ebay_sales line(s), split by sale price.
+      // ebay_sales is the source of truth for fees (Dashboard sums fees from here).
       let updated = 0, ordersMatched = 0, feeTotal = 0
       for (const [oid, fee] of Object.entries(feeByOrder)) {
         feeTotal += fee
-        const { data: parts } = await sb.from('parts').select('id, sold_price, costs')
-          .eq('store_id', storeId).eq('ebay_order_id', oid).is('deleted_at', null)
-        if (!parts?.length) continue
+        const { data: sales } = await sb.from('ebay_sales').select('id, sold_price')
+          .eq('store_id', storeId).eq('order_id', oid).eq('cancelled', false)
+        if (!sales?.length) continue
         ordersMatched++
-        const totalVal = parts.reduce((a: number, p: any) => a + (+p.sold_price || 0), 0)
-        for (const p of parts) {
-          const share = totalVal > 0 ? fee * ((+p.sold_price || 0) / totalVal) : fee / parts.length
-          const costs = { ...(p.costs || {}), ebay_fees: Math.round(share * 100) / 100 }
-          await sb.from('parts').update({ costs }).eq('id', p.id)
+        const totalVal = sales.reduce((a: number, s: any) => a + (+s.sold_price || 0), 0)
+        for (const s of sales) {
+          const share = totalVal > 0 ? fee * ((+s.sold_price || 0) / totalVal) : fee / sales.length
+          await sb.from('ebay_sales').update({ fees: Math.round(share * 100) / 100, updated_at: new Date().toISOString() }).eq('id', s.id)
           updated++
         }
         if (Date.now() - startedAt > 110000) break

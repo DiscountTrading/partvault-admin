@@ -11,7 +11,7 @@ function StatCard({ label, value, sub, color }) {
   )
 }
 
-export default function Dashboard({ parts, costing, inventory, onDrill }) {
+export default function Dashboard({ parts, sales = [], costing, inventory, onDrill }) {
   // Sales/P&L are shown for a selectable window (eBay reports last 90 days, so
   // 90 is the default for a like-for-like comparison). 0 = all time.
   const [periodDays, setPeriodDays] = useState(90)
@@ -20,31 +20,37 @@ export default function Dashboard({ parts, costing, inventory, onDrill }) {
   const active = parts.filter(p=>!p.deletedAt)
   const inStock = active.filter(p=>p.status==='in_stock')
   const listed = active.filter(p=>p.status==='listed')
-  const allSold = active.filter(p=>p.status==='sold')
-  // Restrict sold-derived figures to the selected period (by sold date).
-  const inPeriod = p => !periodDays || (p.soldDate && (Date.now()-new Date(p.soldDate)) <= periodDays*86400000)
-  const sold = allSold.filter(inPeriod)
+  // Map parts by id so each sale can pull its linked part's cost (for COGS).
+  const partById = new Map(active.map(p=>[p.id,p]))
+
+  // SALES come from the ebay_sales mirror (one row per eBay order line item), so
+  // revenue + fees equal eBay's report exactly. Restrict to the selected window.
+  const inPeriod = s => !periodDays || (s.soldAt && (Date.now()-new Date(s.soldAt)) <= periodDays*86400000)
+  const sold = sales.filter(inPeriod)
   const periodLabel = periodDays ? `last ${periodDays===365?'12 months':periodDays+' days'}` : 'all time'
   // Revenue includes the shipping the buyer paid (income), not just the item price.
-  const soldRev = sold.reduce((a,p)=>a+(+p.soldPrice||+p.list_price||0)+(+p.shippingCharged||0),0)
-  // COGS uses recorded costs where present, else a full estimate (base cost +
-  // postage + admin + labour) so parts with no cost history still show a margin.
+  const soldRev = sold.reduce((a,s)=>a+(+s.soldPrice||0)+(+s.shipping||0),0)
+  // COGS: use the linked inventory part's effective cost where we have one; sales
+  // with no matching part contribute 0 cost (item was never in our inventory).
   let cogsEstimated = false
-  const soldCogs = sold.reduce((a,p)=>{
+  const soldCogs = sold.reduce((a,s)=>{
+    const p = s.partId && partById.get(s.partId)
+    if (!p) return a
     const c = partEffectiveCost(p, costing||{}); if (c.estimated) cogsEstimated = true; return a + c.value
   },0)
   const gross = soldRev - soldCogs
   const margin = soldRev>0?(gross/soldRev)*100:0
-  // eBay selling fees (from Finances API, stored per part) and net sales after them
-  // — mirrors eBay's report: Total sales − Selling costs = Net sales.
-  const ebayFees = sold.reduce((a,p)=>a+(+p.costs?.ebay_fees||0),0)
+  // eBay selling fees (from Finances API, stored per sale row) and net sales after
+  // them — mirrors eBay's report: Total sales − Selling costs = Net sales.
+  const ebayFees = sold.reduce((a,s)=>a+(+s.fees||0),0)
   const netSales = soldRev - ebayFees
   // Shipping: income the buyer paid vs the postage cost we paid the carrier.
-  // Cost uses the recorded carrier cost where present, else a weight-based
-  // estimate (so free-shipping sales don't show a $0 postage cost).
-  const shipInc = sold.reduce((a,p)=>a+(+p.shippingCharged||0),0)
+  // Cost uses the linked part's recorded carrier cost / weight estimate.
+  const shipInc = sold.reduce((a,s)=>a+(+s.shipping||0),0)
   let shipCostEstimated = false
-  const shipCost = sold.reduce((a,p)=>{
+  const shipCost = sold.reduce((a,s)=>{
+    const p = s.partId && partById.get(s.partId)
+    if (!p) return a
     const c = postageCostFor(p, costing||{})
     if (c.estimated && c.value>0) shipCostEstimated = true
     return a + c.value
