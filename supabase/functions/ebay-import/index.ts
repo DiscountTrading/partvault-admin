@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.41'
+const EDGE_FN_VERSION         = '3.14.42'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -730,24 +730,38 @@ async function handleRequest(req: Request): Promise<Response> {
             const ebaySkuRaw = getTag(xml, 'SKU')
             let partId: string
 
+            // Each live eBay listing is its own inventory part. Reuse a part when
+            // its SKU matches AND it has no *other* live listing (a relist — old
+            // listing ended, new item id) — but if the matched part already has a
+            // different live listing, this is a concurrent duplicate, so it gets
+            // its own part under a fresh internal SKU (eBay's SKU stays on the
+            // listing's platform_sku). Keeps inventory count = eBay live count.
+            const makePart = async (sku: string) => {
+              const { data: np, error: pErr } = await sb.from('parts').insert(buildPartRow(xml, sku)).select('id').single()
+              if (pErr) throw pErr
+              return np.id as string
+            }
+            const freshSku = async () => {
+              const { data: g, error: e } = await sb.rpc('generate_next_sku', { p_store_id: storeId })
+              if (e || !g) throw new Error(`SKU generation failed: ${e?.message}`)
+              return g as string
+            }
+
             if (ebaySkuRaw) {
               const { data: existingPart } = await sb.from('parts')
                 .select('id').eq('store_id', storeId).eq('sku', ebaySkuRaw).maybeSingle()
               if (existingPart) {
-                partId = existingPart.id
+                const { data: liveOther } = await sb.from('listings')
+                  .select('id').eq('store_id', storeId).eq('platform', 'ebay').eq('part_id', existingPart.id)
+                  .in('status', ['active', 'live']).neq('platform_listing_id', itemId).is('deleted_at', null)
+                  .limit(1).maybeSingle()
+                // Concurrent duplicate → new part (fresh SKU); else reuse (relist).
+                partId = liveOther ? await makePart(await freshSku()) : existingPart.id
               } else {
-                const { data: newPart, error: partErr } = await sb
-                  .from('parts').insert(buildPartRow(xml, ebaySkuRaw)).select('id').single()
-                if (partErr) throw partErr
-                partId = newPart.id
+                partId = await makePart(ebaySkuRaw)
               }
             } else {
-              const { data: generatedSku, error: skuErr } = await sb.rpc('generate_next_sku', { p_store_id: storeId })
-              if (skuErr || !generatedSku) throw new Error(`SKU generation failed: ${skuErr?.message}`)
-              const { data: newPart, error: partErr } = await sb
-                .from('parts').insert(buildPartRow(xml, generatedSku as string)).select('id').single()
-              if (partErr) throw partErr
-              partId = newPart.id
+              partId = await makePart(await freshSku())
             }
 
             const { error: listingErr } = await sb.from('listings').insert(buildListingRow(xml, partId))
@@ -1541,24 +1555,34 @@ async function handleRequest(req: Request): Promise<Response> {
           const ebaySkuRaw = getTag(xml, 'SKU')
           let partId: string
 
+          // Each live eBay listing is its own part: reuse on relist (SKU match,
+          // no other live listing), else split concurrent same-SKU dupes into a
+          // new part under a fresh internal SKU. (Mirrors the chunk-import rule.)
+          const mkPart = async (sku: string) => {
+            const { data: np, error: pErr } = await sb.from('parts').insert(buildPartRow(xml, sku)).select('id').single()
+            if (pErr) throw pErr
+            return np.id as string
+          }
+          const newSku = async () => {
+            const { data: g, error: e } = await sb.rpc('generate_next_sku', { p_store_id: storeId })
+            if (e || !g) throw new Error(`SKU generation failed: ${e?.message}`)
+            return g as string
+          }
+
           if (ebaySkuRaw) {
             const { data: existingPart } = await sb.from('parts')
               .select('id').eq('store_id', storeId).eq('sku', ebaySkuRaw).maybeSingle()
             if (existingPart) {
-              partId = existingPart.id
+              const { data: liveOther } = await sb.from('listings')
+                .select('id').eq('store_id', storeId).eq('platform', 'ebay').eq('part_id', existingPart.id)
+                .in('status', ['active', 'live']).neq('platform_listing_id', itemId).is('deleted_at', null)
+                .limit(1).maybeSingle()
+              partId = liveOther ? await mkPart(await newSku()) : existingPart.id
             } else {
-              const { data: newPart, error: partErr } = await sb
-                .from('parts').insert(buildPartRow(xml, ebaySkuRaw)).select('id').single()
-              if (partErr) throw partErr
-              partId = newPart.id
+              partId = await mkPart(ebaySkuRaw)
             }
           } else {
-            const { data: generatedSku, error: skuErr } = await sb.rpc('generate_next_sku', { p_store_id: storeId })
-            if (skuErr || !generatedSku) throw new Error(`SKU generation failed: ${skuErr?.message}`)
-            const { data: newPart, error: partErr } = await sb
-              .from('parts').insert(buildPartRow(xml, generatedSku as string)).select('id').single()
-            if (partErr) throw partErr
-            partId = newPart.id
+            partId = await mkPart(await newSku())
           }
 
           const { error: listingErr } = await sb.from('listings').insert(buildListingRow(xml, partId))
