@@ -28,14 +28,14 @@ function Section({ title, action, children }) {
 export default function Activity({ storeId }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
-  const [noAccess, setNoAccess] = useState(false)
+  const [loadError, setLoadError] = useState(null)
   const [userFilter, setUserFilter] = useState('')
   const [search, setSearch] = useState('')
 
   const load = async (term = search) => {
-    setLoading(true); setNoAccess(false)
+    setLoading(true); setLoadError(null)
     const { data, error } = await sb.rpc('get_audit_log', { p_store_id: storeId, p_limit: 300, p_search: term || null })
-    if (error) { setNoAccess(true); setLoading(false); return }
+    if (error) { setLoadError(error.message || 'Could not load activity'); setLoading(false); return }
     setRows(data || [])
     setLoading(false)
   }
@@ -57,7 +57,18 @@ export default function Activity({ storeId }) {
   }
 
   if (loading) return <div style={{ color: C.muted, padding: 20 }}>Loading…</div>
-  if (noAccess) return <Section title="Activity"><div style={{ fontSize: 14, color: C.muted }}>You don't have permission to view activity for this store.</div></Section>
+  if (loadError) {
+    const missingFn = /function|p_search|schema cache|PGRST/i.test(loadError)
+    return (
+      <Section title="Activity">
+        <div style={{ fontSize: 14, color: C.muted }}>
+          {missingFn
+            ? 'Activity is unavailable until the latest database migration is applied (get_audit_log search support). Once it’s run, this view works again.'
+            : `Could not load activity: ${loadError}`}
+        </div>
+      </Section>
+    )
+  }
 
   return (
     <Section title="Activity"
