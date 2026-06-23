@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.46'
+const EDGE_FN_VERSION         = '3.14.47'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -1120,7 +1120,9 @@ async function handleRequest(req: Request): Promise<Response> {
       // browser so it matches eBay Seller Hub's local calendar dates) or rolling Nd.
       const days = Math.min(+body.days || 90, 365)
       const startDate = body.fromDate ? new Date(body.fromDate) : new Date(Date.now() - days * 86400000)
-      const endDate   = body.toDate   ? new Date(body.toDate)   : new Date()
+      // eBay rejects future dates — cap the end at "now" (a To=today picker becomes
+      // a future UTC instant once the local end-of-day is converted).
+      const endDate   = new Date(Math.min((body.toDate ? new Date(body.toDate) : new Date()).getTime(), Date.now()))
       const { token } = await getToken()
       const headers = { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU', 'Accept': 'application/json' }
 
