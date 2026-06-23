@@ -780,6 +780,32 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     checkSyncStatus()
   }, [tab, ebayConnected, storeId])
 
+  // POST an edge action, transparently retrying transient rate-limits. Surfaces
+  // the real error message (edge uses `error`; the gateway/proxy uses `message`)
+  // instead of a generic fallback, and respects a Retry-After hint when present.
+  const callEdge = async (payload, label) => {
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const res = await fetch(EDGE_FN, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      let d = {}
+      try { d = await res.json() } catch { /* non-JSON body */ }
+      const errMsg = d.error || d.message || (!res.ok ? `HTTP ${res.status}` : null)
+      const rateLimited = res.status === 429 || /rate limit|retry after|throttl/i.test(errMsg || '')
+      if (rateLimited && attempt < 3) {
+        const m = /(\d{3,})\s*ms/.exec(errMsg || '')
+        const wait = Math.min(m ? +m[1] : 0, 8000) || (1500 * (attempt + 1))
+        await sleep(wait)
+        continue
+      }
+      if (!res.ok || d.error) throw new Error(`${label}: ${errMsg || 'failed'}`)
+      return d
+    }
+    throw new Error(`${label}: still rate-limited after retries — wait a minute and try again`)
+  }
+
   // One-click full sync: import new listings → update sold orders (last ~4
   // months) → reconcile against eBay. Each step shows its own progress below.
   // Order-complete sold import via eBay getOrders (matches Seller Hub exactly).
@@ -788,12 +814,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     const failedReasons = []
     let startOffset = 0, ebayOrders = 0
     do {
-      const res = await fetch(EDGE_FN, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'import_sold_orders', storeId, days, startOffset }),
-      })
-      const d = await res.json()
-      if (!res.ok || d.error) throw new Error(d.error || 'Sold-orders import failed')
+      const d = await callEdge({ action: 'import_sold_orders', storeId, days, startOffset }, 'Sold-orders import')
       created += d.created || 0
       updated += d.updated || 0
       skipped += d.skipped || 0
@@ -807,15 +828,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     return { created, updated, skipped, failed, failedReasons, ebayOrders }
   }
 
-  const runFees = async (days = 120) => {
-    const res = await fetch(EDGE_FN, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'import_fees', storeId, days }),
-    })
-    const d = await res.json()
-    if (!res.ok || d.error) throw new Error(d.error || 'Fee import failed')
-    return d
-  }
+  const runFees = async (days = 120) => callEdge({ action: 'import_fees', storeId, days }, 'Fee import')
 
   // Write one summary line per manual sync into the audit log (Activity view).
   const logSync = async (summary, data = {}) => {
