@@ -2075,83 +2075,69 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                   : active ? 0 : -1
                 const odo = String(Math.round(pct)).padStart(3, '0')
 
-                const flagX = [42, 122, 202, 282, 362] // 4 steps + finish, spread full width
+                const rows = [...steps, 'FINISH']
                 return (
-                  <div style={{ marginBottom: 12, width: '100%' }}>
+                  <div style={{ marginBottom: 12, width: '100%', maxWidth: 380 }}>
                     <style>{`
-                      @keyframes pvFlagWave { 0%,100% { transform: skewY(0deg) scaleX(1); } 50% { transform: skewY(-7deg) scaleX(0.92); } }
+                      @keyframes pvFlagWave { 0%,100% { transform: skewX(0deg) scaleX(1); } 50% { transform: skewX(-8deg) scaleX(0.9); } }
                       @keyframes pvOdoFlip { from { opacity:0.4; } to { opacity:1; } }
                     `}</style>
-                    <svg viewBox="0 0 404 232" style={{ width: '100%', display: 'block' }}>
+                    {/* Compact banner: two gauges left, flag checklist beside them right */}
+                    <svg viewBox="0 0 420 132" style={{ width: '100%', display: 'block' }}>
 
-                      {/* TACHOMETER (left) — activity */}
-                      <Gauge cx={104} cy={80} r={70} value={tacho} max={100} unit="" label="ACTIVITY"
+                      {/* TACHOMETER — activity */}
+                      <Gauge cx={62} cy={58} r={50} value={tacho} max={100} unit="" label="ACTIVITY"
                         color={done ? '#22c55e' : '#f59e0b'} />
 
-                      {/* SPEEDOMETER (right) — progress */}
-                      <Gauge cx={300} cy={80} r={70} value={pct} max={100} unit="%" label="PROGRESS"
+                      {/* SPEEDOMETER — progress */}
+                      <Gauge cx={178} cy={58} r={50} value={pct} max={100} unit="%" label="PROGRESS"
                         color={done ? '#22c55e' : active ? '#3b82f6' : '#2a3a5a'} />
 
                       {/* ODOMETER under the speedo */}
-                      <g transform="translate(300,168)">
-                        <rect x="-46" y="-14" width="92" height="28" rx="4" fill="#000" stroke="#333" strokeWidth="1.2" />
+                      <g transform="translate(178,120)">
+                        <rect x="-38" y="-11" width="76" height="22" rx="3" fill="#000" stroke="#333" strokeWidth="1" />
                         {odo.split('').map((d, i) => (
-                          <g key={i} transform={`translate(${-30 + i * 23}, 0)`}>
-                            <rect x="-10" y="-11" width="20" height="23" rx="2.5" fill="#1a1a1a" stroke="#2e2e2e" strokeWidth="0.7" />
-                            <text x="0" y="7" textAnchor="middle" fill="#ffb347" fontSize="18" fontWeight="800"
+                          <g key={i} transform={`translate(${-25 + i * 19}, 0)`}>
+                            <rect x="-8.5" y="-9" width="17" height="18" rx="2" fill="#1a1a1a" stroke="#2e2e2e" strokeWidth="0.6" />
+                            <text x="0" y="6" textAnchor="middle" fill="#ffb347" fontSize="15" fontWeight="800"
                               fontFamily="monospace" style={{ animation: active ? 'pvOdoFlip 0.4s ease' : 'none' }}>{d}</text>
                           </g>
                         ))}
-                        <text x="0" y="26" textAnchor="middle" fill="#888" fontSize="9" letterSpacing="2">COMPLETE %</text>
                       </g>
 
-                      {/* ODOMETER label mirror under the tacho — keeps the layout balanced */}
-                      <text x="104" y="172" textAnchor="middle" fill={done ? '#22c55e' : active ? '#f59e0b' : '#555'}
-                        fontSize="11" fontWeight="800" letterSpacing="1">
-                        {done ? 'DONE' : active ? `${Math.round(tacho)} RPM` : 'IDLE'}
-                      </text>
-
-                      {/* STEP FLAGS — full-width strip */}
-                      <g transform="translate(0,196)">
-                        {steps.map((s, i) => {
-                          const x = flagX[i]
-                          const reached = curStep > i
-                          const current = curStep === i && !done
-                          const flagCol = reached ? '#22c55e' : current ? '#f59e0b' : '#3a3a3a'
+                      {/* FLAG CHECKLIST — beside the gauges, vertical */}
+                      <g transform="translate(250,6)">
+                        {rows.map((s, i) => {
+                          const y = 8 + i * 24
+                          const isFinish = i === steps.length
+                          const reached = isFinish ? done : curStep > i
+                          const current = isFinish ? false : (curStep === i && !done)
+                          const col = reached ? '#22c55e' : current ? '#f59e0b' : '#555'
                           return (
-                            <g key={s}>
-                              <line x1={x} y1="0" x2={x} y2="22" stroke="#666" strokeWidth="2" />
-                              <g transform={`translate(${x},1)`} style={{ transformOrigin: `${x}px 1px`, animation: current ? 'pvFlagWave 0.9s ease-in-out infinite' : 'none' }}>
-                                <path d="M0,0 L28,0 L24,7 L28,14 L0,14 Z" fill={flagCol} opacity={reached || current ? 1 : 0.5} />
-                                {reached && <text x="11" y="11" fontSize="10" fill="#0e2a12" fontWeight="900">✓</text>}
+                            <g key={s} transform={`translate(0,${y})`}>
+                              <line x1="0" y1="-9" x2="0" y2="9" stroke="#666" strokeWidth="1.5" />
+                              <g transform="translate(0,-9)" style={{ transformOrigin: '0px 0px', animation: current || (isFinish && done) ? 'pvFlagWave 0.85s ease-in-out infinite' : 'none' }}>
+                                {isFinish ? (
+                                  Array.from({ length: 3 }).map((_, r) => Array.from({ length: 5 }).map((__, c) => (
+                                    <rect key={`${r}-${c}`} x={2 + c * 3.6} y={r * 3.6} width="3.6" height="3.6"
+                                      fill={(r + c) % 2 === 0 ? (done ? '#fff' : '#555') : (done ? '#111' : '#262626')} />
+                                  )))
+                                ) : (
+                                  <path d="M2,0 L20,0 L17,5 L20,10 L2,10 Z" fill={col} opacity={reached || current ? 1 : 0.55} />
+                                )}
+                                {reached && !isFinish && <text x="9" y="8" fontSize="8" fill="#0e2a12" fontWeight="900">✓</text>}
                               </g>
-                              <text x={x} y="34" textAnchor="middle" fill={reached ? '#22c55e' : current ? '#f59e0b' : '#777'}
-                                fontSize="9" fontWeight="700" letterSpacing="0.3">{s}</text>
+                              <text x="26" y="2" fill={col} fontSize="11" fontWeight="700" letterSpacing="0.3"
+                                style={{ alignmentBaseline: 'middle' }}>{s}</text>
                             </g>
                           )
                         })}
-                        {/* FINISH flag (checkered) */}
-                        {(() => {
-                          const x = flagX[4], lit = done
-                          return (
-                            <g>
-                              <line x1={x} y1="0" x2={x} y2="22" stroke="#666" strokeWidth="2" />
-                              <g transform={`translate(${x},1)`} style={{ transformOrigin: `${x}px 1px`, animation: lit ? 'pvFlagWave 0.7s ease-in-out infinite' : 'none' }}>
-                                {Array.from({ length: 4 }).map((_, r) => Array.from({ length: 6 }).map((__, c) => (
-                                  <rect key={`${r}-${c}`} x={c * 4.5} y={r * 3.5} width="4.5" height="3.5"
-                                    fill={(r + c) % 2 === 0 ? (lit ? '#fff' : '#555') : (lit ? '#111' : '#262626')} />
-                                )))}
-                              </g>
-                              <text x={x + 13} y="34" textAnchor="middle" fill={lit ? '#22c55e' : '#777'} fontSize="9" fontWeight="800">FINISH</text>
-                            </g>
-                          )
-                        })()}
                       </g>
                     </svg>
 
                     {/* Current-phase caption */}
-                    <div style={{ padding: '4px 4px 0', textAlign: 'center',
-                      fontSize: 11, color: done ? '#22c55e' : active ? C.text : C.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <div style={{ padding: '3px 4px 0', textAlign: 'center',
+                      fontSize: 10, color: done ? '#22c55e' : active ? C.text : C.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {done ? '🏁 Sync complete' : active ? (syncPhase || importJob?.current_item || 'Working…') : 'Idle — ready to sync'}
                     </div>
                   </div>
