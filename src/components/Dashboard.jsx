@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { C, S, fmt, pct, totalCost, postageCostFor, partEffectiveCost, bucketByAge, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS, CATEGORY_NAMES } from '../lib/constants'
+import { C, S, fmt, pct, totalCost, postageCostFor, estimatePostage, partEffectiveCost, bucketByAge, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS, CATEGORY_NAMES } from '../lib/constants'
 
 function StatCard({ label, value, sub, color }) {
   return (
@@ -54,12 +54,19 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
   // else fall back to the linked part's recorded/estimated postage.
   let shipCostEstimated = false
   const shipCost = sold.reduce((a,s)=>{
-    if ((+s.shipCost||0) > 0) return a + (+s.shipCost)
+    if ((+s.shipCost||0) > 0) return a + (+s.shipCost)        // real eBay label cost
     const p = s.partId && partById.get(s.partId)
-    if (!p) return a
-    const c = postageCostFor(p, costing||{})
-    if (c.estimated && c.value>0) shipCostEstimated = true
-    return a + c.value
+    if (p) {                                                  // linked part → its cost/estimate
+      const c = postageCostFor(p, costing||{})
+      if (c.estimated && c.value>0) shipCostEstimated = true
+      return a + c.value
+    }
+    // No eBay label AND no linked part → store's default-weight postage estimate
+    // (uses the configurable tiers + default weight + handling from Settings),
+    // so off-eBay shipping on unmatched sales is still costed, not $0.
+    const est = estimatePostage({}, costing||{}).total
+    if (est > 0) shipCostEstimated = true
+    return a + est
   },0)
   const netShip = shipInc - shipCost
   const stockVal = [...inStock,...listed].reduce((a,p)=>a+partEffectiveCost(p, costing||{}).value,0)
