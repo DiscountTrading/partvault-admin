@@ -2077,24 +2077,24 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
 
                 const rows = [...steps, 'FINISH']
                 return (
-                  <div style={{ marginBottom: 12, width: '100%', maxWidth: 380 }}>
+                  <div style={{ marginBottom: 12, width: '100%', maxWidth: 440 }}>
                     <style>{`
                       @keyframes pvFlagWave { 0%,100% { transform: skewX(0deg) scaleX(1); } 50% { transform: skewX(-8deg) scaleX(0.9); } }
                       @keyframes pvOdoFlip { from { opacity:0.4; } to { opacity:1; } }
                     `}</style>
                     {/* Compact banner: two gauges left, flag checklist beside them right */}
-                    <svg viewBox="0 0 420 132" style={{ width: '100%', display: 'block' }}>
+                    <svg viewBox="0 0 470 132" style={{ width: '100%', display: 'block' }}>
 
                       {/* TACHOMETER — activity */}
                       <Gauge cx={62} cy={58} r={50} value={tacho} max={100} unit="" label="ACTIVITY"
                         color={done ? '#22c55e' : '#f59e0b'} />
 
                       {/* SPEEDOMETER — progress */}
-                      <Gauge cx={178} cy={58} r={50} value={pct} max={100} unit="%" label="PROGRESS"
+                      <Gauge cx={186} cy={58} r={50} value={pct} max={100} unit="%" label="PROGRESS"
                         color={done ? '#22c55e' : active ? '#3b82f6' : '#2a3a5a'} />
 
                       {/* ODOMETER under the speedo */}
-                      <g transform="translate(178,120)">
+                      <g transform="translate(186,120)">
                         <rect x="-38" y="-11" width="76" height="22" rx="3" fill="#000" stroke="#333" strokeWidth="1" />
                         {odo.split('').map((d, i) => (
                           <g key={i} transform={`translate(${-25 + i * 19}, 0)`}>
@@ -2106,7 +2106,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                       </g>
 
                       {/* FLAG CHECKLIST — beside the gauges, vertical */}
-                      <g transform="translate(250,6)">
+                      <g transform="translate(300,6)">
                         {rows.map((s, i) => {
                           const y = 8 + i * 24
                           const isFinish = i === steps.length
