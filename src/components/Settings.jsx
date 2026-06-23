@@ -2049,14 +2049,12 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                 const odo = String(Math.round(pct)).padStart(3, '0')
 
                 return (
-                  <div style={{ borderRadius: 8, overflow: 'hidden', marginBottom: 12, border: '1px solid #333', background: '#0e0e0e' }}>
+                  <div style={{ marginBottom: 12, width: '34%', minWidth: 150, maxWidth: 220 }}>
                     <style>{`
                       @keyframes pvFlagWave { 0%,100% { transform: skewY(0deg) scaleX(1); } 50% { transform: skewY(-6deg) scaleX(0.94); } }
                       @keyframes pvOdoFlip { from { opacity:0.4; } to { opacity:1; } }
                     `}</style>
                     <svg viewBox="0 0 320 210" style={{ width: '100%', display: 'block' }}>
-                      {/* Panel backdrop */}
-                      <rect width="320" height="210" fill="#0e0e0e" />
 
                       {/* TACHOMETER (left) — activity */}
                       <Gauge cx={88} cy={66} r={46} value={tacho} max={100} unit="" label="ACTIVITY"
@@ -2119,8 +2117,8 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                     </svg>
 
                     {/* Current-phase caption */}
-                    <div style={{ background: '#0a0a0a', borderTop: '1px solid #222', padding: '5px 10px', textAlign: 'center',
-                      fontSize: 11, color: done ? '#22c55e' : active ? '#ddd' : '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <div style={{ padding: '3px 4px 0', textAlign: 'center',
+                      fontSize: 9, color: done ? '#22c55e' : active ? C.text : C.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {done ? '🏁 Sync complete' : active ? (syncPhase || importJob?.current_item || 'Working…') : 'Idle — ready to sync'}
                     </div>
                   </div>
