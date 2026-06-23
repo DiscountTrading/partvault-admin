@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.45'
+const EDGE_FN_VERSION         = '3.14.46'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -826,7 +826,10 @@ async function handleRequest(req: Request): Promise<Response> {
     // lives in sync_runs, so a later tick picks up exactly where this left off.
     // Reuses the existing actions via internal self-calls (no logic duplicated).
     if (action === 'cron_sync') {
-      const runDate = new Date().toISOString().slice(0, 10)
+      // Prefer the store's LOCAL date (passed by the tz-aware cron) so a run is
+      // one-per-local-day; fall back to UTC date for manual/legacy calls.
+      const runDate = (typeof body.runDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.runDate))
+        ? body.runDate : new Date().toISOString().slice(0, 10)
       let { data: run } = await sb.from('sync_runs').select('*').eq('store_id', storeId).eq('run_date', runDate).maybeSingle()
       if (!run) {
         const { data: ins } = await sb.from('sync_runs').insert({ store_id: storeId, run_date: runDate, phase: 'import' }).select().single()

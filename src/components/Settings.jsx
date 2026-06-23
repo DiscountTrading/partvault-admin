@@ -161,6 +161,21 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     setNightly(data || null)
   }, [storeId])
   useEffect(() => { fetchNightly() }, [fetchNightly])
+  // Store timezone — drives the nightly sync schedule (local midnight) and the
+  // default sales-match window. Captured from the browser on first load, editable.
+  const browserTz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' } catch { return 'UTC' } })()
+  const tzList = (() => { try { return Intl.supportedValuesOf('timeZone') } catch { return [browserTz, 'UTC'] } })()
+  const [timezone, setTimezone] = useState(browserTz)
+  const [tzSaved, setTzSaved] = useState(false)
+  const saveTimezone = async (tz) => {
+    setTimezone(tz)
+    if (!storeId) return
+    try {
+      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      await sb.from('stores').update({ settings: { ...(current?.settings || {}), timezone: tz } }).eq('id', storeId)
+      setTzSaved(true); setTimeout(() => setTzSaved(false), 2000)
+    } catch (e) { console.error('Timezone save failed', e) }
+  }
   const [salesMatch, setSalesMatch] = useState(null)
   const [salesMatchLoading, setSalesMatchLoading] = useState(false)
   // Sales-match window (local calendar dates, interpreted in the browser's TZ so
@@ -267,6 +282,10 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         if (data.settings.ebayLocationKey) setEbayLocationKey(data.settings.ebayLocationKey)
         if (data.settings.ebayUsername) setEbayUsername(data.settings.ebayUsername) // persisted — shows immediately
         if (Array.isArray(data.settings.marketingImages)) setMarketingImages(data.settings.marketingImages)
+        // Capture the browser's timezone the first time (none stored yet), so the
+        // nightly sync runs at THIS store's local midnight rather than a default.
+        if (data.settings.timezone) setTimezone(data.settings.timezone)
+        else saveTimezone(browserTz)
       }
       // eBay connection status — the keyset is server-side; we only need to know
       // whether this store has connected (i.e. has a valid token expiry).
@@ -287,7 +306,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     setSaving(true)
     try {
       const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const merged = { ...(current?.settings || {}), footer, aiDescription: aiSettings, captureAssess, costing, inventory }
+      const merged = { ...(current?.settings || {}), footer, aiDescription: aiSettings, captureAssess, costing, inventory, timezone }
       await sb.from('stores').update({ settings: merged }).eq('id', storeId)
       onSettingsSaved?.(merged) // let the app refresh costing/inventory-driven views live
       setSaved(true)
@@ -2234,6 +2253,26 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                   })()}
                 </div>
               )}
+
+              {/* Store timezone — drives nightly sync timing + default sales window */}
+              <div style={{ background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 14px', marginBottom: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>🕓 Store timezone</span>
+                  <select value={timezone} onChange={e => saveTimezone(e.target.value)}
+                    style={{ border: `1px solid ${C.border}`, borderRadius: 6, padding: '4px 8px', fontSize: 12, background: '#fff', maxWidth: 240 }}>
+                    {!tzList.includes(timezone) && <option value={timezone}>{timezone}</option>}
+                    {tzList.map(z => <option key={z} value={z}>{z}</option>)}
+                  </select>
+                  {tzSaved && <span style={{ fontSize: 12, color: C.green }}>✓ saved</span>}
+                </div>
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
+                  {(() => {
+                    let local = ''
+                    try { local = new Date().toLocaleString('en-AU', { timeZone: timezone, hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' }) } catch { /* invalid tz */ }
+                    return `Nightly sync runs at midnight here${local ? ` · local time now ${local}` : ''}. Auto-detected from your browser — edit if it's wrong (e.g. on a VPN).`
+                  })()}
+                </div>
+              </div>
 
               <div style={{ display: 'flex', gap: 8, marginBottom: syncPhase ? 6 : 12 }}>
                 <button style={{ ...S.btn('primary'), flex: 1, opacity: (syncingAll || !ebayConnected) ? 0.6 : 1 }} onClick={syncEverything} disabled={syncingAll || importing || backfilling || reconciling || !ebayConnected}>
