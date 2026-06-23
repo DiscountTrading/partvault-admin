@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.52'
+const EDGE_FN_VERSION         = '3.14.53'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -1322,16 +1322,20 @@ async function handleRequest(req: Request): Promise<Response> {
 
       const startedAt = Date.now()
       const feeByOrder: Record<string, number> = {}
-      let saleFees = 0, otherFees = 0, unattributed = 0
+      const refundByOrder: Record<string, number> = {}
+      const shipByOrder: Record<string, number> = {}
+      let saleFees = 0, otherFees = 0, unattributed = 0, refundTotalAll = 0, shipCostAll = 0
 
       // Resolve an order id from a transaction: direct field, else its references.
       const orderIdOf = (tx: any): string | undefined =>
         tx.orderId || (tx.references ?? []).find((r: any) => r.referenceType === 'ORDER_ID')?.referenceId
 
-      // eBay splits selling costs across two transaction types: SALE (final value
-      // fee, fixed fee, international/regulatory) and NON_SALE_CHARGE (promoted
-      // listing fees, etc.). Both must be summed to match Seller Hub's total.
-      for (const txType of ['SALE', 'NON_SALE_CHARGE']) {
+      // eBay's money ledger across four transaction types:
+      //   SALE            — final value fee + fixed/intl/regulatory (a cost)
+      //   NON_SALE_CHARGE — promoted-listing & other charges (a cost)
+      //   REFUND          — money returned to the buyer (reverses revenue)
+      //   SHIPPING_LABEL  — label we bought through eBay (a real shipping cost)
+      for (const txType of ['SALE', 'NON_SALE_CHARGE', 'REFUND', 'SHIPPING_LABEL']) {
         const filter = `${dateRange},transactionType:{${txType}}`
         let offset = 0, total = 0
         do {
@@ -1342,37 +1346,66 @@ async function handleRequest(req: Request): Promise<Response> {
           total = +d.total || 0
           for (const tx of (d.transactions ?? [])) {
             const oid = orderIdOf(tx)
-            // SALE fee is in totalFeeAmount; a NON_SALE_CHARGE's fee is its amount.
-            const fee = txType === 'SALE' ? (+tx.totalFeeAmount?.value || 0) : (+tx.amount?.value || 0)
-            if (!fee) continue
-            if (txType === 'SALE') saleFees += fee; else otherFees += fee
-            if (oid) feeByOrder[oid] = (feeByOrder[oid] || 0) + fee
-            else unattributed += fee
+            const amt = +tx.amount?.value || 0
+            if (txType === 'SALE') {
+              const fee = +tx.totalFeeAmount?.value || 0
+              if (!fee) continue
+              saleFees += fee
+              if (oid) feeByOrder[oid] = (feeByOrder[oid] || 0) + fee; else unattributed += fee
+              // A SALE that was refunded usually credits the final value fee back
+              // here as a negative — that nets into feeByOrder automatically.
+            } else if (txType === 'NON_SALE_CHARGE') {
+              if (!amt) continue
+              otherFees += amt
+              if (oid) feeByOrder[oid] = (feeByOrder[oid] || 0) + amt; else unattributed += amt
+            } else if (txType === 'REFUND') {
+              if (!amt) continue
+              refundTotalAll += amt
+              if (oid) refundByOrder[oid] = (refundByOrder[oid] || 0) + amt
+            } else if (txType === 'SHIPPING_LABEL') {
+              if (!amt) continue
+              shipCostAll += amt
+              if (oid) shipByOrder[oid] = (shipByOrder[oid] || 0) + amt
+            }
           }
           offset += 200
         } while (offset < total && offset < 5000 && Date.now() - startedAt < 60000)
       }
 
-      // Attribute each order's fee onto its ebay_sales line(s), split by sale price.
-      // ebay_sales is the source of truth for fees (Dashboard sums fees from here).
+      // Attribute fee / refund / shipping-cost onto each order's ebay_sales line(s),
+      // split by sale price. ebay_sales is the source of truth for the Dashboard P&L.
+      const allOrderIds = new Set([...Object.keys(feeByOrder), ...Object.keys(refundByOrder), ...Object.keys(shipByOrder)])
       let updated = 0, ordersMatched = 0, feeTotal = 0
-      for (const [oid, fee] of Object.entries(feeByOrder)) {
+      for (const oid of allOrderIds) {
+        const fee    = feeByOrder[oid]    || 0
+        const refund = refundByOrder[oid] || 0
+        const ship   = shipByOrder[oid]   || 0
         feeTotal += fee
         const { data: sales } = await sb.from('ebay_sales').select('id, sold_price')
-          .eq('store_id', storeId).eq('order_id', oid).eq('cancelled', false)
+          .eq('store_id', storeId).eq('order_id', oid)
         if (!sales?.length) continue
         ordersMatched++
         const totalVal = sales.reduce((a: number, s: any) => a + (+s.sold_price || 0), 0)
+        const r2x = (n: number) => Math.round(n * 100) / 100
         for (const s of sales) {
-          const share = totalVal > 0 ? fee * ((+s.sold_price || 0) / totalVal) : fee / sales.length
-          await sb.from('ebay_sales').update({ fees: Math.round(share * 100) / 100, updated_at: new Date().toISOString() }).eq('id', s.id)
+          const frac = totalVal > 0 ? (+s.sold_price || 0) / totalVal : 1 / sales.length
+          await sb.from('ebay_sales').update({
+            fees: r2x(fee * frac),
+            refund: r2x(refund * frac),
+            ship_cost: r2x(ship * frac),
+            refunded: refund > 0,
+            updated_at: new Date().toISOString(),
+          }).eq('id', s.id)
           updated++
         }
         if (Date.now() - startedAt > 110000) break
       }
 
       const r2 = (n: number) => Math.round(n * 100) / 100
-      return json({ ok: true, version: EDGE_FN_VERSION, days, feeTotal: r2(feeTotal), saleFees: r2(saleFees), otherFees: r2(otherFees), unattributed: r2(unattributed), ordersWithFees: Object.keys(feeByOrder).length, ordersMatched, updated })
+      return json({ ok: true, version: EDGE_FN_VERSION, days,
+        feeTotal: r2(feeTotal), saleFees: r2(saleFees), otherFees: r2(otherFees), unattributed: r2(unattributed),
+        refundTotal: r2(refundTotalAll), shipCostTotal: r2(shipCostAll),
+        ordersWithFees: Object.keys(feeByOrder).length, ordersMatched, updated })
     }
 
     if (action === 'sync_status') {

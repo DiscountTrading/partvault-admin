@@ -28,8 +28,10 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
   const inPeriod = s => !periodDays || (s.soldAt && (Date.now()-new Date(s.soldAt)) <= periodDays*86400000)
   const sold = sales.filter(inPeriod)
   const periodLabel = periodDays ? `last ${periodDays===365?'12 months':periodDays+' days'}` : 'all time'
-  // Revenue includes the shipping the buyer paid (income), not just the item price.
-  const soldRev = sold.reduce((a,s)=>a+(+s.soldPrice||0)+(+s.shipping||0),0)
+  // Revenue includes the shipping the buyer paid (income), net of any refund
+  // returned to the buyer (a ship-then-refund nets toward $0 revenue).
+  const soldRev = sold.reduce((a,s)=>a+(+s.soldPrice||0)+(+s.shipping||0)-(+s.refund||0),0)
+  const refundTotal = sold.reduce((a,s)=>a+(+s.refund||0),0)
   // COGS: use the linked inventory part's effective cost where we have one; sales
   // with no matching part contribute 0 cost (item was never in our inventory).
   let cogsEstimated = false
@@ -47,8 +49,12 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
   // Shipping: income the buyer paid vs the postage cost we paid the carrier.
   // Cost uses the linked part's recorded carrier cost / weight estimate.
   const shipInc = sold.reduce((a,s)=>a+(+s.shipping||0),0)
+  // Cost we actually paid the carrier: prefer the real eBay shipping-label cost
+  // (captured from the Finances API, also incurred on ship-then-refund orders),
+  // else fall back to the linked part's recorded/estimated postage.
   let shipCostEstimated = false
   const shipCost = sold.reduce((a,s)=>{
+    if ((+s.shipCost||0) > 0) return a + (+s.shipCost)
     const p = s.partId && partById.get(s.partId)
     if (!p) return a
     const c = postageCostFor(p, costing||{})
@@ -167,6 +173,7 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:20, rowGap:14 }}>
           {[
             ['Total Sales',fmt(soldRev),C.text],
+            ...(refundTotal>0?[['Refunds (netted)','−'+fmt(refundTotal),C.red]]:[]),
             ['eBay Fees',ebayFees?('−'+fmt(ebayFees)):'—',C.red],
             ['Net Sales (after fees)',fmt(netSales),C.text],
             ['Total COGS',fmt(soldCogs),C.red],
