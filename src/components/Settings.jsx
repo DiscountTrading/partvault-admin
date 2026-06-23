@@ -2226,6 +2226,30 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                             ? `✓ Item + shipping totals agree with eBay to the cent (${salesMatch.ebayItems} items). eBay's headline total of ${fmt(salesMatch.ebayPaidTotal)} differs only by eBay-reported ${fmt(salesMatch.ebayDiscount)} discount${salesMatch.ebayTax > 0 ? `, ${fmt(salesMatch.ebayTax)} GST` : ''}${Math.abs(salesMatch.ebayUnexplained || 0) >= 1 ? `, and ${fmt(Math.abs(salesMatch.ebayUnexplained))} not accounted for by either` : ''}.`
                             : `⚠ ${itemMiss} item${itemMiss === 1 ? '' : 's'} on eBay not recorded here${itemGap ? ` (~${fmt(itemGap)} item value)` : ''}. Run Sync / Import sold history to capture them.`}
                         </div>
+                        {salesMatch.residualOrders?.length > 0 && (
+                          <details style={{ marginTop: 8 }}>
+                            <summary style={{ cursor: 'pointer', fontSize: 12, color: '#b45309', fontWeight: 600 }}>
+                              Show {salesMatch.residualCount} order{salesMatch.residualCount === 1 ? '' : 's'} that don't reconcile (the {fmt(Math.abs(salesMatch.ebayUnexplained))} unexplained)
+                            </summary>
+                            <div style={{ marginTop: 6, maxHeight: 240, overflowY: 'auto', border: `1px solid ${C.border}`, borderRadius: 6 }}>
+                              {salesMatch.residualOrders.map((o, i) => (
+                                <div key={i} style={{ padding: '6px 8px', borderBottom: `1px solid ${C.border}`, fontSize: 12 }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                                    <a href={`https://www.ebay.com.au/sh/ord/details?orderid=${o.orderId}`} target="_blank" rel="noreferrer" style={{ fontFamily: 'monospace', color: C.blue, textDecoration: 'none' }}>{o.orderId}</a>
+                                    <span style={{ color: Math.abs(o.residual) >= 0.01 ? '#b45309' : C.muted, fontWeight: 700 }}>{o.residual > 0 ? '+' : ''}{fmt(o.residual)}</span>
+                                  </div>
+                                  <div style={{ color: C.muted, marginTop: 2 }}>
+                                    item {fmt(o.subtotal)} + ship {fmt(o.shipping)} + tax {fmt(o.tax)} − disc {fmt(o.discount)}{o.adjustment ? ` + adj ${fmt(o.adjustment)}` : ''} ≠ total {fmt(o.total)}
+                                    {o.paymentStatus ? ` · ${o.paymentStatus}` : ''}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                            <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
+                              These eBay orders' own pricing fields don't add up — the gap usually means a partial refund, a coupon eBay didn't itemise, or a currency-conversion rounding. Open one on eBay to see which.
+                            </div>
+                          </details>
+                        )}
                         {salesMatch.missingItems?.length > 0 && (
                           <details style={{ marginTop: 8 }}>
                             <summary style={{ cursor: 'pointer', fontSize: 12, color: '#b45309', fontWeight: 600 }}>

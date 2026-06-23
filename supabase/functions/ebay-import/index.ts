@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.51'
+const EDGE_FN_VERSION         = '3.14.52'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -1134,6 +1134,8 @@ async function handleRequest(req: Request): Promise<Response> {
       // Per-order line items, so we can pinpoint which exact sales we're missing
       // (an order with N line items needs N of our sold parts tagged with its id).
       const ebayByOrder: Record<string, { legacyItemId?: string, sku?: string, title?: string, price: number }[]> = {}
+      // Orders whose own pricing breakdown doesn't reconcile (the unexplained $).
+      const residualOrders: any[] = []
       do {
         const url = `https://api.ebay.com/sell/fulfillment/v1/order?filter=${encodeURIComponent(filter)}&limit=200&offset=${offset}`
         const r = await fetch(url, { headers })
@@ -1145,13 +1147,28 @@ async function handleRequest(req: Request): Promise<Response> {
           if (cs && cs !== 'NONE_REQUESTED') { cancelled++; continue }
           const ps = o.pricingSummary ?? {}
           ebayOrders++
-          itemTotal  += +ps.priceSubtotal?.value || 0
-          shipTotal  += +ps.deliveryCost?.value  || 0
-          taxTotal   += +ps.tax?.value           || 0
-          grandTotal += +ps.total?.value         || 0
-          // GENUINE eBay API fields only — order-level discount + any adjustment.
-          discTotal  += (+ps.priceDiscount?.value || 0) + (+ps.deliveryDiscount?.value || 0)
-          adjTotal   += +ps.adjustment?.value || 0
+          const oSub  = +ps.priceSubtotal?.value || 0
+          const oShip = +ps.deliveryCost?.value  || 0
+          const oTax  = +ps.tax?.value           || 0
+          const oTot  = +ps.total?.value         || 0
+          const oDisc = (+ps.priceDiscount?.value || 0) + (+ps.deliveryDiscount?.value || 0)
+          const oAdj  = +ps.adjustment?.value || 0
+          itemTotal  += oSub
+          shipTotal  += oShip
+          taxTotal   += oTax
+          grandTotal += oTot
+          discTotal  += oDisc
+          adjTotal   += oAdj
+          // Per-order reconciliation: sub + ship + tax − discount + adj should equal
+          // total. Anything left over is this order's contribution to "unexplained".
+          const oResid = Math.round((oSub + oShip + oTax - oDisc + oAdj - oTot) * 100) / 100
+          if (Math.abs(oResid) >= 0.01) {
+            residualOrders.push({
+              orderId: o.orderId, residual: oResid,
+              subtotal: oSub, shipping: oShip, tax: oTax, discount: oDisc, adjustment: oAdj, total: oTot,
+              paymentStatus: o.orderPaymentStatus, fulfillmentStatus: o.orderFulfillmentStatus,
+            })
+          }
           const oid = o.orderId as string
           for (const li of (o.lineItems ?? [])) {
             ebayItems += +li.quantity || 1
@@ -1200,6 +1217,8 @@ async function handleRequest(req: Request): Promise<Response> {
         // after accounting for them — surfaced honestly, never folded into discount.
         ebayDiscount: r2(discTotal), ebayAdjustment: r2(adjTotal),
         ebayUnexplained: r2(itemTotal + shipTotal + taxTotal - discTotal + adjTotal - grandTotal),
+        residualCount: residualOrders.length,
+        residualOrders: residualOrders.sort((a, b) => Math.abs(b.residual) - Math.abs(a.residual)).slice(0, 40),
         ourCount, ourItemTotal: r2(ourItem), ourShipping: r2(ourShip),
         missingSales: Math.max(0, ebayItems - ourCount),
         missingCount, missingValue: r2(missingValue), missingItems,
