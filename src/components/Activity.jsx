@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { sb } from '../lib/supabase'
 import { C } from '../lib/constants'
 
@@ -13,10 +13,22 @@ const ACTION_STYLE = {
   sync:           { label: 'Sync',     color: C.accent },
 }
 
+// Each activity is categorised by the kind of record it touched (its entity).
+// The "Show" dropdown lets you check/uncheck categories to filter the feed — e.g.
+// hide the nightly Sync entries and focus on Parts. Ordered for display.
+const CATEGORIES = [
+  { id: 'parts',         label: 'Parts' },
+  { id: 'cars',          label: 'Cars' },
+  { id: 'listings',      label: 'Listings' },
+  { id: 'store_members', label: 'Users' },
+  { id: 'sync',          label: 'Sync' },
+]
+const catOf = (r) => (CATEGORIES.some(c => c.id === r.entity_type) ? r.entity_type : 'other')
+
 function Section({ title, action, children }) {
   return (
     <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 14, padding: '18px 22px', marginBottom: 16, boxShadow: '0 1px 2px rgba(0,0,0,0.04)' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, gap: 12, flexWrap: 'wrap' }}>
         {title && <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{title}</div>}
         {action}
       </div>
@@ -31,6 +43,9 @@ export default function Activity({ storeId }) {
   const [loadError, setLoadError] = useState(null)
   const [userFilter, setUserFilter] = useState('')
   const [search, setSearch] = useState('')
+  // null = show all categories; otherwise a Set of enabled category ids.
+  const [enabledCats, setEnabledCats] = useState(null)
+  const [catOpen, setCatOpen] = useState(false)
 
   const load = async (term = search) => {
     setLoading(true); setLoadError(null)
@@ -48,8 +63,37 @@ export default function Activity({ storeId }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search])
 
-  const users = [...new Set(rows.map(r => r.user_email).filter(Boolean))]
-  const visible = userFilter ? rows.filter(r => r.user_email === userFilter) : rows
+  const users = useMemo(() => [...new Set(rows.map(r => r.user_email).filter(Boolean))], [rows])
+
+  // Categories actually present in the current feed (so we don't offer empty ones),
+  // plus a count per category for the dropdown.
+  const catCounts = useMemo(() => {
+    const m = {}
+    for (const r of rows) { const c = catOf(r); m[c] = (m[c] || 0) + 1 }
+    return m
+  }, [rows])
+  const presentCats = useMemo(() => {
+    const list = CATEGORIES.filter(c => catCounts[c.id])
+    if (catCounts.other) list.push({ id: 'other', label: 'Other' })
+    return list
+  }, [catCounts])
+
+  const catEnabled = (id) => enabledCats == null || enabledCats.has(id)
+  const toggleCat = (id) => setEnabledCats(prev => {
+    const base = prev == null ? new Set(presentCats.map(c => c.id)) : new Set(prev)
+    if (base.has(id)) base.delete(id); else base.add(id)
+    // Re-collapse to "all" when every present category is enabled.
+    return presentCats.every(c => base.has(c.id)) ? null : base
+  })
+  const allCats = () => setEnabledCats(null)
+  const noCats = () => setEnabledCats(new Set())
+  const enabledCount = enabledCats == null ? presentCats.length : presentCats.filter(c => enabledCats.has(c.id)).length
+  const catLabel = enabledCats == null ? 'All categories' : `${enabledCount} of ${presentCats.length}`
+
+  const visible = useMemo(() => rows.filter(r =>
+    (!userFilter || r.user_email === userFilter) &&
+    catEnabled(catOf(r))
+  ), [rows, userFilter, enabledCats, presentCats])
 
   const fmtTime = (t) => {
     const d = new Date(t)
@@ -73,9 +117,38 @@ export default function Activity({ storeId }) {
   return (
     <Section title="Activity"
       action={
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search activity…"
             style={{ border: `1px solid ${C.border}`, borderRadius: 6, padding: '5px 8px', fontSize: 12, background: '#fff', width: 160 }} />
+
+          {/* Category checkbox dropdown */}
+          {presentCats.length > 1 && (
+            <div style={{ position: 'relative' }}>
+              <button onClick={() => setCatOpen(o => !o)}
+                style={{ border: `1px solid ${C.border}`, borderRadius: 6, padding: '5px 10px', fontSize: 12, background: enabledCats == null ? '#fff' : C.accent + '14', color: C.text, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: enabledCats == null ? 400 : 600 }}>
+                Show: {catLabel} <span style={{ opacity: 0.6 }}>▾</span>
+              </button>
+              {catOpen && (
+                <>
+                  <div onClick={() => setCatOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+                  <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, zIndex: 41, background: '#fff', border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: '0 8px 30px rgba(0,0,0,0.15)', minWidth: 190, overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', gap: 6, padding: '8px 10px', borderBottom: `1px solid ${C.border}` }}>
+                      <button onClick={allCats} style={{ flex: 1, background: '#f7f7f8', border: `1px solid ${C.border}`, borderRadius: 6, padding: '4px 0', fontSize: 11, cursor: 'pointer', color: C.text }}>Select all</button>
+                      <button onClick={noCats} style={{ flex: 1, background: '#f7f7f8', border: `1px solid ${C.border}`, borderRadius: 6, padding: '4px 0', fontSize: 11, cursor: 'pointer', color: C.text }}>Clear</button>
+                    </div>
+                    {presentCats.map(c => (
+                      <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', cursor: 'pointer', fontSize: 13, color: C.text }}>
+                        <input type="checkbox" checked={catEnabled(c.id)} onChange={() => toggleCat(c.id)} style={{ cursor: 'pointer' }} />
+                        <span style={{ flex: 1 }}>{c.label}</span>
+                        <span style={{ fontSize: 11, color: C.muted }}>{catCounts[c.id]}</span>
+                      </label>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
           {users.length > 0 && (
             <select value={userFilter} onChange={e => setUserFilter(e.target.value)}
               style={{ border: `1px solid ${C.border}`, borderRadius: 6, padding: '5px 8px', fontSize: 12, background: '#fff' }}>
@@ -87,7 +160,9 @@ export default function Activity({ storeId }) {
         </div>
       }>
       {visible.length === 0 ? (
-        <div style={{ fontSize: 14, color: C.muted, padding: '12px 0' }}>No activity recorded yet.</div>
+        <div style={{ fontSize: 14, color: C.muted, padding: '12px 0' }}>
+          {rows.length === 0 ? 'No activity recorded yet.' : 'No activity matches the current filters.'}
+        </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           {visible.map(r => {
