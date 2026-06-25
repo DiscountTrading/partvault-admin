@@ -1,9 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
 import { C, S, fmt, pct, totalCost, estimateCostBasis, CATEGORY_NAMES, EBAY_AU_CATEGORIES, PART_CONDITIONS, STATUS_COLORS, STATUS_LABELS } from '../lib/constants'
 import { sb } from '../lib/supabase'
-
-const MAKES = ['Toyota','Ford','Holden','Mazda','Hyundai','Kia','Mitsubishi','Nissan','Subaru','Honda','Volkswagen','BMW','Mercedes-Benz','Audi','Land Rover','Isuzu','Suzuki','Lexus','Jeep','Volvo','Other']
-const MODEL_SUGS = {Toyota:['Hilux','Camry','Corolla','RAV4','LandCruiser','LandCruiser 200','Prado','HiAce','Kluger','Yaris','Aurion'],Ford:['Ranger','Falcon','Territory','Focus','Fiesta','Escape','Explorer','Mustang','Transit'],Holden:['Commodore','Colorado','Trax','Captiva','Cruze','Astra','Barina','Trailblazer'],Mazda:['CX-5','CX-3','CX-9','CX-7','Mazda3','Mazda6','BT-50','MX-5','RX-7','RX-8'],Hyundai:['i30','Tucson','Santa Fe','i20','Accent','Elantra','Sonata','ix35','Kona'],Kia:['Sportage','Cerato','Rio','Sorento','Carnival','Stinger','Seltos'],Mitsubishi:['Triton','ASX','Outlander','Eclipse Cross','Pajero','Lancer'],Nissan:['Navara','X-Trail','Patrol','Pathfinder','Qashqai','Pulsar','Skyline'],Subaru:['Forester','Outback','Impreza','Liberty','WRX','BRZ','XV'],Honda:['CR-V','HR-V','Jazz','Civic','Accord'],Volkswagen:['Golf','Polo','Tiguan','Passat','Amarok'],BMW:['3 Series','5 Series','7 Series','X3','X5','X1'],'Mercedes-Benz':['C-Class','E-Class','S-Class','GLC','GLE','A-Class'],'Land Rover':['Discovery','Range Rover','Defender'],Isuzu:['D-Max','MU-X'],Suzuki:['Swift','Vitara','Jimny'],Lexus:['RX','NX','GX','IS'],Jeep:['Wrangler','Cherokee','Grand Cherokee'],Volvo:['XC90','XC60','XC40']}
+import { MAKES, MODEL_SUGS } from '../lib/vehicles'
 
 function Field({ label, children }) {
   return <div style={{ marginBottom: 12 }}><label style={S.label}>{label}</label>{children}</div>

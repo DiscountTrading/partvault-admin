@@ -1,5 +1,7 @@
 import { useState, useMemo } from 'react'
-import { C, S, fmt, totalCost, estimateCostBasis } from '../lib/constants'
+import { C, S, fmt, totalCost, estimateCostBasis, partEffectiveCost } from '../lib/constants'
+import { parseVehicle } from '../lib/vehicles'
+import { sb } from '../lib/supabase'
 
 // ============================================================================
 // Vehicle analytics — which donor cars and which makes/models actually make
@@ -66,13 +68,13 @@ const percentileFn = (vals) => {
 // (score null) rather than scored low on incomplete data. Percentiles are built
 // only from proven rows so the comparison set is like-for-like.
 const withScores = (rows) => {
-  const base = rows.filter(r => r.partsSold > 0)
+  const base = rows.filter(r => r.partsSold > 0 && !r.unassigned)
   const profP = percentileFn(base.map(r => r.netProfit))
   const yldP = percentileFn(base.map(r => r.yieldScore))
   const spdP = percentileFn(base.filter(r => r.avgDts != null).map(r => -r.avgDts)) // faster = higher
   const W = SCORE_WEIGHTS
   return rows.map(r => {
-    if (r.partsSold === 0) return { ...r, score: null, sProfit: null, sYield: null, sSpeed: null }
+    if (r.partsSold === 0 || r.unassigned) return { ...r, score: null, sProfit: null, sYield: null, sSpeed: null }
     const sProfit = profP(r.netProfit)
     const sYield = yldP(r.yieldScore)
     const sSpeed = r.avgDts != null ? spdP(-r.avgDts) : null
@@ -82,11 +84,13 @@ const withScores = (rows) => {
   })
 }
 
-export default function Vehicles({ parts = [], cars = [], costing = {} }) {
+export default function Vehicles({ parts = [], cars = [], costing = {}, onRefresh }) {
   const [level, setLevel] = useState('models') // 'models' | 'cars'
   const [carSort, setCarSort] = useState({ key: 'score', dir: 'desc' })
   const [modelSort, setModelSort] = useState({ key: 'score', dir: 'desc' })
   const [query, setQuery] = useState('')
+  const [parsing, setParsing] = useState(false)
+  const [parseMsg, setParseMsg] = useState('')
 
   // Per-part operating cost: everything except the acquisition/car cost (counted
   // once at the car level) and the synthetic base-cost proxy. Mirrors the app's
@@ -143,64 +147,93 @@ export default function Vehicles({ parts = [], cars = [], costing = {} }) {
     })
   }, [parts, cars, costing])
 
-  // ---- per make/model roll-up (aggregate cars of the same model) ---------
+  // ---- per make/model roll-up (DIRECT from part fields) ------------------
+  // eBay-imported parts carry make/model on the part itself (not a donor car),
+  // so the model leaderboard aggregates parts directly — full catalogue coverage,
+  // independent of whether a donor car was ever created. Cost here is the app's
+  // standard ESTIMATED basis (partEffectiveCost) since there's no real per-car
+  // purchase price at this level; the By-car view is where true ROI lives.
   const modelRows = useMemo(() => {
+    const now = new Date().toISOString()
     const byModel = new Map()
-    for (const c of carRows) {
-      const key = `${c.make} ${c.model}`.trim().toLowerCase() || 'unknown'
-      if (!byModel.has(key)) byModel.set(key, { make: c.make, model: c.model, cars: [] })
-      byModel.get(key).cars.push(c)
+    for (const p of parts) {
+      if (p.deletedAt) continue
+      const make = (p.make || '').trim(), model = (p.model || '').trim()
+      const key = (make || model) ? `${make} ${model}`.trim().toLowerCase() : '__unassigned__'
+      if (!byModel.has(key)) byModel.set(key, { make, model, parts: [] })
+      byModel.get(key).parts.push(p)
     }
-    return [...byModel.values()].map(g => {
-      const invested = g.cars.reduce((a, c) => a + c.invested, 0)
-      const revenue = g.cars.reduce((a, c) => a + c.revenue, 0)
-      const opC = g.cars.reduce((a, c) => a + c.opCost, 0)
-      const partsTotal = g.cars.reduce((a, c) => a + c.partsTotal, 0)
-      const partsSold = g.cars.reduce((a, c) => a + c.partsSold, 0)
-      const yieldScore = g.cars.reduce((a, c) => a + c.yieldScore, 0)
-      const netProfit = revenue - opC - invested
-      const dts = g.cars.map(c => c.avgDts).filter(v => v != null)
+    return [...byModel.entries()].map(([key, g]) => {
+      const cp = g.parts
+      const sold = cp.filter(p => p.status === 'sold')
+      const onShelf = cp.filter(p => p.status === 'in_stock' || p.status === 'listed')
+      const revenue = sold.reduce((a, p) => a + (+p.soldPrice || 0), 0)
+      const cost = sold.reduce((a, p) => a + partEffectiveCost(p, costing).value, 0)
+      const netProfit = revenue - cost
+      const dts = sold.map(p => days(p.acquiredDate || p.createdAt, p.soldDate)).filter(v => v != null)
+      const yieldScore = cp.reduce((a, p) => a + conversionCredit(p, now), 0)
+      const unassigned = key === '__unassigned__'
       return {
-        id: `${g.make} ${g.model}`.trim(),
-        name: `${g.make} ${g.model}`.trim() || 'Unknown',
-        numCars: g.cars.length,
-        invested,
-        partsTotal,
-        partsSold,
-        sellThrough: partsTotal ? (partsSold / partsTotal) * 100 : null,
+        id: key,
+        name: unassigned ? '— Unassigned (no make/model) —' : (`${g.make} ${g.model}`.trim() || g.make || g.model),
+        unassigned,
+        partsTotal: cp.length,
+        partsSold: sold.length,
+        sellThrough: cp.length ? (sold.length / cp.length) * 100 : null,
         yieldScore,
-        yieldPct: partsTotal ? (yieldScore / partsTotal) * 100 : null,
+        yieldPct: cp.length ? (yieldScore / cp.length) * 100 : null,
         revenue,
         netProfit,
-        recouped: invested > 0 ? (revenue / invested) * 100 : null,
-        roi: invested > 0 ? (netProfit / invested) * 100 : null,
+        margin: revenue > 0 ? (netProfit / revenue) * 100 : null,
         avgDts: avg(dts) != null ? Math.round(avg(dts)) : null,
-        revenuePerCar: g.cars.length ? revenue / g.cars.length : null,
-        untapped: g.cars.reduce((a, c) => a + c.untapped, 0),
+        untapped: onShelf.reduce((a, p) => a + (+p.list_price || 0), 0),
       }
     })
-  }, [carRows])
+  }, [parts, costing])
 
-  // ---- summary ----------------------------------------------------------
+  // ---- summary (catalogue-wide, from all parts) -------------------------
   const summary = useMemo(() => {
-    const invested = carRows.reduce((a, c) => a + c.invested, 0)
-    const revenue = carRows.reduce((a, c) => a + c.revenue, 0)
-    const opC = carRows.reduce((a, c) => a + c.opCost, 0)
-    const net = revenue - opC - invested
-    const withCost = carRows.filter(c => c.invested > 0)
+    const live = parts.filter(p => !p.deletedAt)
+    const sold = live.filter(p => p.status === 'sold')
+    const revenue = sold.reduce((a, p) => a + (+p.soldPrice || 0), 0)
+    const cost = sold.reduce((a, p) => a + partEffectiveCost(p, costing).value, 0)
+    const unparsed = live.filter(p => !(p.make || '').trim()).length
     return {
-      cars: carRows.length,
-      invested,
       revenue,
-      net,
-      roi: invested > 0 ? (net / invested) * 100 : null,
-      paidOff: withCost.filter(c => c.recouped != null && c.recouped >= 100).length,
-      withCost: withCost.length,
+      estProfit: revenue - cost,
+      cars: cars.length,
+      unparsed,
+      total: live.length,
     }
-  }, [carRows])
+  }, [parts, cars, costing])
 
   const scoredCars = useMemo(() => withScores(carRows), [carRows])
   const scoredModels = useMemo(() => withScores(modelRows), [modelRows])
+
+  // Backfill make/model/year onto parts that have none, by parsing the title.
+  // Only fills blanks (never overwrites a set make), so it's safe to re-run.
+  const runParse = async () => {
+    setParsing(true); setParseMsg('Reading titles…')
+    const targets = parts.filter(p => !p.deletedAt && !(p.make || '').trim())
+    const updates = []
+    for (const p of targets) {
+      const v = parseVehicle(p.title || '')
+      if (v.make) updates.push({ id: p.id, store_id: p.store_id, make: v.make, model: v.model, year: v.year })
+    }
+    if (updates.length === 0) {
+      setParseMsg(`No make/model could be matched from ${targets.length} titles.`); setParsing(false); return
+    }
+    let done = 0
+    for (let i = 0; i < updates.length; i += 500) {
+      const chunk = updates.slice(i, i + 500)
+      const { error } = await sb.from('parts').upsert(chunk, { onConflict: 'id' })
+      if (error) { setParseMsg(`Error after ${done}: ${error.message}`); setParsing(false); return }
+      done += chunk.length; setParseMsg(`Updated ${done}/${updates.length}…`)
+    }
+    setParseMsg(`Done — set make/model on ${updates.length} parts (${targets.length - updates.length} unmatched). Refreshing…`)
+    setParsing(false)
+    onRefresh && onRefresh()
+  }
 
   const q = query.trim().toLowerCase()
   const filteredCars = q ? scoredCars.filter(r => r.name.toLowerCase().includes(q)) : scoredCars
@@ -229,21 +262,14 @@ export default function Vehicles({ parts = [], cars = [], costing = {} }) {
   // Column definitions per level. `pos` flags profit/ROI columns that get
   // red/green colouring.
   const MODEL_COLS = [
-    { key: 'name', label: 'Make / Model', align: 'left', w: 200, render: r => r.name },
+    { key: 'name', label: 'Make / Model', align: 'left', w: 220, render: r => r.name },
     { key: 'score', label: 'Score', align: 'center', w: 80, render: scoreCell },
-    { key: 'numCars', label: 'Cars', align: 'right', w: 70, render: r => r.numCars },
-    { key: 'invested', label: 'Invested', align: 'right', w: 100, render: r => money(r.invested) },
-    { key: 'partsSold', label: 'Parts sold', align: 'right', w: 110, render: r => `${r.partsSold}/${r.partsTotal}` },
-    { key: 'yieldScore', label: 'Yield', align: 'right', w: 80, render: r => r.yieldScore == null ? '—' : r.yieldScore.toFixed(1) },
-    { key: 'invested', label: 'Invested', align: 'right', w: 100, render: r => money(r.invested) },
     { key: 'partsSold', label: 'Parts sold', align: 'right', w: 110, render: r => `${r.partsSold}/${r.partsTotal}` },
     { key: 'yieldScore', label: 'Yield', align: 'right', w: 80, render: r => r.yieldScore == null ? '—' : r.yieldScore.toFixed(1) },
     { key: 'sellThrough', label: 'Sell-through', align: 'right', w: 110, render: r => pctStr(r.sellThrough) },
     { key: 'revenue', label: 'Revenue', align: 'right', w: 110, render: r => money(r.revenue) },
-    { key: 'netProfit', label: 'Net profit', align: 'right', w: 110, pos: true, render: r => money(r.netProfit) },
-    { key: 'roi', label: 'ROI', align: 'right', w: 90, pos: true, render: r => pctStr(r.roi) },
-    { key: 'recouped', label: 'Recouped', align: 'right', w: 100, render: r => pctStr(r.recouped) },
-    { key: 'revenuePerCar', label: 'Rev / car', align: 'right', w: 100, render: r => money(r.revenuePerCar) },
+    { key: 'netProfit', label: 'Est. profit', align: 'right', w: 110, pos: true, render: r => money(r.netProfit) },
+    { key: 'margin', label: 'Est. margin', align: 'right', w: 100, pos: true, render: r => pctStr(r.margin) },
     { key: 'avgDts', label: 'Avg days to sell', align: 'right', w: 130, render: r => r.avgDts == null ? '—' : `${r.avgDts}d` },
     { key: 'untapped', label: 'Untapped', align: 'right', w: 100, render: r => money(r.untapped) },
   ]
@@ -279,11 +305,27 @@ export default function Vehicles({ parts = [], cars = [], costing = {} }) {
       </div>
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
-        <Card label="Donor cars" value={summary.cars} sub={`${summary.paidOff}/${summary.withCost} paid off`} />
-        <Card label="Invested in cars" value={money(summary.invested)} color={C.blue} />
-        <Card label="Revenue from parts" value={money(summary.revenue)} color={C.accent} />
-        <Card label="Net profit" value={money(summary.net)} sub={summary.roi == null ? null : `${Math.round(summary.roi)}% ROI`} color={summary.net >= 0 ? C.green : C.red} />
+        <Card label="Revenue (all sales)" value={money(summary.revenue)} color={C.accent} />
+        <Card label="Est. profit" value={money(summary.estProfit)} sub={summary.revenue > 0 ? `${Math.round((summary.estProfit / summary.revenue) * 100)}% margin` : null} color={summary.estProfit >= 0 ? C.green : C.red} />
+        <Card label="Donor cars tracked" value={summary.cars} sub="with purchase price" color={C.blue} />
+        <Card label="Parts without make" value={summary.unparsed} sub={`of ${summary.total} — parse to fill`} color={summary.unparsed > 0 ? C.yellow : C.green} />
       </div>
+
+      {summary.unparsed > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', background: C.yellow + '14', border: `1px solid ${C.yellow}55`, borderRadius: 10, padding: '12px 16px', marginBottom: 16 }}>
+          <span style={{ fontSize: 13, color: C.text, flex: 1, minWidth: 220 }}>
+            <strong>{summary.unparsed}</strong> parts (mostly eBay imports) have no make/model, so they don't roll up by model.
+            Parse them from their titles to populate the leaderboard.
+          </span>
+          {parseMsg && <span style={{ fontSize: 12, color: C.muted }}>{parseMsg}</span>}
+          <button onClick={runParse} disabled={parsing} style={{ ...S.btn('primary'), padding: '8px 14px', fontSize: 13, opacity: parsing ? 0.6 : 1 }}>
+            {parsing ? '⏳ Parsing…' : '✨ Parse from titles'}
+          </button>
+        </div>
+      )}
+      {summary.unparsed === 0 && parseMsg && (
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 16 }}>{parseMsg}</div>
+      )}
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
         {[['models', '🚗 By model'], ['cars', '🔧 By car']].map(([id, label]) => (
@@ -318,7 +360,9 @@ export default function Vehicles({ parts = [], cars = [], costing = {} }) {
           <tbody>
             {rows.length === 0 ? (
               <tr><td colSpan={cols.length} style={{ padding: 24, textAlign: 'center', color: C.muted }}>
-                {cars.length === 0 ? 'No donor cars yet. Add cars in Inventory to track vehicle profitability.' : 'No vehicles match.'}
+                {isModels
+                  ? (modelRows.length === 0 ? 'No parts yet.' : 'No models match.')
+                  : (cars.length === 0 ? 'No donor cars yet. Add cars in Inventory to track per-vehicle ROI.' : 'No vehicles match.')}
               </td></tr>
             ) : rows.map(r => (
               <tr key={r.id} style={{ borderBottom: `1px solid ${C.border}` }}>
@@ -336,12 +380,12 @@ export default function Vehicles({ parts = [], cars = [], costing = {} }) {
       <div style={{ marginTop: 10, fontSize: 12, color: C.muted, lineHeight: 1.6 }}>
         Showing {rows.length} {isModels ? 'models' : 'vehicles'}.
         <strong> Score</strong> (0–100) blends profit ({Math.round(SCORE_WEIGHTS.profit * 100)}%), yield ({Math.round(SCORE_WEIGHTS.yield * 100)}%)
-        and sell-speed ({Math.round(SCORE_WEIGHTS.speed * 100)}%), each ranked as a percentile against the rest of your fleet — hover a badge for the
-        sub-scores. Cars with no sales yet show <em>new</em>.
-        <strong> Net profit</strong> = parts revenue − selling costs (labour, postage, eBay fees) − car purchase price.
+        and sell-speed ({Math.round(SCORE_WEIGHTS.speed * 100)}%), each ranked as a percentile vs the rest — hover a badge for the sub-scores.
         <strong> Yield</strong> credits each sold part as 1 and each unsold part as a fading fraction
         ({Math.round(FRESH_WEIGHT * 100)}% when freshly pulled, decaying to 0 by {FADE_DAYS} days on the shelf).
-        <strong> Recouped</strong> ≥ 100% means the car has paid for itself.
+        {isModels
+          ? <> <strong> By model</strong> covers every part by its make/model; <strong>Est. profit</strong> uses the app's estimated cost basis (no per-car purchase price at this level — see <strong>By car</strong> for true ROI).</>
+          : <> <strong> Net profit</strong> = parts revenue − selling costs (labour, postage, eBay fees) − car purchase price. <strong>Recouped</strong> ≥ 100% means the car has paid for itself.</>}
         <strong> Untapped</strong> is the list value still on the shelf.
       </div>
     </div>

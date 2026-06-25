@@ -237,7 +237,7 @@ export default function App() {
         )}
         {tab === 'ebay' && <Ebay storeId={storeId} onChanged={smartRefetch} />}
         {tab === 'insights' && <Insights storeId={storeId} initial={insightsInit} />}
-        {tab === 'vehicles' && <Vehicles parts={parts} cars={cars} costing={costing} />}
+        {tab === 'vehicles' && <Vehicles parts={parts} cars={cars} costing={costing} onRefresh={refetch} />}
         {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores}
           onSettingsSaved={s => { if (s?.costing) setCosting(c => ({ ...c, ...s.costing })); if (s?.inventory) setInventory(i => ({ ...i, ...s.inventory })) }} />}
       </main>
