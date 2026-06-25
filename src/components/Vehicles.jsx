@@ -216,12 +216,18 @@ export default function Vehicles({ parts = [], cars = [], costing = {}, onRefres
     setParsing(true); setParseMsg('Reading titles…')
     const targets = parts.filter(p => !p.deletedAt && !(p.make || '').trim())
     const updates = []
+    const unmatched = []
     for (const p of targets) {
       const v = parseVehicle(p.title || '')
       if (v.make) updates.push({ id: p.id, store_id: p.store_id, make: v.make, model: v.model, year: v.year })
+      else if (p.title) unmatched.push(p.title)
     }
+    // Log every unmatched title to the console so we can widen the lists, and
+    // keep a few on screen.
+    if (unmatched.length) console.log(`[parse] ${unmatched.length} unmatched titles:`, unmatched)
+    const sample = unmatched.slice(0, 8).map(s => `“${s.slice(0, 60)}”`).join('  ·  ')
     if (updates.length === 0) {
-      setParseMsg(`No make/model could be matched from ${targets.length} titles.`); setParsing(false); return
+      setParseMsg(`No make matched from ${targets.length} titles. Examples: ${sample}`); setParsing(false); return
     }
     let done = 0
     for (let i = 0; i < updates.length; i += 500) {
@@ -230,7 +236,7 @@ export default function Vehicles({ parts = [], cars = [], costing = {}, onRefres
       if (error) { setParseMsg(`Error after ${done}: ${error.message}`); setParsing(false); return }
       done += chunk.length; setParseMsg(`Updated ${done}/${updates.length}…`)
     }
-    setParseMsg(`Done — set make/model on ${updates.length} parts (${targets.length - updates.length} unmatched). Refreshing…`)
+    setParseMsg(`Done — matched ${updates.length}, ${unmatched.length} unmatched${unmatched.length ? ` (e.g. ${sample}) — see console for full list` : ''}. Refreshing…`)
     setParsing(false)
     onRefresh && onRefresh()
   }
