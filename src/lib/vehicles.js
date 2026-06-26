@@ -113,7 +113,21 @@ export function parseVehicle(title = '') {
     }
   }
 
-  // ── year: first plausible 1950–2049 four-digit run (start of a range) ──
-  const ym = title.match(/\b(19[5-9]\d|20[0-4]\d)\b/)
-  return { make, model, year: ym ? ym[1] : '' }
+  return { make, model, year: parseYearRange(title) }
+}
+
+// Extract a model year OR a fitment year RANGE from a title. eBay titles usually
+// give a range ("2002-2006", "08/2002-07/2006", "05/09-10/13") — we keep the
+// range so it matches the listing instead of collapsing to the first year.
+export function parseYearRange(title = '') {
+  // Prefer 4-digit years; if none, fall back to MM/YY tokens (e.g. 05/09, 10/96).
+  let years = [...title.matchAll(/\b(19[5-9]\d|20[0-4]\d)\b/g)].map(m => +m[1])
+  if (!years.length) {
+    years = [...title.matchAll(/\b\d{1,2}\/(\d{2})\b/g)].map(m => {
+      const n = +m[1]; return n <= 49 ? 2000 + n : 1900 + n
+    })
+  }
+  if (!years.length) return ''
+  const lo = Math.min(...years), hi = Math.max(...years)
+  return lo === hi ? String(lo) : `${lo}-${hi}`
 }

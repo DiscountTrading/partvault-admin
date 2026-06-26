@@ -214,13 +214,22 @@ export default function Vehicles({ parts = [], cars = [], costing = {}, onRefres
   // Only fills blanks (never overwrites a set make), so it's safe to re-run.
   const runParse = async () => {
     setParsing(true); setParseMsg('Reading titles…')
-    const targets = parts.filter(p => !p.deletedAt && !(p.make || '').trim())
+    // Target parts with no make, plus eBay-imported parts (uncurated) so we can
+    // refresh their year to the full range. Never overwrites a curated make/model,
+    // and only upgrades a year (blank → value, or single → range) so we don't
+    // fight a deliberately-specific year.
+    const targets = parts.filter(p => !p.deletedAt && (!(p.make || '').trim() || p.source === 'ebay_import'))
     const updates = []
     const unmatched = []
     for (const p of targets) {
+      const blankMake = !(p.make || '').trim()
       const v = parseVehicle(p.title || '')
-      if (v.make) updates.push({ id: p.id, make: v.make, model: v.model || null, year: v.year || null })
-      else if (p.title) unmatched.push(p.title)
+      const patch = {}
+      if (blankMake && v.make) patch.make = v.make
+      if (!(p.model || '').trim() && v.model) patch.model = v.model
+      if (v.year && v.year !== (p.year || '') && (v.year.includes('-') || !(p.year || '').trim())) patch.year = v.year
+      if (Object.keys(patch).length) updates.push({ id: p.id, ...patch })
+      else if (blankMake && !v.make && p.title) unmatched.push(p.title)
     }
     // Log every unmatched title to the console so we can widen the lists, and
     // keep a few on screen.
@@ -235,15 +244,15 @@ export default function Vehicles({ parts = [], cars = [], costing = {}, onRefres
     const CONC = 25
     for (let i = 0; i < updates.length; i += CONC) {
       const batch = updates.slice(i, i + CONC)
-      const errs = await Promise.all(batch.map(u =>
-        sb.from('parts').update({ make: u.make, model: u.model, year: u.year }).eq('id', u.id)
-          .then(({ error }) => { if (error) console.error('[parse] update failed', u.id, error.message); return error ? 1 : 0 })
+      const errs = await Promise.all(batch.map(({ id, ...patch }) =>
+        sb.from('parts').update(patch).eq('id', id)
+          .then(({ error }) => { if (error) console.error('[parse] update failed', id, error.message); return error ? 1 : 0 })
       ))
       failed += errs.reduce((a, b) => a + b, 0)
       done += batch.length
       setParseMsg(`Updating ${done}/${updates.length}…`)
     }
-    setParseMsg(`Done — set make/model on ${updates.length - failed} parts${failed ? `, ${failed} write errors (see console)` : ''}, ${unmatched.length} unmatched${unmatched.length ? ' (see console)' : ''}. Refreshing…`)
+    setParseMsg(`Done — updated ${updates.length - failed} parts (make/model/year range)${failed ? `, ${failed} write errors (see console)` : ''}, ${unmatched.length} still without a make${unmatched.length ? ' (see console)' : ''}. Refreshing…`)
     setParsing(false)
     onRefresh && onRefresh()
   }
