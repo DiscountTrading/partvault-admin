@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { C, S, fmt, APP_VERSION, DEFAULT_POSTAGE_TIERS, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS } from '../lib/constants'
+import { C, S, fmt, APP_VERSION, DEFAULT_POSTAGE_TIERS, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS, rentPerDay } from '../lib/constants'
 import { sb } from '../lib/supabase'
 import { buildSkuPreview, SKU_TOKENS, DEFAULT_SKU_TEMPLATE, DEFAULT_SKU_PAD } from '../lib/sku'
 import TeamAccess from './TeamAccess'
@@ -101,6 +101,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   const [captureAssess, setCaptureAssess] = useState({ category: true, price: true })
   const [costing, setCosting] = useState({ labourRate: 60, adminPct: 10, adminMin: 5, baseCostPct: 25, handlingFee: 2, postageDefaultG: 1000, postageTiers: DEFAULT_POSTAGE_TIERS, labourMode: 'fixed', adminMode: 'percent', adminMinMode: 'fixed', baseCostMode: 'percent' })
   const [inventory, setInventory] = useState({ agedThresholdDays: DEFAULT_AGED_THRESHOLD_DAYS, ageBrackets: DEFAULT_AGE_BRACKETS })
+  const [storage, setStorage] = useState({ volumeM3: '', rent: '', rentPeriod: 'monthly', usablePct: 25 })
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -278,6 +279,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         if (data.settings.captureAssess) setCaptureAssess(s => ({ ...s, ...data.settings.captureAssess }))
         if (data.settings.costing) setCosting(s => ({ ...s, ...data.settings.costing }))
         if (data.settings.inventory) setInventory(s => ({ ...s, ...data.settings.inventory }))
+        if (data.settings.storage) setStorage(s => ({ ...s, ...data.settings.storage }))
         if (data.settings.shipAddress) setShipAddress(a => ({ ...a, ...data.settings.shipAddress }))
         if (data.settings.ebayLocationKey) setEbayLocationKey(data.settings.ebayLocationKey)
         if (data.settings.ebayUsername) setEbayUsername(data.settings.ebayUsername) // persisted — shows immediately
@@ -306,7 +308,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     setSaving(true)
     try {
       const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const merged = { ...(current?.settings || {}), footer, aiDescription: aiSettings, captureAssess, costing, inventory, timezone }
+      const merged = { ...(current?.settings || {}), footer, aiDescription: aiSettings, captureAssess, costing, inventory, storage, timezone }
       await sb.from('stores').update({ settings: merged }).eq('id', storeId)
       onSettingsSaved?.(merged) // let the app refresh costing/inventory-driven views live
       setSaved(true)
@@ -1752,6 +1754,54 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
               </div>
               <div style={{ fontSize: 12, color: C.muted, marginTop: 12 }}>The heaviest tier is used for anything over the top weight. Estimated postage = matching carrier rate + handling fee.</div>
             </div>
+          </Section>
+
+          <Section title="🏠 Storage facility">
+            <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
+              Turns your warehouse rent into a per-part storage cost. Rent is spread over the volume you can actually use
+              for sellable stock (the rest — working space, intake, air — is paid for too, so the stock carries it). A part's
+              volume comes from its category box size (set under Shipping), and the cost accrues over how long it's held, so
+              slow movers cost more. Feeds into part cost, margins and the Vehicle scores.
+            </p>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
+              <div style={{ flex: '1 1 150px' }}>
+                <label style={S.label}>Total warehouse volume (m³)</label>
+                <input type="number" style={S.input} value={storage.volumeM3} onChange={e => setStorage(s => ({ ...s, volumeM3: e.target.value }))} placeholder="e.g. 600" />
+              </div>
+              <div style={{ flex: '1 1 150px' }}>
+                <label style={S.label}>Rent ($)</label>
+                <input type="number" style={S.input} value={storage.rent} onChange={e => setStorage(s => ({ ...s, rent: e.target.value }))} placeholder="e.g. 3000" />
+              </div>
+              <div style={{ flex: '1 1 120px' }}>
+                <label style={S.label}>Rent period</label>
+                <select style={S.select} value={storage.rentPeriod} onChange={e => setStorage(s => ({ ...s, rentPeriod: e.target.value }))}>
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="annual">Annual</option>
+                </select>
+              </div>
+              <div style={{ flex: '1 1 150px' }}>
+                <label style={S.label}>Usable for storage (%)</label>
+                <input type="number" style={S.input} value={storage.usablePct} onChange={e => setStorage(s => ({ ...s, usablePct: e.target.value }))} />
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>Default 25% (15% working · 10% intake · 50% air).</div>
+              </div>
+            </div>
+            {(() => {
+              const vol = +storage.volumeM3 || 0, pct = +storage.usablePct || 0
+              const perDay = rentPerDay(storage.rent, storage.rentPeriod)
+              const usable = vol * pct / 100
+              if (!(vol > 0 && perDay > 0 && usable > 0)) return (
+                <div style={{ fontSize: 12, color: C.muted }}>Enter volume, rent and usable % to see the storage rate.</div>
+              )
+              const ratePerM3Yr = (perDay / usable) * 365
+              return (
+                <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.7 }}>
+                  Usable storage volume: <strong>{usable.toFixed(1)} m³</strong> · Storage rate:
+                  <strong> ${ratePerM3Yr.toFixed(0)}/m³ per year</strong> (${(ratePerM3Yr / 365).toFixed(3)}/m³/day).
+                  A part in a 40×30×20 cm box (0.024 m³) held 6 months ≈ <strong>${(ratePerM3Yr * 0.024 / 2).toFixed(2)}</strong>.
+                </div>
+              )
+            })()}
           </Section>
 
           <Section title="📦 Aged stock">

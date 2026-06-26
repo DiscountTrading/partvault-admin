@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { C, S, fmt, totalCost, estimateCostBasis, partEffectiveCost } from '../lib/constants'
+import { C, S, fmt, totalCost, estimateCostBasis, partEffectiveCost, storageCostFor, storageConfigured } from '../lib/constants'
 import { parseVehicle } from '../lib/vehicles'
 import { sb } from '../lib/supabase'
 
@@ -97,10 +97,11 @@ export default function Vehicles({ parts = [], cars = [], costing = {}, onRefres
   // cost model (partEffectiveCost) minus those two so we don't double-count the
   // car's purchase price against itself.
   const opCost = (p) => {
-    const recorded = totalCost(p) - (+p.costs?.acquisition || 0)
+    const useStorage = storageConfigured(costing)
+    const recorded = totalCost(p) - (+p.costs?.acquisition || 0) - (useStorage ? (+p.costs?.storage || 0) : 0)
     const b = estimateCostBasis(p, costing, 0, 0)
     const manualPost = +(p.costs?.postage) || 0
-    const supplement = b.labour + b.admin + (manualPost > 0 ? 0 : b.postage) // exclude baseCost
+    const supplement = b.labour + b.admin + (manualPost > 0 ? 0 : b.postage) + storageCostFor(p, costing).value // exclude baseCost
     return recorded + supplement
   }
 

@@ -1,4 +1,4 @@
-export const APP_VERSION = '3.14.67'
+export const APP_VERSION = '3.14.68'
 
 export const C = {
   bg:'#f5f4f0', panel:'#edeae3', card:'#ffffff', border:'#ddd9d0',
@@ -187,16 +187,56 @@ export const estimateCostBasis = (p, costing = {}, carPrice = 0, carPartsValue =
   return { carShare, baseCost, labour, admin, postage: post.value, postageEstimated: post.estimated, total: carShare + baseCost + labour + admin + post.value }
 }
 
+// ── Warehouse storage cost ──────────────────────────────────────────────────
+// Turn a warehouse's rent + usable volume into a per-part storage cost. The rent
+// is amortised over only the USABLE storage volume (the air/working space you pay
+// for but can't store sellable stock in is carried by the stock that sells). A
+// part's volume comes from its category package box (Shipping settings, cm), and
+// the cost accrues over the time it's held — so slow movers cost more.
+export const RENT_PERIOD_DAYS = { weekly: 7, monthly: 30.44, annual: 365 }
+export const rentPerDay = (rent, period) => (+rent || 0) / (RENT_PERIOD_DAYS[period] || RENT_PERIOD_DAYS.monthly)
+
+const partBoxVolumeM3 = (p, costing = {}) => {
+  const ship = costing.shipping || {}
+  const box = (ship.cats && ship.cats[canonicalCategory(p.category)]) || ship.default || {}
+  const l = +box.l, w = +box.w, h = +box.h
+  if (!(l > 0 && w > 0 && h > 0)) return 0
+  return (l * w * h) / 1e6 // cm³ → m³
+}
+const daysHeld = (p) => {
+  const start = p.acquiredDate || p.acquired_date || p.createdAt || p.created_at
+  if (!start) return 0
+  const end = p.soldDate || p.sold_date || null
+  const ms = (end ? new Date(end).getTime() : Date.now()) - new Date(start).getTime()
+  return ms > 0 ? ms / 86400000 : 0
+}
+// Storage cost incurred by a part to date (or until sold). 0 unless a storage
+// facility is configured AND the part's category has box dimensions.
+export const storageCostFor = (p = {}, costing = {}) => {
+  const st = costing.storage
+  if (!st || !(+st.volumeM3 > 0) || !(+st.rentPerDay > 0) || !(+st.usablePct > 0)) return { value: 0, estimated: false }
+  const usableVol = (+st.volumeM3) * (+st.usablePct) / 100
+  const vol = partBoxVolumeM3(p, costing)
+  if (usableVol <= 0 || vol <= 0) return { value: 0, estimated: false }
+  const ratePerM3PerDay = (+st.rentPerDay) / usableVol
+  return { value: ratePerM3PerDay * vol * daysHeld(p), estimated: true }
+}
+export const storageConfigured = (costing = {}) =>
+  !!(costing.storage && +costing.storage.volumeM3 > 0 && +costing.storage.rentPerDay > 0 && +costing.storage.usablePct > 0)
+
 // Best single cost figure for a part, for roll-ups (Dashboard / Insights).
 // Additive: recorded costs (acquisition, postage, eBay fees, …) PLUS the estimated
 // components not already captured (base cost when no acquisition, removal labour,
 // admin, and a postage estimate when none recorded). This way real eBay fees are
 // counted on top of the cost estimate rather than replacing it. `estimated` flags
-// whether any of the figure is a projection.
+// whether any of the figure is a projection. When a storage facility is set, the
+// computed storage cost replaces the flat recorded `storage` figure.
 export const partEffectiveCost = (p = {}, costing = {}) => {
-  const recorded = totalCost(p)                 // costs JSON: acquisition, postage, ebay_fees, …
+  const sc = storageCostFor(p, costing)
+  const useStorage = storageConfigured(costing)
+  const recorded = totalCost(p) - (useStorage ? (+p.costs?.storage || 0) : 0)
   const manualPost = +(p.costs?.postage) || 0
   const b = estimateCostBasis(p, costing, 0, 0) // baseCost (gated on no acquisition), labour, admin, postage
-  const supplement = b.baseCost + b.labour + b.admin + (manualPost > 0 ? 0 : b.postage)
+  const supplement = b.baseCost + b.labour + b.admin + (manualPost > 0 ? 0 : b.postage) + sc.value
   return { value: recorded + supplement, estimated: supplement > 0 }
 }

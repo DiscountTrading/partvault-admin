@@ -1,9 +1,9 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useAuth } from './hooks/useAuth'
 import { useParts } from './hooks/useParts'
 import { useSales } from './hooks/useSales'
 import { sb } from './lib/supabase'
-import { C, S, APP_VERSION } from './lib/constants'
+import { C, S, APP_VERSION, rentPerDay } from './lib/constants'
 import AuthScreen from './components/AuthScreen'
 import Dashboard from './components/Dashboard'
 import Inventory from './components/Inventory'
@@ -162,8 +162,18 @@ export default function App() {
   const [footer, setFooter] = useState(DEFAULT_FOOTER)
   const [costing, setCosting] = useState({ labourRate: 60, adminPct: 10, adminMin: 5 })
   const [inventory, setInventory] = useState({ agedThresholdDays: 60, ageBrackets: [90, 180, 365, 730, 1065] })
+  const [storage, setStorage] = useState({ volumeM3: 0, rent: 0, rentPeriod: 'monthly', usablePct: 25 })
+  const [shipping, setShipping] = useState(null)
   const [insightsInit, setInsightsInit] = useState(null) // drill-down filter from Dashboard
   const [cars, setCars] = useState([])
+
+  // Enrich costing with the storage-facility config (rent normalised to /day) and
+  // the per-category shipping box dims, so partEffectiveCost can compute storage.
+  const costingFull = useMemo(() => ({
+    ...costing,
+    shipping: shipping || undefined,
+    storage: { volumeM3: +storage.volumeM3 || 0, rentPerDay: rentPerDay(storage.rent, storage.rentPeriod), usablePct: +storage.usablePct || 0 },
+  }), [costing, shipping, storage])
 
   // Jump to Insights pre-filtered (e.g. clicking an aged-stock bracket).
   const drillToInsights = (init) => { setInsightsInit({ ...init, _ts: Date.now() }); setTab('insights') }
@@ -177,6 +187,7 @@ export default function App() {
     // Reset to defaults so a previous store's settings don't bleed into this one
     setAiSettings(DEFAULT_AI_SETTINGS)
     setFooter(DEFAULT_FOOTER)
+    setShipping(null)
     setCars([])
     // Load AI settings + footer
     sb.from('stores').select('settings').eq('id', storeId).single().then(({ data }) => {
@@ -184,6 +195,8 @@ export default function App() {
       if (data?.settings?.footer) setFooter(data.settings.footer)
       if (data?.settings?.costing) setCosting(s => ({ ...s, ...data.settings.costing }))
       if (data?.settings?.inventory) setInventory(s => ({ ...s, ...data.settings.inventory }))
+      if (data?.settings?.storage) setStorage(s => ({ ...s, ...data.settings.storage }))
+      if (data?.settings?.shipping) setShipping(data.settings.shipping)
     })
     // Load cars
     sb.from('cars').select('*').eq('store_id', storeId).is('deleted_at', null).order('created_at', { ascending: false })
@@ -226,20 +239,20 @@ export default function App() {
         </div>
       </nav>
       <main style={S.main}>
-        {tab === 'dashboard' && <Dashboard parts={parts} sales={sales} costing={costing} inventory={inventory} onDrill={drillToInsights} />}
+        {tab === 'dashboard' && <Dashboard parts={parts} sales={sales} costing={costingFull} inventory={inventory} onDrill={drillToInsights} />}
         {tab === 'inventory' && (
           <Inventory
             parts={parts} cars={cars} storeId={storeId}
             onAdd={handleAdd} onEdit={handleEdit} onDelete={handleDel}
             onDeleteCar={softDeleteCar} onAddCar={handleAddCar}
-            aiSettings={aiSettings} footer={footer} costing={costing}
+            aiSettings={aiSettings} footer={footer} costing={costingFull}
           />
         )}
         {tab === 'ebay' && <Ebay storeId={storeId} onChanged={smartRefetch} />}
         {tab === 'insights' && <Insights storeId={storeId} initial={insightsInit} />}
-        {tab === 'vehicles' && <Vehicles parts={parts} cars={cars} costing={costing} onRefresh={refetch} />}
+        {tab === 'vehicles' && <Vehicles parts={parts} cars={cars} costing={costingFull} onRefresh={refetch} />}
         {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores}
-          onSettingsSaved={s => { if (s?.costing) setCosting(c => ({ ...c, ...s.costing })); if (s?.inventory) setInventory(i => ({ ...i, ...s.inventory })) }} />}
+          onSettingsSaved={s => { if (s?.costing) setCosting(c => ({ ...c, ...s.costing })); if (s?.inventory) setInventory(i => ({ ...i, ...s.inventory })); if (s?.storage) setStorage(st => ({ ...st, ...s.storage })); if (s?.shipping) setShipping(s.shipping) }} />}
       </main>
       {toast && (
         <div style={{ position: 'fixed', bottom: 24, right: 24, background: toast.color, color: '#fff', padding: '12px 22px', borderRadius: 10, fontSize: 14, fontWeight: 600, zIndex: 1000, boxShadow: '0 8px 30px rgba(0,0,0,0.2)' }}>
