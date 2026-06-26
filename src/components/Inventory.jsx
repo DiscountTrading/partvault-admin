@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
-import { C, S, fmt, pct, totalCost, estimateCostBasis, CATEGORY_NAMES, EBAY_AU_CATEGORIES, PART_CONDITIONS, STATUS_COLORS, STATUS_LABELS } from '../lib/constants'
+import { C, S, fmt, pct, totalCost, estimateCostBasis, CATEGORY_NAMES, EBAY_AU_CATEGORIES, canonicalCategory, canonicalSubcategory, PART_CONDITIONS, STATUS_COLORS, STATUS_LABELS } from '../lib/constants'
 import { sb } from '../lib/supabase'
 import { MAKES, MODEL_SUGS } from '../lib/vehicles'
 
@@ -372,8 +372,14 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
     setAnalysing(false)
   }
 
-  const handleSave = () => onSave({ ...form, list_price:+form.listPrice||0, sold_price:form.soldPrice?+form.soldPrice:null })
-  const handleSaveAndAdd = () => onSaveAndAdd({ ...form, list_price:+form.listPrice||0, sold_price:form.soldPrice?+form.soldPrice:null })
+  // Canonicalise category/subcategory on save so a stored punctuation variant
+  // becomes the exact key (fixes the value everywhere it's matched).
+  const normForm = () => {
+    const category = canonicalCategory(form.category) || form.category
+    return { ...form, category, subcategory: canonicalSubcategory(category, form.subcategory), list_price:+form.listPrice||0, sold_price:form.soldPrice?+form.soldPrice:null }
+  }
+  const handleSave = () => onSave(normForm())
+  const handleSaveAndAdd = () => onSaveAndAdd(normForm())
 
   const titleLen = (form.title||'').length
   const ebayBtn = (kind='primary') => kind==='primary'
@@ -565,18 +571,30 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
           </Field>
           <Field label="OEM Part Number"><input style={S.input} value={form.partNumber||''} onChange={e => set('partNumber', e.target.value)} /></Field>
         </div>
+        {(() => {
+          // Resolve stored values to canonical keys so the subcategory list always
+          // renders (and the current value is never dropped from the dropdown).
+          const catVal = canonicalCategory(form.category) || defCat
+          const catList = CATEGORY_NAMES.includes(catVal) ? CATEGORY_NAMES : [catVal, ...CATEGORY_NAMES]
+          const subOpts = EBAY_AU_CATEGORIES[catVal] || []
+          const subVal = canonicalSubcategory(catVal, form.subcategory)
+          const subList = subVal && !subOpts.includes(subVal) ? [subVal, ...subOpts] : subOpts
+          return (
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
           <Field label="Category">
-            <select style={S.select} value={form.category||defCat} onChange={e => { set('category', e.target.value); set('subcategory', EBAY_AU_CATEGORIES[e.target.value]?.[0]||'') }}>
-              {CATEGORY_NAMES.map(c => <option key={c}>{c}</option>)}
+            <select style={S.select} value={catVal} onChange={e => { set('category', e.target.value); set('subcategory', EBAY_AU_CATEGORIES[e.target.value]?.[0]||'') }}>
+              {catList.map(c => <option key={c}>{c}</option>)}
             </select>
           </Field>
           <Field label="Subcategory">
-            <select style={S.select} value={form.subcategory||''} onChange={e => set('subcategory', e.target.value)}>
-              {(EBAY_AU_CATEGORIES[form.category]||[]).map(s => <option key={s}>{s}</option>)}
+            <select style={S.select} value={subVal} onChange={e => set('subcategory', e.target.value)}>
+              {subList.length === 0 && <option value="">—</option>}
+              {subList.map(s => <option key={s}>{s}</option>)}
             </select>
           </Field>
         </div>
+          )
+        })()}
       </Section>
 
       {/* Item specifics — vehicle fitment */}

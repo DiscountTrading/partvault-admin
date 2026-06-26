@@ -1,4 +1,4 @@
-export const APP_VERSION = '3.14.65'
+export const APP_VERSION = '3.14.66'
 
 export const C = {
   bg:'#f5f4f0', panel:'#edeae3', card:'#ffffff', border:'#ddd9d0',
@@ -32,6 +32,26 @@ export const EBAY_AU_CATEGORIES = {
   'Legacy Items':['Other'],
 }
 export const CATEGORY_NAMES = Object.keys(EBAY_AU_CATEGORIES)
+
+// Stored category/subcategory values don't always exactly equal our canonical
+// strings — the AI can return a punctuation variant ("Gearboxes - Auto" vs
+// "Gearboxes -- Auto", "Fenders/Guards" vs "Fenders / Guards") and an exact-match
+// dropdown then shows nothing. These resolve a stored value to the canonical one
+// by ignoring case, punctuation and &/and, so the editor stays robust.
+const catKey = s => (s || '').toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]/g, '')
+export const canonicalCategory = (cat) => {
+  if (!cat) return ''
+  if (EBAY_AU_CATEGORIES[cat]) return cat
+  const k = catKey(cat)
+  return CATEGORY_NAMES.find(c => catKey(c) === k) || cat
+}
+export const canonicalSubcategory = (cat, sub) => {
+  if (!sub) return ''
+  const subs = EBAY_AU_CATEGORIES[canonicalCategory(cat)] || []
+  if (subs.includes(sub)) return sub
+  const k = catKey(sub)
+  return subs.find(s => catKey(s) === k) || sub
+}
 export const EBAY_AU_CATEGORY_IDS = {
   'Air & Fuel Delivery':'33549','Air Conditioning & Heating':'33542','Brakes & Brake Parts':'33559',
   'Engines & Engine Parts':'33612','Engine Cooling':'33599','Exhaust & Emission':'33605',
