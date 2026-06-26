@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.74'
+const EDGE_FN_VERSION         = '3.14.75'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -826,6 +826,13 @@ async function handleRequest(req: Request): Promise<Response> {
     // lives in sync_runs, so a later tick picks up exactly where this left off.
     // Reuses the existing actions via internal self-calls (no logic duplicated).
     if (action === 'cron_sync') {
+      // The in-app "Sync now" button routes through this SAME resumable pipeline
+      // (manual:true) so a manual run behaves exactly like the nightly: it survives
+      // tab-close, and a later cron tick resumes the same run. The only differences
+      // are the audit-log label and that a manual run forces a fresh pass even if
+      // today's nightly already finished. This pipeline is 100% read-only against
+      // eBay (start/process_chunk/import_sold_orders/import_fees/reconcile only read).
+      const manual = body.manual === true
       // Prefer the store's LOCAL date (passed by the tz-aware cron) so a run is
       // one-per-local-day; fall back to UTC date for manual/legacy calls.
       const runDate = (typeof body.runDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.runDate))
@@ -834,6 +841,14 @@ async function handleRequest(req: Request): Promise<Response> {
       if (!run) {
         const { data: ins } = await sb.from('sync_runs').insert({ store_id: storeId, run_date: runDate, phase: 'import' }).select().single()
         run = ins
+      } else if (manual && run.done) {
+        // Explicit manual re-run: reset today's finished run to the top. Subsequent
+        // driver calls see done=false and resume this same run (no repeat reset),
+        // and the driver stops polling once it gets done:true — so no loop.
+        const { data: rst } = await sb.from('sync_runs')
+          .update({ phase: 'import', done: false, job_id: null, detail: 'manual sync starting…', updated_at: new Date().toISOString() })
+          .eq('id', run.id).select().single()
+        run = rst || run
       }
       if (!run) throw new Error('Could not create sync_runs row')
       if (run.done) return json({ done: true, phase: 'done', detail: run.detail })
@@ -897,7 +912,7 @@ async function handleRequest(req: Request): Promise<Response> {
           return json({ phase, paused: true, reason: msg }, 200)
         }
         await save({ detail: `error in ${phase}: ${msg}` })
-        await logSyncEvent(storeId, `Nightly sync failed in ${phase}: ${msg}`, { kind: 'nightly', ok: false, phase })
+        await logSyncEvent(storeId, `${manual ? 'Manual' : 'Nightly'} sync failed in ${phase}: ${msg}`, { kind: manual ? 'manual' : 'nightly', ok: false, phase })
         return json({ phase, error: msg }, 200)
       }
       // Record one summary line per completed nightly run.
@@ -906,12 +921,12 @@ async function handleRequest(req: Request): Promise<Response> {
           ? await sb.from('jobs').select('result_summary, failed_items').eq('id', jobIdLocal).maybeSingle()
           : { data: null as any }
         const imp = jobRow?.result_summary?.imported ?? 0
-        const summary = `Nightly sync ✓ · ${imp} listings imported · `
+        const summary = `${manual ? 'Manual' : 'Nightly'} sync ✓ · ${imp} listings imported · `
           + `${bRes?.created ?? 0} sold new/${bRes?.updated ?? 0} updated · `
           + `$${fRes?.feeTotal ?? 0} fees · `
           + `${recRes?.missingCount ?? 0} missing, ${recRes?.staleCount ?? 0} stale`
         await logSyncEvent(storeId, summary, {
-          kind: 'nightly', ok: true,
+          kind: manual ? 'manual' : 'nightly', ok: true,
           listingsImported: imp, soldNew: bRes?.created ?? 0, soldUpdated: bRes?.updated ?? 0,
           feeTotal: fRes?.feeTotal ?? 0, missing: recRes?.missingCount ?? 0, stale: recRes?.staleCount ?? 0,
         })

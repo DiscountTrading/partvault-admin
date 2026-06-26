@@ -913,27 +913,69 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     } catch { /* best-effort */ }
   }
 
-  const syncEverything = async () => {
+  // One-click "Sync now" — drives the SAME server-side resumable pipeline the
+  // nightly cron uses (action: cron_sync, manual:true). It POSTs repeatedly to
+  // advance the run and reads the shared sync_runs row for live progress. Because
+  // the work happens server-side, the sync keeps going — and a later nightly tick
+  // resumes it — even if this tab is closed. It is 100% READ-ONLY against eBay
+  // (see cron_sync): no listing is ever created, revised, or ended.
+  const runSync = async () => {
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+    const PHASE = {
+      import:    { lo: 5,  hi: 35, label: 'Importing listings from eBay…' },
+      backfill:  { lo: 35, hi: 60, label: 'Importing sold orders…' },
+      fees:      { lo: 60, hi: 75, label: 'Importing eBay fees…' },
+      reconcile: { lo: 75, hi: 98, label: 'Reconciling with eBay…' },
+    }
     setSyncingAll(true)
+    setSyncPhase('Starting sync…')
+    setImportJob({ status: 'running', current_item: 'Starting…' })
+    setDisplayProgress(3); setRpm(60)
     try {
-      setSyncPhase('1/4 · Importing listings from eBay…')
-      await importAllListings()
-      setSyncPhase('2/4 · Importing sold orders…')
-      const so = await runSoldOrders(120)
-      setSyncPhase(`2/4 · Sold orders: ${so.created} new, ${so.updated} updated`)
-      setSyncPhase('3/4 · Importing eBay fees…')
-      const f = await runFeesSafe(120)
-      setSyncPhase(f.feesFailed ? `3/4 · eBay fees skipped (${f.feeError}) — continuing` : `3/4 · eBay fees: $${f.feeTotal} across ${f.ordersMatched} orders`)
-      setSyncPhase('4/4 · Reconciling with eBay…')
-      const rec = await runReconcile()
+      let done = false, guard = 0
+      while (!done && guard++ < 600) {
+        let d
+        try {
+          const res = await fetch(EDGE_FN, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'cron_sync', storeId, manual: true }),
+          })
+          d = await res.json()
+        } catch {
+          // Network blip — the server-side run is unaffected; keep polling.
+          await sleep(3000); continue
+        }
+        if (d.error) throw new Error(d.error)
+        done = d.done === true
+
+        // Live progress from the shared run row (also written by the nightly cron).
+        const { data: run } = await sb.from('sync_runs')
+          .select('phase, detail').eq('store_id', storeId)
+          .order('updated_at', { ascending: false }).limit(1).maybeSingle()
+        const phase  = run?.phase || d.phase || 'import'
+        const detail = run?.detail || ''
+        const p = PHASE[phase] || { lo: 5, hi: 95, label: 'Working…' }
+        // Within the import phase, "import X/Y" gives a fine-grained fraction.
+        let frac = 0
+        const m = /(\d+)\s*\/\s*(\d+)/.exec(detail)
+        if (phase === 'import' && m && +m[2] > 0) frac = Math.min(1, +m[1] / +m[2])
+        setDisplayProgress(done ? 100 : Math.round(p.lo + (p.hi - p.lo) * frac))
+        setRpm(done ? 0 : 55 + Math.floor(Math.random() * 25))
+        setSyncPhase(done ? '✓ Sync complete' : `${p.label}${detail ? ` · ${detail}` : ''}`)
+        setImportJob(j => ({ ...j, status: done ? 'completed' : 'running', current_item: done ? '✓ Sync complete' : p.label }))
+        await fetchNightly()
+        if (d.paused) await sleep(3000)
+        else if (!done) await sleep(1200)
+      }
+      setDisplayProgress(100); setRpm(0)
+      setImportJob(j => ({ ...j, status: 'completed', current_item: '✓ Sync complete' }))
       setSyncPhase('✓ Sync complete')
-      await logSync(
-        `Manual full sync ✓ · ${so.created ?? 0} sold new/${so.updated ?? 0} updated · $${f.feeTotal ?? 0} fees`,
-        { soldNew: so.created ?? 0, soldUpdated: so.updated ?? 0, feeTotal: f.feeTotal ?? 0, missing: rec?.missingCount ?? 0, stale: rec?.staleCount ?? 0 },
-      )
+      markRun('import'); markRun('backfill'); markRun('reconcile')
+      await fetchNightly()
+      await checkSyncStatus() // auto-refresh the status panel — no manual re-check needed
     } catch (e) {
       setSyncPhase(`Sync stopped: ${e.message}`)
-      await logSync(`Manual full sync failed: ${e.message}`, { ok: false })
+      setImportJob(j => ({ ...j, status: 'failed', current_item: e.message }))
     }
     setSyncingAll(false)
   }
@@ -2308,7 +2350,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                           : inSync ? '✓ In sync with eBay'
                           : `⚠ ${s.outOfSync} item${s.outOfSync === 1 ? '' : 's'} out of sync`}
                       </div>
-                      <button onClick={checkSyncStatus} disabled={statusLoading} style={{ ...S.btn('secondary'), padding: '5px 12px', fontSize: 12, opacity: statusLoading ? 0.6 : 1 }}>↻ Re-check</button>
+                      <span style={{ fontSize: 11, color: C.muted }}>Auto-checked after each sync</span>
                     </div>
                     {s && !s.error && (
                       <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>
@@ -2331,11 +2373,13 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                 )
               })()}
 
-              {/* Sales match — verify our recorded sales against eBay's actual sold */}
-              {ebayConnected && (
+              {/* Sales audit (advanced) — on-demand check of recorded sales vs eBay for a
+                  specific date range. Routine whole-DB sales matching is now part of Sync
+                  (the idempotent sold-order import), so this is only for spot-checking a period. */}
+              {showAdvSync && ebayConnected && (
                 <div style={{ background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 14px', marginBottom: 12 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>💰 Sales match</div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>💰 Audit sales vs eBay (period)</div>
                     <button onClick={checkSalesMatch} disabled={salesMatchLoading} style={{ ...S.btn('secondary'), padding: '5px 12px', fontSize: 12, opacity: salesMatchLoading ? 0.6 : 1 }}>
                       {salesMatchLoading ? 'Checking eBay…' : 'Check sales match'}
                     </button>
@@ -2447,13 +2491,13 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: 8, marginBottom: syncPhase ? 6 : 12 }}>
-                <button style={{ ...S.btn('primary'), flex: 1, opacity: (syncingAll || !ebayConnected) ? 0.6 : 1 }} onClick={syncEverything} disabled={syncingAll || importing || backfilling || reconciling || !ebayConnected}>
-                  {syncingAll ? '⏳ Syncing…' : '🔄 Sync with eBay'}
+              <div style={{ marginBottom: syncPhase ? 6 : 12 }}>
+                <button style={{ ...S.btn('primary'), width: '100%', opacity: (syncingAll || !ebayConnected) ? 0.6 : 1 }} onClick={runSync} disabled={syncingAll || importing || backfilling || reconciling || !ebayConnected}>
+                  {syncingAll ? '⏳ Syncing…' : '🔄 Sync now'}
                 </button>
-                <button style={{ ...S.btn('secondary'), flex: 1, opacity: (syncingAll || !ebayConnected) ? 0.6 : 1 }} onClick={quickSync} disabled={syncingAll || importing || backfilling || reconciling || !ebayConnected} title="Skip listing import — just sold orders, fees & reconcile (~30s)">
-                  ⚡ Quick Sync
-                </button>
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 5 }}>
+                  Imports listings, sold orders &amp; fees, then reconciles — read-only, and keeps running in the background even if you leave this page.
+                </div>
               </div>
               {syncPhase && (
                 <div style={{ fontSize: 12, color: syncPhase.startsWith('✓') ? C.green : syncPhase.startsWith('Sync stopped') ? C.red : C.text, marginBottom: 8, padding: '6px 10px', background: syncPhase.startsWith('✓') ? '#ecfdf5' : syncPhase.startsWith('Sync stopped') ? '#fef2f2' : C.bg, borderRadius: 6, border: `1px solid ${syncPhase.startsWith('✓') ? '#a7f3d0' : syncPhase.startsWith('Sync stopped') ? '#fecaca' : C.border}` }}>
@@ -2494,8 +2538,11 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
               </button>
 
               {showAdvSync && (
-              <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-                <button style={{ ...S.btn('secondary'), flex: 1, opacity: (importing || syncingAll || !ebayConnected) ? 0.6 : 1 }} onClick={importAllListings} disabled={importing || syncingAll || !ebayConnected}>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+                <button style={{ ...S.btn('secondary'), flex: 1, minWidth: 200, opacity: (syncingAll || !ebayConnected) ? 0.6 : 1 }} onClick={quickSync} disabled={syncingAll || importing || backfilling || reconciling || !ebayConnected} title="Skip listing import — just sold orders, fees & reconcile (~30s). Runs client-side.">
+                  ⚡ Quick sync (sold + fees + reconcile)
+                </button>
+                <button style={{ ...S.btn('secondary'), flex: 1, minWidth: 200, opacity: (importing || syncingAll || !ebayConnected) ? 0.6 : 1 }} onClick={importAllListings} disabled={importing || syncingAll || !ebayConnected}>
                   {importing ? '⏳ Importing...' : '📥 Import listings only'}
                 </button>
                 {importing && <button style={S.btn('danger')} onClick={cancelImport}>Cancel</button>}
