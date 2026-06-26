@@ -157,11 +157,14 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   // Nightly auto-sync state lives server-side in sync_runs (written by pg_cron),
   // so the manual lastRun (localStorage) never reflects it. Read it directly.
   const [nightly, setNightly] = useState(null)
+  const [lastSync, setLastSync] = useState(null) // most recent sync of ANY kind (manual or nightly)
   const fetchNightly = useCallback(async () => {
     if (!storeId) return
     const { data } = await sb.from('sync_runs').select('phase, detail, done, updated_at')
       .eq('store_id', storeId).order('updated_at', { ascending: false }).limit(1).maybeSingle()
     setNightly(data || null)
+    const { data: ls } = await sb.rpc('get_last_sync', { p_store_id: storeId })
+    setLastSync(Array.isArray(ls) ? (ls[0] || null) : (ls || null))
   }, [storeId])
   useEffect(() => { fetchNightly() }, [fetchNightly])
   // Store timezone — drives the nightly sync schedule (local midnight) and the
@@ -1875,12 +1878,21 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                 </label>
               ))}
             </div>
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 14 }}>
               <div style={{ flex: '1 1 280px' }}>
                 <label style={S.label}>QR link base (the PWA resolves /p/&lt;sku&gt;)</label>
                 <input style={S.input} value={labels.qrBaseUrl} onChange={e => setLabels(s => ({ ...s, qrBaseUrl: e.target.value }))} placeholder="https://app.partvault.app" />
               </div>
               <button style={{ ...S.btn('secondary') }} onClick={() => printLabels({ id: 'TEST', sku: 'SAMPLE-001', title: 'Sample part — Toyota Hilux Headlight', make: 'Toyota', model: 'Hilux', year: '2015-2020', listPrice: 120 }, labels)}>🏷️ Print test label</button>
+            </div>
+            <div style={{ flex: '1 1 240px' }}>
+              <label style={S.label}>Mobile capture — when you finish a part</label>
+              <select style={S.select} value={labels.onDone || 'ask'} onChange={e => setLabels(s => ({ ...s, onDone: e.target.value }))}>
+                <option value="ask">Ask whether to print a label</option>
+                <option value="always">Always print a label</option>
+                <option value="never">Don't print</option>
+              </select>
+              <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>The field app prints a stock label on "Done" per this setting (its "don't ask again" toggle maps here).</div>
             </div>
           </Section>
 
@@ -2448,20 +2460,21 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                 <span>Reconcile: {fmtLastRun(lastRun.reconcile)}</span>
               </div>
               {(() => {
-                const mins = nightly?.updated_at ? Math.floor((Date.now() - new Date(nightly.updated_at).getTime()) / 60000) : null
-                const ranToday = mins != null && mins < 60 * 18 // within ~18h = last night's window
-                const ts = nightly?.updated_at ? new Date(nightly.updated_at).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null
+                const ok = lastSync ? lastSync.ok !== false : true
+                const lsTs = lastSync?.synced_at ? new Date(lastSync.synced_at).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null
+                const inProgress = nightly && !nightly.done
+                const nightlyTs = nightly?.updated_at ? new Date(nightly.updated_at).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null
+                const kindLbl = lastSync?.kind === 'nightly' ? ' (nightly)' : lastSync?.kind === 'manual' ? ' (manual)' : ''
                 return (
                   <div style={{ fontSize: 11, marginBottom: 8, padding: '6px 10px', borderRadius: 6,
-                    background: !nightly ? '#f9f8f5' : nightly.done && ranToday ? '#ecfdf5' : '#fffbeb',
-                    border: `1px solid ${!nightly ? C.border : nightly.done && ranToday ? '#a7f3d0' : '#fcd34d'}`,
+                    background: !lastSync ? '#f9f8f5' : ok ? '#ecfdf5' : '#fef2f2',
+                    border: `1px solid ${!lastSync ? C.border : ok ? '#a7f3d0' : '#fecaca'}`,
                     color: C.text, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
                     <span>
-                      🌙 <strong>Nightly sync:</strong>{' '}
-                      {!nightly ? 'no run recorded yet — first run is tonight (Sydney midnight)'
-                        : nightly.done
-                          ? `✓ completed ${ts}${nightly.detail ? ` · ${nightly.detail}` : ''}`
-                          : `⏳ ${nightly.phase || 'in progress'}${nightly.detail ? ` · ${nightly.detail}` : ''} (as of ${ts})`}
+                      {lastSync
+                        ? <>{ok ? '✓' : '⚠'} <strong>Last sync:</strong> {lsTs}{kindLbl}{lastSync.summary ? ` · ${lastSync.summary}` : ''}</>
+                        : <>🌙 <strong>Sync:</strong> no run recorded yet — nightly runs at your local midnight</>}
+                      {inProgress && <><br />⏳ Nightly in progress · {nightly.phase}{nightly.detail ? ` · ${nightly.detail}` : ''} (as of {nightlyTs})</>}
                     </span>
                     <button onClick={fetchNightly} style={{ ...S.btn('secondary'), padding: '3px 10px', fontSize: 11 }}>↻</button>
                   </div>

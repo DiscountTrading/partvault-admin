@@ -9,6 +9,9 @@ export const DEFAULT_LABELS = {
   widthMm: 50, heightMm: 30, mode: 'roll', sheetCols: 3,
   showQR: true, showSku: true, showTitle: true, showFitment: true, showPrice: false,
   qrBaseUrl: 'https://app.partvault.app',
+  // Mobile capture flow: when finishing a part, prompt to print a stock label.
+  // 'ask' (prompt each time, with "don't ask again") · 'always' · 'never'.
+  onDone: 'ask',
 }
 
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
