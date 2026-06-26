@@ -180,10 +180,10 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:20, rowGap:14 }}>
           {[
             ['Total Sales',fmt(soldRev),C.text],
-            ...(refundTotal>0?[['Refunds (netted)','−'+fmt(refundTotal),C.red]]:[]),
-            ['eBay Fees',ebayFees?('−'+fmt(ebayFees)):'—',C.red],
+            ['Refunds (netted)',refundTotal>0?('−'+fmt(refundTotal)):fmt(0),refundTotal>0?C.red:C.muted],
+            ['eBay Fees',ebayFees>0?('−'+fmt(ebayFees)):fmt(0),ebayFees>0?C.red:C.muted],
             ['Net Sales (after fees)',fmt(netSales),C.text],
-            ['Total COGS',fmt(soldCogs),C.red],
+            ['Total COGS',soldCogs>0?fmt(soldCogs):fmt(0),soldCogs>0?C.red:C.muted],
             ['Gross Profit',fmt(gross),C.green],
             ['Gross Margin',pct(margin),margin>30?C.green:C.yellow],
           ].map(([l,v,col])=>(
