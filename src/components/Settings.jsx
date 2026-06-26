@@ -895,6 +895,12 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   }
 
   const runFees = async (days = 120) => callEdge({ action: 'import_fees', storeId, days }, 'Fee import')
+  // Fees are secondary to listings/sold/reconcile and eBay's Finances API throws
+  // intermittent 500s — never let a fee hiccup abort the whole sync.
+  const runFeesSafe = async (days = 120) => {
+    try { return await runFees(days) }
+    catch (e) { return { feeTotal: 0, ordersMatched: 0, feesFailed: true, feeError: e.message } }
+  }
 
   // Write one summary line per manual sync into the audit log (Activity view).
   const logSync = async (summary, data = {}) => {
@@ -916,8 +922,8 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       const so = await runSoldOrders(120)
       setSyncPhase(`2/4 · Sold orders: ${so.created} new, ${so.updated} updated`)
       setSyncPhase('3/4 · Importing eBay fees…')
-      const f = await runFees(120)
-      setSyncPhase(`3/4 · eBay fees: $${f.feeTotal} across ${f.ordersMatched} orders`)
+      const f = await runFeesSafe(120)
+      setSyncPhase(f.feesFailed ? `3/4 · eBay fees skipped (${f.feeError}) — continuing` : `3/4 · eBay fees: $${f.feeTotal} across ${f.ordersMatched} orders`)
       setSyncPhase('4/4 · Reconciling with eBay…')
       const rec = await runReconcile()
       setSyncPhase('✓ Sync complete')
@@ -949,10 +955,10 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       setImportJob(j => ({ ...j, current_item: 'Importing eBay fees…' }))
       setSyncPhase('2/3 · Importing eBay fees…')
       setDisplayProgress(50)
-      const f = await runFees(120)
+      const f = await runFeesSafe(120)
       setDisplayProgress(66)
       setRpm(70)
-      const fMsg = `Fees: $${(f.feeTotal ?? 0).toFixed(2)} across ${f.ordersMatched ?? 0} orders`
+      const fMsg = f.feesFailed ? `Fees skipped (${f.feeError}) — continuing` : `Fees: $${(f.feeTotal ?? 0).toFixed(2)} across ${f.ordersMatched ?? 0} orders`
       setSyncPhase(`2/3 · ${fMsg}`)
       setImportJob(j => ({ ...j, current_item: 'Reconciling with eBay…' }))
       setSyncPhase('3/3 · Reconciling with eBay…')

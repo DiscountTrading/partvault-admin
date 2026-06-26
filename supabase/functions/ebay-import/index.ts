@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.70'
+const EDGE_FN_VERSION         = '3.14.74'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -1419,7 +1419,13 @@ async function handleRequest(req: Request): Promise<Response> {
         let offset = 0, total = 0
         do {
           const url = `https://apiz.ebay.com/sell/finances/v1/transaction?filter=${encodeURIComponent(filter)}&limit=200&offset=${offset}`
-          const r = await fetch(url, { headers })
+          let r = await fetch(url, { headers })
+          // The eBay Finances API throws intermittent 5xx (errorId 135000, "eBay
+          // internal system problem") — retry a few times before giving up.
+          for (let attempt = 0; !r.ok && (r.status >= 500 || r.status === 429) && attempt < 3; attempt++) {
+            await new Promise(res => setTimeout(res, 800 * (attempt + 1)))
+            r = await fetch(url, { headers })
+          }
           if (!r.ok) { const t = await r.text(); throw new Error(`getTransactions ${r.status}: ${t.slice(0, 300)}`) }
           const d = await r.json()
           total = +d.total || 0
