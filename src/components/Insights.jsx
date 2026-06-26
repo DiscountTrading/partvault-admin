@@ -252,7 +252,7 @@ export default function Insights({ storeId, initial }) {
     }
     if (col.fmt === 'money') return money(v)
     if (col.fmt === 'pct') return v == null ? '—' : `${v}%`
-    if (col.unit) return `${v ?? 0}${col.unit}`
+    if (col.unit) return v == null ? '—' : `${v}${col.unit}`
     return v ?? ''
   }
 
