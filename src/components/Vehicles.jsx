@@ -219,7 +219,7 @@ export default function Vehicles({ parts = [], cars = [], costing = {}, onRefres
     const unmatched = []
     for (const p of targets) {
       const v = parseVehicle(p.title || '')
-      if (v.make) updates.push({ id: p.id, store_id: p.store_id, make: v.make, model: v.model, year: v.year })
+      if (v.make) updates.push({ id: p.id, make: v.make, model: v.model || null, year: v.year || null })
       else if (p.title) unmatched.push(p.title)
     }
     // Log every unmatched title to the console so we can widen the lists, and
@@ -229,14 +229,21 @@ export default function Vehicles({ parts = [], cars = [], costing = {}, onRefres
     if (updates.length === 0) {
       setParseMsg(`No make matched from ${targets.length} titles. Examples: ${sample}`); setParsing(false); return
     }
-    let done = 0
-    for (let i = 0; i < updates.length; i += 500) {
-      const chunk = updates.slice(i, i + 500)
-      const { error } = await sb.from('parts').upsert(chunk, { onConflict: 'id' })
-      if (error) { setParseMsg(`Error after ${done}: ${error.message}`); setParsing(false); return }
-      done += chunk.length; setParseMsg(`Updated ${done}/${updates.length}…`)
+    // Per-row UPDATE (not upsert — upsert's INSERT path trips parts' NOT NULL
+    // columns like sku). Bounded concurrency keeps it fast without flooding.
+    let done = 0, failed = 0
+    const CONC = 25
+    for (let i = 0; i < updates.length; i += CONC) {
+      const batch = updates.slice(i, i + CONC)
+      const errs = await Promise.all(batch.map(u =>
+        sb.from('parts').update({ make: u.make, model: u.model, year: u.year }).eq('id', u.id)
+          .then(({ error }) => { if (error) console.error('[parse] update failed', u.id, error.message); return error ? 1 : 0 })
+      ))
+      failed += errs.reduce((a, b) => a + b, 0)
+      done += batch.length
+      setParseMsg(`Updating ${done}/${updates.length}…`)
     }
-    setParseMsg(`Done — matched ${updates.length}, ${unmatched.length} unmatched${unmatched.length ? ` (e.g. ${sample}) — see console for full list` : ''}. Refreshing…`)
+    setParseMsg(`Done — set make/model on ${updates.length - failed} parts${failed ? `, ${failed} write errors (see console)` : ''}, ${unmatched.length} unmatched${unmatched.length ? ' (see console)' : ''}. Refreshing…`)
     setParsing(false)
     onRefresh && onRefresh()
   }
