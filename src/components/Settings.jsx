@@ -211,6 +211,9 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   const [backfillingCats, setBackfillingCats] = useState(false)
   const [backfillCatResult, setBackfillCatResult] = useState(null)
   const backfillCatCancelRef = useRef(false)
+  const [backfillingDates, setBackfillingDates] = useState(false)
+  const [backfillDateResult, setBackfillDateResult] = useState(null)
+  const backfillDateCancelRef = useRef(false)
   const [parsing, setParsing] = useState(false)
   const [parseProgress, setParseProgress] = useState(null) // { processed, total, failed }
   const parseCancelRef = useRef(false)
@@ -738,6 +741,34 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       setBackfillCatResult({ error: e.message, updated: totalUpdated })
     }
     setBackfillingCats(false)
+  }
+
+  const runDateBackfill = async () => {
+    backfillDateCancelRef.current = false
+    setBackfillingDates(true)
+    setBackfillDateResult(null)
+    let totalUpdated = 0, totalNoData = 0, afterId = null
+    try {
+      let hasMore = true
+      while (hasMore && !backfillDateCancelRef.current) {
+        setBackfillDateResult({ progress: true, updated: totalUpdated, noData: totalNoData })
+        const res = await fetch(EDGE_FN, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'backfill_listing_dates', storeId, afterId }),
+        })
+        const data = await res.json()
+        if (data.error) throw new Error(data.error)
+        totalUpdated += data.updated || 0
+        totalNoData  += data.noData  || 0
+        afterId = data.nextAfterId || afterId
+        hasMore = data.hasMore || false
+      }
+      setBackfillDateResult({ done: true, cancelled: backfillDateCancelRef.current, updated: totalUpdated, noData: totalNoData })
+    } catch (e) {
+      setBackfillDateResult({ error: e.message, updated: totalUpdated })
+    }
+    setBackfillingDates(false)
   }
 
   const cancelImport = async () => {
@@ -2437,10 +2468,22 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                       ? `${r.updated} updated · ${r.noData} no data${r.cancelled ? ' (cancelled)' : ''}`
                       : 'Running…',
                   },
-                ].map(({ label, running, onRun, onCancel, result, resultText }, idx, arr) => (
+                  {
+                    label: 'Backfill Listing Dates',
+                    hint: 'Re-fetch the original eBay listing date for parts missing one.',
+                    running: backfillingDates,
+                    onRun: runDateBackfill,
+                    onCancel: () => { backfillDateCancelRef.current = true },
+                    result: backfillDateResult,
+                    resultText: r => r.done
+                      ? `${r.updated} dated · ${r.noData} not on eBay${r.cancelled ? ' (cancelled)' : ''}`
+                      : `${r.updated || 0} dated so far…`,
+                  },
+                ].map(({ label, hint, running, onRun, onCancel, result, resultText }, idx, arr) => (
                   <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 10, paddingBottom: idx < arr.length - 1 ? 10 : 0, marginBottom: idx < arr.length - 1 ? 10 : 0, borderBottom: idx < arr.length - 1 ? `1px solid ${C.border}` : 'none' }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{label}</div>
+                      {hint && !result && <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{hint}</div>}
                       {result && !result.error && (
                         <div style={{ fontSize: 11, color: result.done ? C.green : C.muted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {result.done ? '✓ ' : '⏳ '}{resultText(result)}

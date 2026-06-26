@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.69'
+const EDGE_FN_VERSION         = '3.14.70'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -1113,6 +1113,77 @@ async function handleRequest(req: Request): Promise<Response> {
       }
 
       return json({ created, skipped: existingIds.size, noData, errors: errors.slice(0, 20), hasMore: false })
+    }
+
+    if (action === 'backfill_listing_dates') {
+      // Repair parts that have no acquired_date by re-fetching their eBay listing
+      // StartTime (the original listing date) from the Shopping API. Forward-only
+      // keyset pagination by part id, so parts we can't resolve (eBay no longer
+      // returns them) aren't retried forever — the client loops until hasMore.
+      const started = Date.now()
+      const LIMIT = 400
+      const afterId = typeof body.afterId === 'string' ? body.afterId : '00000000-0000-0000-0000-000000000000'
+
+      const { data: targetParts } = await sb.from('parts')
+        .select('id')
+        .eq('store_id', storeId)
+        .is('deleted_at', null)
+        .is('acquired_date', null)
+        .gt('id', afterId)
+        .order('id', { ascending: true })
+        .limit(LIMIT)
+
+      if (!targetParts?.length) return json({ ok: true, version: EDGE_FN_VERSION, updated: 0, noData: 0, hasMore: false, nextAfterId: null })
+
+      const partIds = targetParts.map((p: any) => p.id)
+      const nextAfterId = partIds[partIds.length - 1]
+
+      // Map each part to its eBay listing item id(s).
+      const partItems: Record<string, string[]> = {}
+      const allItemIds = new Set<string>()
+      for (let i = 0; i < partIds.length; i += 300) {
+        const { data: ls } = await sb.from('listings')
+          .select('part_id, platform_listing_id')
+          .eq('store_id', storeId).eq('platform', 'ebay')
+          .in('part_id', partIds.slice(i, i + 300))
+        for (const l of (ls || [])) {
+          if (!l.platform_listing_id) continue
+          ;(partItems[l.part_id] ||= []).push(l.platform_listing_id)
+          allItemIds.add(l.platform_listing_id)
+        }
+      }
+
+      // Fetch StartTime for every item id (GetMultipleItems: 20 per call).
+      const startById: Record<string, string> = {}
+      const ids = [...allItemIds]
+      for (let i = 0; i < ids.length && Date.now() - started < 90000; i += 20) {
+        const details = await fetchItemDetails(ids.slice(i, i + 20))
+        for (const [itemId, d] of Object.entries(details)) {
+          if ((d as any)?.StartTime) startById[itemId] = String((d as any).StartTime)
+        }
+      }
+
+      // Set each part's date to its EARLIEST listing StartTime; backfill the
+      // listing.listed_at too. Parts with no recoverable date stay null (→ "—").
+      let updated = 0, noData = 0
+      for (const pid of partIds) {
+        const items = partItems[pid] || []
+        const starts = items.map(it => startById[it]).filter(Boolean).sort()
+        if (!starts.length) { noData++; continue }
+        const iso = starts[0]
+        const date = iso.match(/^(\d{4}-\d{2}-\d{2})/)?.[1] ?? null
+        if (!date) { noData++; continue }
+        await sb.from('parts').update({ acquired_date: date, listed_date: date }).eq('id', pid)
+        for (const it of items) {
+          if (startById[it]) {
+            await sb.from('listings').update({ listed_at: startById[it] })
+              .eq('store_id', storeId).eq('platform', 'ebay').eq('platform_listing_id', it).is('listed_at', null)
+          }
+        }
+        updated++
+      }
+
+      return json({ ok: true, version: EDGE_FN_VERSION, updated, noData, hasMore: targetParts.length === LIMIT, nextAfterId })
     }
 
     if (action === 'sales_match') {
