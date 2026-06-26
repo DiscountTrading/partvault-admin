@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.54'
+const EDGE_FN_VERSION         = '3.14.69'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -1065,6 +1065,11 @@ async function handleRequest(req: Request): Promise<Response> {
             const catId    = detail?.PrimaryCategoryID?.toString()
             const category = (catId && CATEGORY_ID_MAP[catId]) || 'Legacy Items'
             if (!detail) noData++
+            // Original eBay listing date (StartTime) from the GetMultipleItems
+            // detail — so the part/listing carry the real eBay listing date, not
+            // our import date. Falls back to null when eBay doesn't return it.
+            const startIso  = detail?.StartTime ? String(detail.StartTime) : null
+            const startDate = startIso?.match(/^(\d{4}-\d{2}-\d{2})/)?.[1] ?? null
 
             const { data: part, error: partErr } = await sb.from('parts').insert({
               store_id:   storeId,
@@ -1074,6 +1079,8 @@ async function handleRequest(req: Request): Promise<Response> {
               status:     'sold',
               sold_price: tx.salePrice,
               sold_date:  tx.soldAt || null,
+              acquired_date: startDate,
+              listed_date:   startDate,
               shipping_charged: tx.shipping || null,
               list_price: tx.salePrice,
               condition:  detail?.ConditionDisplayName || 'Used – Good',
@@ -1092,8 +1099,9 @@ async function handleRequest(req: Request): Promise<Response> {
               status:              'sold',
               list_price:          tx.salePrice,
               sold_price:          tx.salePrice,
+              listed_at:           startIso,
               sold_at:             tx.soldAt || null,
-              platform_data:       {},
+              platform_data:       startIso ? { StartTime: startIso } : {},
               photos:              [],
               photos_archived:     false,
             })
