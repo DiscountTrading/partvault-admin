@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { C, S, fmt, APP_VERSION, DEFAULT_POSTAGE_TIERS, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS, rentPerDay } from '../lib/constants'
+import { printLabels, DEFAULT_LABELS } from '../lib/labels'
 import { sb } from '../lib/supabase'
 import { buildSkuPreview, SKU_TOKENS, DEFAULT_SKU_TEMPLATE, DEFAULT_SKU_PAD } from '../lib/sku'
 import TeamAccess from './TeamAccess'
@@ -102,6 +103,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   const [costing, setCosting] = useState({ labourRate: 60, adminPct: 10, adminMin: 5, baseCostPct: 25, handlingFee: 2, postageDefaultG: 1000, postageTiers: DEFAULT_POSTAGE_TIERS, labourMode: 'fixed', adminMode: 'percent', adminMinMode: 'fixed', baseCostMode: 'percent' })
   const [inventory, setInventory] = useState({ agedThresholdDays: DEFAULT_AGED_THRESHOLD_DAYS, ageBrackets: DEFAULT_AGE_BRACKETS })
   const [storage, setStorage] = useState({ volumeM3: '', rent: '', rentPeriod: 'monthly', usablePct: 25 })
+  const [labels, setLabels] = useState(DEFAULT_LABELS)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -283,6 +285,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         if (data.settings.costing) setCosting(s => ({ ...s, ...data.settings.costing }))
         if (data.settings.inventory) setInventory(s => ({ ...s, ...data.settings.inventory }))
         if (data.settings.storage) setStorage(s => ({ ...s, ...data.settings.storage }))
+        if (data.settings.labels) setLabels(s => ({ ...s, ...data.settings.labels }))
         if (data.settings.shipAddress) setShipAddress(a => ({ ...a, ...data.settings.shipAddress }))
         if (data.settings.ebayLocationKey) setEbayLocationKey(data.settings.ebayLocationKey)
         if (data.settings.ebayUsername) setEbayUsername(data.settings.ebayUsername) // persisted — shows immediately
@@ -311,7 +314,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     setSaving(true)
     try {
       const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const merged = { ...(current?.settings || {}), footer, aiDescription: aiSettings, captureAssess, costing, inventory, storage, timezone }
+      const merged = { ...(current?.settings || {}), footer, aiDescription: aiSettings, captureAssess, costing, inventory, storage, labels, timezone }
       await sb.from('stores').update({ settings: merged }).eq('id', storeId)
       onSettingsSaved?.(merged) // let the app refresh costing/inventory-driven views live
       setSaved(true)
@@ -1833,6 +1836,52 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                 </div>
               )
             })()}
+          </Section>
+
+          <Section title="🏷️ Stock labels">
+            <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
+              Printable shelf labels with a scannable QR (links to the part) plus SKU and details. Set the size to match your
+              printer — a thermal label roll (one label per print) or an A4 sheet of labels. Print from any part (🏷️ button in
+              the editor or inventory list).
+            </p>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
+              <div style={{ flex: '1 1 120px' }}>
+                <label style={S.label}>Print mode</label>
+                <select style={S.select} value={labels.mode} onChange={e => setLabels(s => ({ ...s, mode: e.target.value }))}>
+                  <option value="roll">Label roll (thermal)</option>
+                  <option value="sheet">A4 sheet</option>
+                </select>
+              </div>
+              <div style={{ flex: '1 1 100px' }}>
+                <label style={S.label}>Width (mm)</label>
+                <input type="number" style={S.input} value={labels.widthMm} onChange={e => setLabels(s => ({ ...s, widthMm: e.target.value }))} />
+              </div>
+              <div style={{ flex: '1 1 100px' }}>
+                <label style={S.label}>Height (mm)</label>
+                <input type="number" style={S.input} value={labels.heightMm} onChange={e => setLabels(s => ({ ...s, heightMm: e.target.value }))} />
+              </div>
+              {labels.mode === 'sheet' && (
+                <div style={{ flex: '1 1 100px' }}>
+                  <label style={S.label}>Columns / row</label>
+                  <input type="number" style={S.input} value={labels.sheetCols} onChange={e => setLabels(s => ({ ...s, sheetCols: e.target.value }))} />
+                </div>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 14 }}>
+              {[['showQR', 'QR code'], ['showSku', 'SKU'], ['showTitle', 'Title'], ['showFitment', 'Make/Model/Year'], ['showPrice', 'Price']].map(([k, lbl]) => (
+                <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: C.text, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={!!labels[k]} onChange={e => setLabels(s => ({ ...s, [k]: e.target.checked }))} />
+                  {lbl}
+                </label>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <div style={{ flex: '1 1 280px' }}>
+                <label style={S.label}>QR link base (the PWA resolves /p/&lt;sku&gt;)</label>
+                <input style={S.input} value={labels.qrBaseUrl} onChange={e => setLabels(s => ({ ...s, qrBaseUrl: e.target.value }))} placeholder="https://app.partvault.app" />
+              </div>
+              <button style={{ ...S.btn('secondary') }} onClick={() => printLabels({ id: 'TEST', sku: 'SAMPLE-001', title: 'Sample part — Toyota Hilux Headlight', make: 'Toyota', model: 'Hilux', year: '2015-2020', listPrice: 120 }, labels)}>🏷️ Print test label</button>
+            </div>
           </Section>
 
           <Section title="📦 Aged stock">

@@ -4,6 +4,7 @@ import { useParts } from './hooks/useParts'
 import { useSales } from './hooks/useSales'
 import { sb } from './lib/supabase'
 import { C, S, APP_VERSION, rentPerDay } from './lib/constants'
+import { DEFAULT_LABELS } from './lib/labels'
 import AuthScreen from './components/AuthScreen'
 import Dashboard from './components/Dashboard'
 import Inventory from './components/Inventory'
@@ -166,6 +167,7 @@ export default function App() {
   const [inventory, setInventory] = useState({ agedThresholdDays: 60, ageBrackets: [90, 180, 365, 730, 1065] })
   const [storage, setStorage] = useState({ volumeM3: 0, rent: 0, rentPeriod: 'monthly', usablePct: 25 })
   const [shipping, setShipping] = useState(null)
+  const [labels, setLabels] = useState(DEFAULT_LABELS)
   const [insightsInit, setInsightsInit] = useState(null) // drill-down filter from Dashboard
   const [cars, setCars] = useState([])
 
@@ -199,6 +201,7 @@ export default function App() {
       if (data?.settings?.inventory) setInventory(s => ({ ...s, ...data.settings.inventory }))
       if (data?.settings?.storage) setStorage(s => ({ ...s, ...data.settings.storage }))
       if (data?.settings?.shipping) setShipping(data.settings.shipping)
+      if (data?.settings?.labels) setLabels(s => ({ ...s, ...data.settings.labels }))
     })
     // Load cars
     sb.from('cars').select('*').eq('store_id', storeId).is('deleted_at', null).order('created_at', { ascending: false })
@@ -248,14 +251,14 @@ export default function App() {
             parts={parts} cars={cars} storeId={storeId}
             onAdd={handleAdd} onEdit={handleEdit} onDelete={handleDel}
             onDeleteCar={softDeleteCar} onAddCar={handleAddCar}
-            aiSettings={aiSettings} footer={footer} costing={costingFull}
+            aiSettings={aiSettings} footer={footer} costing={costingFull} labels={labels}
           />
         )}
         {tab === 'ebay' && <Ebay storeId={storeId} onChanged={smartRefetch} />}
         {tab === 'insights' && <Insights storeId={storeId} initial={insightsInit} />}
         {tab === 'vehicles' && <Vehicles parts={parts} cars={cars} costing={costingFull} onRefresh={refetch} />}
         {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores}
-          onSettingsSaved={s => { if (s?.costing) setCosting(c => ({ ...c, ...s.costing })); if (s?.inventory) setInventory(i => ({ ...i, ...s.inventory })); if (s?.storage) setStorage(st => ({ ...st, ...s.storage })); if (s?.shipping) setShipping(s.shipping) }} />}
+          onSettingsSaved={s => { if (s?.costing) setCosting(c => ({ ...c, ...s.costing })); if (s?.inventory) setInventory(i => ({ ...i, ...s.inventory })); if (s?.storage) setStorage(st => ({ ...st, ...s.storage })); if (s?.shipping) setShipping(s.shipping); if (s?.labels) setLabels(l => ({ ...l, ...s.labels })) }} />}
       </main>
       {toast && (
         <div style={{ position: 'fixed', bottom: 24, right: 24, background: toast.color, color: '#fff', padding: '12px 22px', borderRadius: 10, fontSize: 14, fontWeight: 600, zIndex: 1000, boxShadow: '0 8px 30px rgba(0,0,0,0.2)' }}>

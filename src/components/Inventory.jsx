@@ -2,6 +2,7 @@ import { useState, useMemo, useRef, useEffect } from 'react'
 import { C, S, fmt, pct, totalCost, estimateCostBasis, CATEGORY_NAMES, EBAY_AU_CATEGORIES, canonicalCategory, canonicalSubcategory, PART_CONDITIONS, STATUS_COLORS, STATUS_LABELS } from '../lib/constants'
 import { sb } from '../lib/supabase'
 import { MAKES, MODEL_SUGS } from '../lib/vehicles'
+import { printLabels, DEFAULT_LABELS } from '../lib/labels'
 
 function Field({ label, children }) {
   return <div style={{ marginBottom: 12 }}><label style={S.label}>{label}</label>{children}</div>
@@ -196,7 +197,7 @@ function AddCarModal({ storeId, onSave, onCancel }) {
 }
 
 // ─── Part Form ─────────────────────────────────────────────────────────────
-function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSettings, footer, costing, allParts = [] }) {
+function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSettings, footer, costing, labels = DEFAULT_LABELS, allParts = [] }) {
   const defCat = CATEGORY_NAMES[4]
   const [form, setForm] = useState(part ? { ...part, costs: { ...part.costs }, listPrice: part.list_price||part.listPrice||0, ai_assessed: part.ai_assessed??false, acquiredDate: part.acquiredDate ? String(part.acquiredDate).slice(0,10) : (part.createdAt ? String(part.createdAt).slice(0,10) : '') } : {
     title:'', category:defCat, subcategory:EBAY_AU_CATEGORIES[defCat][0], make:'', model:'', year:'', condition:PART_CONDITIONS[1],
@@ -749,6 +750,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
       <div style={{ position:'sticky', bottom:0, marginTop:8, marginLeft:-2, marginRight:-2, background:'rgba(255,255,255,0.92)', backdropFilter:'blur(6px)', borderTop:`1px solid ${C.border}`, padding:'14px 4px', display:'flex', gap:12, justifyContent:'flex-end', alignItems:'center' }}>
         <span style={{ fontSize:12, color:C.muted, marginRight:'auto' }}>Saved as draft — not published to eBay until you list it.</span>
         <button style={ebayBtn('secondary')} onClick={onCancel}>Cancel</button>
+        {part && form.sku && <button style={ebayBtn('secondary')} title="Print a stock label for this part" onClick={() => printLabels({ id: part.id, sku: form.sku, title: form.title, make: form.make, model: form.model, year: form.year, listPrice: form.listPrice }, labels)}>🏷️ Label</button>}
         {!part && <button style={ebayBtn('secondary')} onClick={handleSaveAndAdd}>Save & add another</button>}
         <button style={ebayBtn('primary')} onClick={handleSave}>{part ? 'Save changes' : 'Save draft'}</button>
       </div>
@@ -804,7 +806,7 @@ function BulkAIPanel({ group, onComplete, aiSettings, footer, storeId }) {
 }
 
 // ─── Main Inventory ────────────────────────────────────────────────────────
-export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDeleteCar, onAddCar, storeId, aiSettings, footer, costing }) {
+export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDeleteCar, onAddCar, storeId, aiSettings, footer, costing, labels = DEFAULT_LABELS }) {
   const [viewMode, setViewMode] = useState('parts')
   const [search, setSearch] = useState('')
   const [filterMake, setFilterMake] = useState('')
@@ -873,7 +875,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
   }
 
   if (showForm) return (
-    <PartForm part={editingPart} cars={cars} storeId={storeId} aiSettings={aiSettings} footer={footer} costing={costing} allParts={parts}
+    <PartForm part={editingPart} cars={cars} storeId={storeId} aiSettings={aiSettings} footer={footer} costing={costing} labels={labels} allParts={parts}
       onSave={async p => { editingPart?await onEdit({...editingPart,...p}):await onAdd(p); setShowForm(false); setEditingPart(null) }}
       onSaveAndAdd={handleSaveAndAdd}
       onCancel={() => { setShowForm(false); setEditingPart(null) }}
@@ -1054,6 +1056,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                               <td style={{ padding:'8px 12px', fontWeight:600, color:pr>=0?C.green:C.red, whiteSpace:'nowrap' }}>${pr.toFixed(0)}</td>
                               <td style={{ padding:'8px 12px', whiteSpace:'nowrap' }}>
                                 <button onClick={()=>{setEditingPart(p);setShowForm(true)}} style={{ ...S.btn('secondary'), padding:'3px 10px', fontSize:11, marginRight:6 }}>Edit</button>
+                                {p.sku && <button onClick={()=>printLabels(p, labels)} title="Print stock label" style={{ ...S.btn('secondary'), padding:'3px 8px', fontSize:11, marginRight:6 }}>🏷️</button>}
                                 <button onClick={()=>setDeleteTarget(p)} style={{ ...S.btn('danger'), padding:'3px 8px', fontSize:11 }}>🗑</button>
                               </td>
                             </tr>
@@ -1097,7 +1100,8 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                   return (
                     <tr key={p.id} style={{ background:bg }}>
                       <td style={{ padding:'4px 6px', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}` }}>
-                        <button onClick={()=>{setEditingPart(p);setShowForm(true)}} style={{ fontSize:11, padding:'2px 8px', background:'#eff6ff', color:C.blue, border:`1px solid ${C.blue}44`, borderRadius:4, cursor:'pointer' }}>Edit</button>
+                        <button onClick={()=>{setEditingPart(p);setShowForm(true)}} style={{ fontSize:11, padding:'2px 8px', background:'#eff6ff', color:C.blue, border:`1px solid ${C.blue}44`, borderRadius:4, cursor:'pointer', marginRight:4 }}>Edit</button>
+                        {p.sku && <button onClick={()=>printLabels(p, labels)} title="Print stock label" style={{ fontSize:11, padding:'2px 6px', background:'#fff', color:C.text, border:`1px solid ${C.border}`, borderRadius:4, cursor:'pointer' }}>🏷️</button>}
                       </td>
                       {td(p.sku)}{td(p.title)}{td(p.make)}{td(p.model)}{td(p.year)}{td(p.subcategory||p.category)}
                       <td style={{ padding:'4px 8px', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}` }}>
