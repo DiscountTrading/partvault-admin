@@ -336,17 +336,10 @@ export default function Vehicles({ parts = [], cars = [], costing = {}, onRefres
       {summary.unparsed > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', background: C.yellow + '14', border: `1px solid ${C.yellow}55`, borderRadius: 10, padding: '12px 16px', marginBottom: 16 }}>
           <span style={{ fontSize: 13, color: C.text, flex: 1, minWidth: 220 }}>
-            <strong>{summary.unparsed}</strong> parts (mostly eBay imports) have no make/model, so they don't roll up by model.
-            Parse them from their titles to populate the leaderboard.
+            <strong>{summary.unparsed}</strong> parts (mostly eBay imports) have no make, so they don't roll up by model.
+            Use <strong>✨ Parse from titles</strong> below to populate them.
           </span>
-          {parseMsg && <span style={{ fontSize: 12, color: C.muted }}>{parseMsg}</span>}
-          <button onClick={runParse} disabled={parsing} style={{ ...S.btn('primary'), padding: '8px 14px', fontSize: 13, opacity: parsing ? 0.6 : 1 }}>
-            {parsing ? '⏳ Parsing…' : '✨ Parse from titles'}
-          </button>
         </div>
-      )}
-      {summary.unparsed === 0 && parseMsg && (
-        <div style={{ fontSize: 12, color: C.muted, marginBottom: 16 }}>{parseMsg}</div>
       )}
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
@@ -357,8 +350,13 @@ export default function Vehicles({ parts = [], cars = [], costing = {}, onRefres
           </button>
         ))}
         <div style={{ flex: 1 }} />
+        {parseMsg && <span style={{ fontSize: 12, color: C.muted, maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={parseMsg}>{parseMsg}</span>}
+        <button onClick={runParse} disabled={parsing} title="Fill missing make/model and refresh year ranges from part titles"
+          style={{ ...S.btn(summary.unparsed > 0 ? 'primary' : 'secondary'), padding: '7px 12px', fontSize: 12, opacity: parsing ? 0.6 : 1 }}>
+          {parsing ? '⏳ Parsing…' : summary.unparsed > 0 ? '✨ Parse from titles' : '↻ Re-parse titles'}
+        </button>
         <input value={query} onChange={e => setQuery(e.target.value)} placeholder={isModels ? 'Search models…' : 'Search vehicles…'}
-          style={{ ...S.input, marginBottom: 0, padding: '7px 12px', width: 200 }} />
+          style={{ ...S.input, marginBottom: 0, padding: '7px 12px', width: 180 }} />
       </div>
 
       <div style={{ overflowX: 'auto', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>
