@@ -74,8 +74,13 @@ const SKIP_DIRECT = new Set(['MINI'])
 
 const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 // A word-boundary regex that tolerates the token's own spaces/hyphens being
-// written either way (e.g. "CX-5" / "CX 5" / "CX5", "3 Series" / "3series").
-const tokenRe = tok => new RegExp('\\b' + escapeRe(tok.toLowerCase()).replace(/[-\s]+/g, '[-\\s]?') + '\\b')
+// written either way, AND an optional separator at any letter↔digit boundary —
+// so "Mazda2" also matches "Mazda 2" / "Mazda-2", "CX5" matches "CX-5" / "CX 5",
+// "i30" matches "i 30", etc.
+const tokenRe = tok => new RegExp('\\b' + escapeRe(tok.toLowerCase())
+  .replace(/[-\s]+/g, '[-\\s]?')
+  .replace(/([a-z])(\d)/g, '$1[-\\s]?$2')
+  .replace(/(\d)([a-z])/g, '$1[-\\s]?$2') + '\\b')
 
 // Parse make / model / year out of a free-text part title. Best-effort: returns
 // blanks for anything it can't confidently match.

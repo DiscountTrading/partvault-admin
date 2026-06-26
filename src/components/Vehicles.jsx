@@ -218,7 +218,7 @@ export default function Vehicles({ parts = [], cars = [], costing = {}, onRefres
     // refresh their year to the full range. Never overwrites a curated make/model,
     // and only upgrades a year (blank → value, or single → range) so we don't
     // fight a deliberately-specific year.
-    const targets = parts.filter(p => !p.deletedAt && (!(p.make || '').trim() || p.source === 'ebay_import'))
+    const targets = parts.filter(p => !p.deletedAt && (!(p.make || '').trim() || !(p.model || '').trim() || p.source === 'ebay_import'))
     const updates = []
     const unmatched = []
     for (const p of targets) {
