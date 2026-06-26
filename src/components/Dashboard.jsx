@@ -11,7 +11,7 @@ function StatCard({ label, value, sub, color }) {
   )
 }
 
-export default function Dashboard({ parts, sales = [], costing, inventory, onDrill }) {
+export default function Dashboard({ parts, sales = [], costing, inventory, onDrill, onSeeSales }) {
   // Sales/P&L are shown for a selectable window (eBay reports last 90 days, so
   // 90 is the default for a like-for-like comparison). 0 = all time.
   const [periodDays, setPeriodDays] = useState(90)
@@ -194,6 +194,30 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
           ))}
         </div>
         <div style={{ fontSize:11, color:C.muted, marginTop:8 }}>Total Sales − eBay Fees = Net Sales (matches eBay's report). Gross Profit also subtracts part cost, postage & admin.</div>
+      </div>
+
+      {/* Recent sales — last few, click through to the full Sales tab */}
+      <div style={{ ...S.card, padding:18, marginTop:18 }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+          <h2 style={{ ...S.h2, margin:0 }}>Recent Sales</h2>
+          <button onClick={onSeeSales} style={{ background:'none', border:'none', color:C.accent, cursor:'pointer', fontSize:13, fontWeight:600 }}>View all sales →</button>
+        </div>
+        {(() => {
+          const recent = [...sales].filter(s=>!s.cancelled && s.soldAt).sort((a,b)=>new Date(b.soldAt)-new Date(a.soldAt)).slice(0,8)
+          if (recent.length === 0) return <div style={{ fontSize:13, color:C.muted, padding:'8px 0' }}>No sales recorded yet.</div>
+          const net = s => (+s.soldPrice||0)+(+s.shipping||0)-(+s.refund||0)-(+s.fees||0)
+          return (
+            <div style={{ display:'flex', flexDirection:'column' }}>
+              {recent.map(s => (
+                <div key={s.id} onClick={onSeeSales} style={{ display:'flex', alignItems:'center', gap:12, padding:'8px 0', borderBottom:`1px solid ${C.border}`, cursor:'pointer' }}>
+                  <span style={{ fontSize:12, color:C.muted, flexShrink:0, width:64 }}>{s.soldAt ? new Date(s.soldAt).toLocaleDateString('en-AU',{day:'numeric',month:'short'}) : '—'}</span>
+                  <span style={{ flex:1, minWidth:0, fontSize:13, color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={s.title}>{s.title || s.sku || 'eBay sale'}</span>
+                  <span style={{ fontSize:13, fontWeight:700, color:C.green, flexShrink:0 }}>{fmt(net(s))}</span>
+                </div>
+              ))}
+            </div>
+          )
+        })()}
       </div>
     </div>
   )

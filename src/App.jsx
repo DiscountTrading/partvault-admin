@@ -11,10 +11,12 @@ import Settings from './components/Settings'
 import JoinStore from './components/JoinStore'
 import Insights from './components/Insights'
 import Vehicles from './components/Vehicles'
+import Sales from './components/Sales'
 import Ebay from './components/Ebay'
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊' },
+  { id: 'sales', label: 'Sales', icon: '🧾' },
   { id: 'inventory', label: 'Inventory', icon: '📦' },
   { id: 'ebay', label: 'eBay', icon: '🛒' },
   { id: 'insights', label: 'Insights', icon: '📈' },
@@ -239,7 +241,8 @@ export default function App() {
         </div>
       </nav>
       <main style={S.main}>
-        {tab === 'dashboard' && <Dashboard parts={parts} sales={sales} costing={costingFull} inventory={inventory} onDrill={drillToInsights} />}
+        {tab === 'dashboard' && <Dashboard parts={parts} sales={sales} costing={costingFull} inventory={inventory} onDrill={drillToInsights} onSeeSales={() => setTab('sales')} />}
+        {tab === 'sales' && <Sales sales={sales} parts={parts} costing={costingFull} />}
         {tab === 'inventory' && (
           <Inventory
             parts={parts} cars={cars} storeId={storeId}
