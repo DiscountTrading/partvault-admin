@@ -921,18 +921,54 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   // (see cron_sync): no listing is ever created, revised, or ended.
   const runSync = async () => {
     const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+    // Progress bands per phase. Import dominates (thousands of listings) so it gets
+    // the widest band; the rest are quick. hi is never quite reached until the next
+    // phase begins, so the bar keeps moving without ever hitting 100 early.
     const PHASE = {
-      import:    { lo: 5,  hi: 35, label: 'Importing listings from eBay…' },
-      backfill:  { lo: 35, hi: 60, label: 'Importing sold orders…' },
-      fees:      { lo: 60, hi: 75, label: 'Importing eBay fees…' },
-      reconcile: { lo: 75, hi: 98, label: 'Reconciling with eBay…' },
+      import:    { lo: 4,  hi: 62, label: 'Importing listings from eBay…' },
+      backfill:  { lo: 62, hi: 80, label: 'Importing sold orders…' },
+      fees:      { lo: 80, hi: 90, label: 'Importing eBay fees…' },
+      reconcile: { lo: 90, hi: 99, label: 'Reconciling with eBay…' },
     }
     setSyncingAll(true)
     setSyncPhase('Starting sync…')
     setImportJob({ status: 'running', current_item: 'Starting…' })
-    setDisplayProgress(3); setRpm(60)
+    setDisplayProgress(2); setRpm(55)
+
+    // `target` is the real progress (set by the poller); the animator eases the
+    // displayed value toward it every frame so the bar always glides — never sits
+    // frozen during a 110s server call, never jumps between phases.
+    let target = 2
+    let done   = false
+
+    const anim = setInterval(() => {
+      setDisplayProgress(prev => prev < target
+        ? Math.min(target, prev + Math.max(0.5, (target - prev) * 0.1))
+        : prev)
+      setRpm(done ? 0 : 52 + Math.floor(Math.random() * 26)) // lively tacho
+    }, 120)
+
+    // Poll the shared run row often (cron_sync writes detail ~every 18s server-side)
+    // and translate phase + "X/Y" into a monotonic target. Phases without a count
+    // creep slowly across their band so the bar keeps advancing.
+    const poll = setInterval(async () => {
+      try {
+        const { data: run } = await sb.from('sync_runs')
+          .select('phase, detail').eq('store_id', storeId)
+          .order('updated_at', { ascending: false }).limit(1).maybeSingle()
+        if (!run) return
+        const p = PHASE[run.phase] || { lo: 4, hi: 99, label: 'Working…' }
+        const m = /(\d+)\s*\/\s*(\d+)/.exec(run.detail || '')
+        const t = (m && +m[2] > 0)
+          ? p.lo + (p.hi - p.lo) * Math.min(1, +m[1] / +m[2])
+          : Math.min(p.hi - 1, Math.max(target, p.lo) + 1.2) // slow creep
+        target = Math.max(target, t) // never go backward
+        setSyncPhase(`${p.label}${run.detail ? ` · ${run.detail}` : ''}`)
+      } catch { /* transient — try again next tick */ }
+    }, 2000)
+
     try {
-      let done = false, guard = 0
+      let guard = 0
       while (!done && guard++ < 600) {
         let d
         try {
@@ -947,37 +983,23 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         }
         if (d.error) throw new Error(d.error)
         done = d.done === true
-
-        // Live progress from the shared run row (also written by the nightly cron).
-        const { data: run } = await sb.from('sync_runs')
-          .select('phase, detail').eq('store_id', storeId)
-          .order('updated_at', { ascending: false }).limit(1).maybeSingle()
-        const phase  = run?.phase || d.phase || 'import'
-        const detail = run?.detail || ''
-        const p = PHASE[phase] || { lo: 5, hi: 95, label: 'Working…' }
-        // Within the import phase, "import X/Y" gives a fine-grained fraction.
-        let frac = 0
-        const m = /(\d+)\s*\/\s*(\d+)/.exec(detail)
-        if (phase === 'import' && m && +m[2] > 0) frac = Math.min(1, +m[1] / +m[2])
-        setDisplayProgress(done ? 100 : Math.round(p.lo + (p.hi - p.lo) * frac))
-        setRpm(done ? 0 : 55 + Math.floor(Math.random() * 25))
-        setSyncPhase(done ? '✓ Sync complete' : `${p.label}${detail ? ` · ${detail}` : ''}`)
-        setImportJob(j => ({ ...j, status: done ? 'completed' : 'running', current_item: done ? '✓ Sync complete' : p.label }))
-        await fetchNightly()
         if (d.paused) await sleep(3000)
-        else if (!done) await sleep(1200)
       }
-      setDisplayProgress(100); setRpm(0)
-      setImportJob(j => ({ ...j, status: 'completed', current_item: '✓ Sync complete' }))
+      target = 100
+      await sleep(700) // let the animator glide up to ~100
       setSyncPhase('✓ Sync complete')
+      setImportJob(j => ({ ...j, status: 'completed', current_item: '✓ Sync complete' }))
       markRun('import'); markRun('backfill'); markRun('reconcile')
       await fetchNightly()
       await checkSyncStatus() // auto-refresh the status panel — no manual re-check needed
     } catch (e) {
       setSyncPhase(`Sync stopped: ${e.message}`)
       setImportJob(j => ({ ...j, status: 'failed', current_item: e.message }))
+    } finally {
+      clearInterval(poll); clearInterval(anim)
+      setDisplayProgress(done ? 100 : 0); setRpm(0)
+      setSyncingAll(false)
     }
-    setSyncingAll(false)
   }
 
   // Skips listing import — just sold orders → fees → reconcile. Fast (~30s).

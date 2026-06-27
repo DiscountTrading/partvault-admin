@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.75'
+const EDGE_FN_VERSION         = '3.14.76'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -415,6 +415,33 @@ async function handleRequest(req: Request): Promise<Response> {
     return { token: refreshData.access_token, certId: CERT_ID }
   }
 
+  // List item IDs for everything STARTED in the last `days` days via GetSellerList.
+  // Unlike GetMyeBaySelling (eBay's cached "My eBay" view) this hits the live
+  // listing store, so it reliably includes listings created minutes ago. Returns
+  // active + recently-ended alike — that's fine: the caller dedupes, import fetches
+  // each item's real status, and for reconcile a few extra ids can only REDUCE
+  // false "stale" flags (never add false "missing" beyond a harmless re-import).
+  const fetchRecentlyListedIds = async (token: string, certId: string, days: number): Promise<string[]> => {
+    const to   = new Date()
+    const from = new Date(Date.now() - days * 86400000)
+    const ids: string[] = []
+    let page = 1, totalPages = 1
+    do {
+      const xml = await trading(token, certId, 'GetSellerList', `<?xml version="1.0" encoding="utf-8"?>
+<GetSellerListRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <StartTimeFrom>${from.toISOString()}</StartTimeFrom>
+  <StartTimeTo>${to.toISOString()}</StartTimeTo>
+  <GranularityLevel>Coarse</GranularityLevel>
+  <Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination>
+</GetSellerListRequest>`)
+      if (getTag(xml, 'Ack') === 'Failure') throw new Error(getTag(xml, 'LongMessage') || 'GetSellerList error')
+      if (page === 1) totalPages = getTotalPages(xml)
+      getItemIds(xml).forEach(id => ids.push(id))
+      page++
+    } while (page <= Math.min(totalPages, 25))
+    return ids
+  }
+
   const fetchAllIds = async (token: string, certId: string, listType: string): Promise<string[]> => {
     // eBay caps SoldList DurationInDays at 60; older sales come via backfill_orders
     // (GetSellerTransactions with ModifiedTimeFilter), not this listing query.
@@ -434,6 +461,21 @@ async function handleRequest(req: Request): Promise<Response> {
 </GetMyeBaySellingRequest>`)
       getItemIds(xml).forEach(id => ids.push(id))
     }
+
+    // GetMyeBaySelling's view lags hours-to-a-day on brand-new listings, so
+    // freshly-listed items were silently skipped by both import and reconcile (the
+    // total looked right while the newest items were absent). Supplement the active
+    // list with a recent-start-time GetSellerList pass and merge. Best-effort —
+    // never let this extra pass fail the whole enumeration.
+    if (listType === 'ActiveList') {
+      try {
+        const recent = await fetchRecentlyListedIds(token, certId, 30)
+        recent.forEach(id => ids.push(id))
+      } catch (e) {
+        console.error('GetSellerList supplement failed:', (e as Error).message)
+      }
+    }
+
     return [...new Set(ids)]
   }
 
