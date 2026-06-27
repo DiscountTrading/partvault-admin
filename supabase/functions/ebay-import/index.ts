@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.81'
+const EDGE_FN_VERSION         = '3.15.0'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -1465,6 +1465,104 @@ async function handleRequest(req: Request): Promise<Response> {
       const hasMore = offset < total
       // `created`/`updated` kept for backwards-compatible client display.
       return json({ ok: true, version: EDGE_FN_VERSION, days, ebayOrders: total, lineItems, upserted, linked, created: upserted, updated: linked, skipped: 0, failed, failedReasons, hasMore, nextOffset: offset })
+    }
+
+    // ── Historical sales import from an uploaded eBay Orders report (CSV) ─────────
+    // The eBay APIs only reach ~90 days; the Seller Hub Orders report exports years.
+    // The CLIENT parses the CSV (handles the report's quoting / summary rows / AU$
+    // money / DD-Mon-YY dates) and posts batches of normalised sale rows here.
+    //
+    // DEDUP (per the store's "our records win" policy): the stable cross-source
+    // identity of a sale line is (Order Number + Item Number). eBay represents a
+    // qty>1 purchase as ONE line (a Quantity field), and the same item number selling
+    // to multiple buyers shows as SEPARATE orders — so (order, item) is unique per
+    // sale and works for multi-quantity / multi-category listings, not just one-off
+    // parts. If we already hold a sale for that (order, item) — from the API sync OR a
+    // prior CSV — the row is SKIPPED. The table's unique (store_id, order_id,
+    // line_item_id) (line_item_id = the CSV Transaction ID) is the structural backstop.
+    //
+    // Rows are tagged source='csv_orders_report'. The Orders report has no fee
+    // column, so fees = 0 (revenue-accurate, net/margin will read high on old sales).
+    // We best-effort link a part by item number but NEVER change a part's status —
+    // current inventory stays authoritative.
+    if (action === 'import_orders_csv') {
+      const rows: any[] = Array.isArray(body.rows) ? body.rows : []
+      if (!rows.length) return json({ ok: true, version: EDGE_FN_VERSION, inserted: 0, linked: 0, skippedExisting: 0, skippedNoItem: 0 })
+
+      // Normalise; drop rows without an item number (order-summary lines have none).
+      const clean = rows
+        .map(r => ({
+          orderId:    String(r.orderId || '').trim(),
+          lineItemId: String(r.lineItemId || r.itemNumber || '').trim(),
+          itemNumber: String(r.itemNumber || '').trim(),
+          title:      String(r.title || 'eBay sale').trim() || 'eBay sale',
+          sku:        r.sku ? String(r.sku).trim() : null,
+          quantity:   Math.max(1, Math.floor(+r.quantity || 1)),
+          soldPrice:  +r.soldPrice || 0,
+          shipping:   +r.shipping || 0,
+          soldAt:     r.soldAt || null,
+        }))
+        .filter(r => r.itemNumber)
+      const skippedNoItem = rows.length - clean.length
+      if (!clean.length) return json({ ok: true, version: EDGE_FN_VERSION, inserted: 0, linked: 0, skippedExisting: 0, skippedNoItem })
+
+      const itemNumbers = [...new Set(clean.map(r => r.itemNumber))]
+
+      // Sales we already hold, keyed (order_id|item_number) — the stable cross-source
+      // identity. Skip those (existing records win). Querying by item number uses the
+      // (store_id, legacy_item_id) index; the composite match then allows the SAME
+      // item number to legitimately sell across multiple orders (multi-qty / GTC).
+      const existing = new Set<string>()
+      for (let i = 0; i < itemNumbers.length; i += 300) {
+        const slice = itemNumbers.slice(i, i + 300)
+        const { data } = await sb.from('ebay_sales').select('order_id, legacy_item_id')
+          .eq('store_id', storeId).in('legacy_item_id', slice)
+        ;(data ?? []).forEach((d: any) => { if (d.legacy_item_id) existing.add(`${d.order_id}|${d.legacy_item_id}`) })
+      }
+
+      // Best-effort part link by item number (read-only; never flips part status).
+      const partByItem = new Map<string, string>()
+      for (let i = 0; i < itemNumbers.length; i += 300) {
+        const slice = itemNumbers.slice(i, i + 300)
+        const { data } = await sb.from('listings').select('platform_listing_id, part_id')
+          .eq('store_id', storeId).eq('platform', 'ebay').in('platform_listing_id', slice)
+        ;(data ?? []).forEach((l: any) => { if (l.platform_listing_id && l.part_id) partByItem.set(l.platform_listing_id, l.part_id) })
+      }
+
+      const toInsert = clean
+        .filter(r => !existing.has(`${r.orderId || r.itemNumber}|${r.itemNumber}`))
+        .map(r => ({
+          store_id:       storeId,
+          order_id:       r.orderId || r.itemNumber,
+          line_item_id:   r.lineItemId || r.itemNumber,
+          legacy_item_id: r.itemNumber,
+          sku:            r.sku,
+          title:          r.title,
+          quantity:       r.quantity,
+          sold_price:     r.soldPrice,
+          shipping:       r.shipping,
+          fees:           0,
+          sold_at:        r.soldAt,
+          cancelled:      false,
+          part_id:        partByItem.get(r.itemNumber) || null,
+          source:         'csv_orders_report',
+          updated_at:     new Date().toISOString(),
+        }))
+
+      let inserted = 0, linked = 0
+      for (let i = 0; i < toInsert.length; i += 200) {
+        const slice = toInsert.slice(i, i + 200)
+        const { error } = await sb.from('ebay_sales')
+          .upsert(slice, { onConflict: 'store_id,order_id,line_item_id', ignoreDuplicates: true })
+        if (error) throw new Error(`csv import: ${error.message}`)
+        inserted += slice.length
+        linked += slice.filter(s => s.part_id).length
+      }
+
+      return json({
+        ok: true, version: EDGE_FN_VERSION,
+        inserted, linked, skippedExisting: clean.length - toInsert.length, skippedNoItem,
+      })
     }
 
     // eBay selling fees from the Finances API (the ledger eBay's reports are built

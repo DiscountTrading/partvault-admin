@@ -7,6 +7,7 @@ import TeamAccess from './TeamAccess'
 import Activity from './Activity'
 import { compressImage } from '../lib/image'
 import ShippingSettings from './ShippingSettings'
+import EbayHistoryUpload from './EbayHistoryUpload'
 
 // Small inline %/$ (or rate) toggle used on the costing fields.
 function ModeToggle({ mode, onChange, opts }) {
@@ -2648,6 +2649,11 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
               )}
               {!ebayConnected && <div style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>Connect eBay above to enable.</div>}
             </Section>
+
+            {/* Historical sales backfill from an uploaded eBay Orders report.
+                Gated until a full sync has run (so the API pulls the last ~90 days
+                first and the CSV only fills the older gap). */}
+            <EbayHistoryUpload storeId={storeId} canUpload={!!lastSync} />
 
             {/* Reconcile (advanced) */}
             {showAdvSync && <div ref={reconcileRef}><ReconcileSection /></div>}
