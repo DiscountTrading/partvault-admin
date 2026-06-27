@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.15.2'
+const EDGE_FN_VERSION         = '3.16.0'
 const CHUNK_SIZE              = 20
 // eBay's getOrders can't return orders older than this, so the live sync only ever
 // manages sales within this window. The CSV history import must stay strictly OLDER
@@ -1581,6 +1581,42 @@ async function handleRequest(req: Request): Promise<Response> {
       })
     }
 
+    // Snapshot the per-category cost AVERAGES (computed client-side from the last 90
+    // days of real sales) onto every historical CSV row, then LOCK so the figures
+    // can't drift as the rolling average moves. The client shows the numbers for
+    // confirmation before calling this. Refuses if already locked unless force=true
+    // (set by an explicit unlock+recompute).
+    if (action === 'apply_historical_costs') {
+      const costs = body.costs || {}                  // {purchase, admin, labour, storage, ebay_listing, promotion, postage}
+      const now = new Date().toISOString()
+      const { data: store } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      const settings = store?.settings || {}
+      if (settings.historicalCostLock?.locked && !body.force) {
+        return json({ error: 'Historical costs are locked. Unlock first to recompute.' }, 409)
+      }
+      const { error: upErr } = await sb.from('ebay_sales')
+        .update({ costs, updated_at: now })
+        .eq('store_id', storeId).eq('source', 'csv_orders_report')
+      if (upErr) throw new Error(`apply costs: ${upErr.message}`)
+      const { count } = await sb.from('ebay_sales')
+        .select('id', { count: 'exact', head: true })
+        .eq('store_id', storeId).eq('source', 'csv_orders_report')
+      const newSettings = { ...settings, historicalCostLock: { locked: true, computedAt: now, costs } }
+      await sb.from('stores').update({ settings: newSettings }).eq('id', storeId)
+      return json({ ok: true, version: EDGE_FN_VERSION, applied: count || 0, computedAt: now, costs })
+    }
+
+    // Lift the lock so the costs can be recomputed. The client warns that this can
+    // change historical figures that may already have been used in financials.
+    if (action === 'unlock_historical_costs') {
+      const { data: store } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      const settings = store?.settings || {}
+      const lock = settings.historicalCostLock || {}
+      const newSettings = { ...settings, historicalCostLock: { ...lock, locked: false, unlockedAt: new Date().toISOString() } }
+      await sb.from('stores').update({ settings: newSettings }).eq('id', storeId)
+      return json({ ok: true, version: EDGE_FN_VERSION, locked: false })
+    }
+
     // eBay selling fees from the Finances API (the ledger eBay's reports are built
     // from). Sums each SALE transaction's total fee per order, then attributes it to
     // that order's part(s) (split by sale price) into costs->>'ebay_fees'. This is
@@ -1648,6 +1684,14 @@ async function handleRequest(req: Request): Promise<Response> {
           }
           offset += 200
         } while (offset < total && offset < 5000 && Date.now() - startedAt < 60000)
+      }
+
+      // dryRun: callers that only need the FVF-vs-promotion split (the historical-cost
+      // backfill) read the totals without writing anything back to ebay_sales.
+      if (body.dryRun) {
+        const r2d = (n: number) => Math.round(n * 100) / 100
+        return json({ ok: true, version: EDGE_FN_VERSION, days, dryRun: true,
+          saleFees: r2d(saleFees), otherFees: r2d(otherFees), feeTotal: r2d(saleFees + otherFees) })
       }
 
       // Attribute fee / refund / shipping-cost onto each order's ebay_sales line(s),

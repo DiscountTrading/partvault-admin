@@ -16,6 +16,11 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
   // 90 is the default for a like-for-like comparison). 0 = all time.
   const [periodDays, setPeriodDays] = useState(90)
   const PERIODS = [[30,'30d'],[90,'90d'],[365,'12mo'],[0,'All']]
+  // Imported historical sales carry a snapshotted (estimated) cost rather than real
+  // fees/COGS. Toggle them in/out so you can compare lifetime figures vs pure
+  // API-real data. `isHist` flags a row whose costs come from the locked snapshot.
+  const [includeHistory, setIncludeHistory] = useState(true)
+  const isHist = s => s.source === 'csv_orders_report'
 
   const active = parts.filter(p=>!p.deletedAt)
   const inStock = active.filter(p=>p.status==='in_stock')
@@ -26,7 +31,7 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
   // SALES come from the ebay_sales mirror (one row per eBay order line item), so
   // revenue + fees equal eBay's report exactly. Restrict to the selected window.
   const inPeriod = s => !periodDays || (s.soldAt && (Date.now()-new Date(s.soldAt)) <= periodDays*86400000)
-  const sold = sales.filter(inPeriod)
+  const sold = sales.filter(inPeriod).filter(s => includeHistory || !isHist(s))
   const periodLabel = periodDays ? `last ${periodDays===365?'12 months':periodDays+' days'}` : 'all time'
   // Revenue includes the shipping the buyer paid (income), net of any refund
   // returned to the buyer (a ship-then-refund nets toward $0 revenue).
@@ -36,6 +41,8 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
   // with no matching part contribute 0 cost (item was never in our inventory).
   let cogsEstimated = false
   const soldCogs = sold.reduce((a,s)=>{
+    // Imported history: use the locked snapshot (purchase + admin + labour + storage).
+    if (isHist(s) && s.costs) { cogsEstimated = true; return a + (+s.costs.purchase||0)+(+s.costs.admin||0)+(+s.costs.labour||0)+(+s.costs.storage||0) }
     const p = s.partId && partById.get(s.partId)
     if (!p) return a
     const c = partEffectiveCost(p, costing||{}); if (c.estimated) cogsEstimated = true; return a + c.value
@@ -44,7 +51,10 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
   const margin = soldRev>0?(gross/soldRev)*100:0
   // eBay selling fees (from Finances API, stored per sale row) and net sales after
   // them — mirrors eBay's report: Total sales − Selling costs = Net sales.
-  const ebayFees = sold.reduce((a,s)=>a+(+s.fees||0),0)
+  const ebayFees = sold.reduce((a,s)=>{
+    if (isHist(s) && s.costs) return a + (+s.costs.ebay_listing||0)+(+s.costs.promotion||0)
+    return a + (+s.fees||0)
+  },0)
   const netSales = soldRev - ebayFees
   // Shipping: income the buyer paid vs the postage cost we paid the carrier.
   // Cost uses the linked part's recorded carrier cost / weight estimate.
@@ -54,6 +64,7 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
   // else fall back to the linked part's recorded/estimated postage.
   let shipCostEstimated = false
   const shipCost = sold.reduce((a,s)=>{
+    if (isHist(s) && s.costs) return a + (+s.costs.postage||0) // imported history snapshot
     if ((+s.shipCost||0) > 0) return a + (+s.shipCost)        // real eBay label cost
     const p = s.partId && partById.get(s.partId)
     if (p) {                                                  // linked part → its cost/estimate
@@ -94,13 +105,19 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
     <div>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12, paddingBottom:10, borderBottom:`1px solid ${C.border}` }}>
         <h2 style={{ ...S.h1 }}>📊 Dashboard</h2>
-        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-          <span style={{ fontSize:12, color:C.muted }}>Sales period:</span>
-          <div style={{ display:'inline-flex', border:`1px solid ${C.border}`, borderRadius:8, overflow:'hidden' }}>
-            {PERIODS.map(([d,lbl])=>(
-              <button key={d} type="button" onClick={()=>setPeriodDays(d)}
-                style={{ padding:'5px 12px', fontSize:12, fontWeight:600, border:'none', cursor:'pointer', background: periodDays===d?C.accent:'#fff', color: periodDays===d?'#fff':C.muted }}>{lbl}</button>
-            ))}
+        <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
+          <label style={{ display:'inline-flex', alignItems:'center', gap:6, fontSize:12, color:C.muted, cursor:'pointer' }} title="Imported historical sales use estimated (snapshot) costs.">
+            <input type="checkbox" checked={includeHistory} onChange={e=>setIncludeHistory(e.target.checked)} />
+            Include imported history
+          </label>
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <span style={{ fontSize:12, color:C.muted }}>Sales period:</span>
+            <div style={{ display:'inline-flex', border:`1px solid ${C.border}`, borderRadius:8, overflow:'hidden' }}>
+              {PERIODS.map(([d,lbl])=>(
+                <button key={d} type="button" onClick={()=>setPeriodDays(d)}
+                  style={{ padding:'5px 12px', fontSize:12, fontWeight:600, border:'none', cursor:'pointer', background: periodDays===d?C.accent:'#fff', color: periodDays===d?'#fff':C.muted }}>{lbl}</button>
+              ))}
+            </div>
           </div>
         </div>
       </div>

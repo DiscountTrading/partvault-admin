@@ -8,6 +8,7 @@ import Activity from './Activity'
 import { compressImage } from '../lib/image'
 import ShippingSettings from './ShippingSettings'
 import EbayHistoryUpload from './EbayHistoryUpload'
+import HistoricalCosts from './HistoricalCosts'
 
 // Small inline %/$ (or rate) toggle used on the costing fields.
 function ModeToggle({ mode, onChange, opts }) {
@@ -2656,6 +2657,9 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                 server-recorded sync (lastSync, set by nightly/quick sync) OR this
                 browser's run markers — the main "Sync now" only sets the latter. */}
             <EbayHistoryUpload storeId={storeId} canUpload={!!lastSync || !!lastRun.backfill || !!lastRun.import} />
+
+            {/* Snapshot per-category cost averages onto imported sales (locked). */}
+            <HistoricalCosts storeId={storeId} />
 
             {/* Reconcile (advanced) */}
             {showAdvSync && <div ref={reconcileRef}><ReconcileSection /></div>}
