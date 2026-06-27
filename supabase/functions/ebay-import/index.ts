@@ -14,8 +14,12 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.15.1'
+const EDGE_FN_VERSION         = '3.15.2'
 const CHUNK_SIZE              = 20
+// eBay's getOrders can't return orders older than this, so the live sync only ever
+// manages sales within this window. The CSV history import must stay strictly OLDER
+// than this so it can never collide with (or be clobbered by) a future sync.
+const API_WINDOW_DAYS        = 90
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
 const EBAY_TOKEN_URL          = 'https://api.ebay.com/identity/v1/oauth2/token'
@@ -1504,9 +1508,21 @@ async function handleRequest(req: Request): Promise<Response> {
         }))
         .filter(r => r.itemNumber)
       const skippedNoItem = rows.length - clean.length
-      if (!clean.length) return json({ ok: true, version: EDGE_FN_VERSION, inserted: 0, linked: 0, skippedExisting: 0, skippedNoItem })
 
-      const itemNumbers = [...new Set(clean.map(r => r.itemNumber))]
+      // CRITICAL: only import sales OLDER than eBay's getOrders reach (~90 days).
+      // Anything newer is owned by the live sync, which re-imports it nightly WITH
+      // fees/refunds — importing it from the CSV would create a fee-less record that
+      // either blocks enrichment or (if the CSV transaction id ≠ the API line-item id)
+      // becomes a duplicate the sync can't reconcile. eBay never returns orders older
+      // than this window, so CSV rows below the cutoff can never collide with a future
+      // sync — making this safe regardless of whether a sync has run. Rows with an
+      // unparseable date are kept (they're almost always old history).
+      const cutoffMs = Date.now() - API_WINDOW_DAYS * 86400000
+      const eligible = clean.filter(r => !r.soldAt || new Date(r.soldAt).getTime() < cutoffMs)
+      const skippedRecent = clean.length - eligible.length
+      if (!eligible.length) return json({ ok: true, version: EDGE_FN_VERSION, inserted: 0, linked: 0, skippedExisting: 0, skippedRecent, skippedNoItem })
+
+      const itemNumbers = [...new Set(eligible.map(r => r.itemNumber))]
 
       // Sales we already hold, keyed (order_id|item_number) — the stable cross-source
       // identity. Skip those (existing records win). Querying by item number uses the
@@ -1529,7 +1545,7 @@ async function handleRequest(req: Request): Promise<Response> {
         ;(data ?? []).forEach((l: any) => { if (l.platform_listing_id && l.part_id) partByItem.set(l.platform_listing_id, l.part_id) })
       }
 
-      const toInsert = clean
+      const toInsert = eligible
         .filter(r => !existing.has(`${r.orderId || r.itemNumber}|${r.itemNumber}`))
         .map(r => ({
           store_id:       storeId,
@@ -1561,7 +1577,7 @@ async function handleRequest(req: Request): Promise<Response> {
 
       return json({
         ok: true, version: EDGE_FN_VERSION,
-        inserted, linked, skippedExisting: clean.length - toInsert.length, skippedNoItem,
+        inserted, linked, skippedExisting: eligible.length - toInsert.length, skippedRecent, skippedNoItem,
       })
     }
 

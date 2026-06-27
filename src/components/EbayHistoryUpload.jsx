@@ -5,6 +5,10 @@ import { sb } from '../lib/supabase'
 // Same edge endpoint the rest of Settings uses.
 const EDGE_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import'
 
+// eBay's getOrders can't reach past this, so the live sync owns sales within it.
+// The CSV import only takes sales OLDER than this to avoid colliding with the sync.
+const API_WINDOW_DAYS = 90
+
 // ── CSV helpers ───────────────────────────────────────────────────────────────
 
 // Proper quoted-CSV parser: handles embedded commas, newlines and "" escapes —
@@ -101,16 +105,24 @@ export default function EbayHistoryUpload({ storeId, canUpload }) {
       const { sales, summaryRows } = extractSales(text)
       if (!sales.length) throw new Error('No sale rows found in this file.')
 
+      // Only sales OLDER than eBay's getOrders reach (~90 days) are eligible: anything
+      // newer is owned by the live sync (it re-imports those nightly WITH fees), so
+      // importing them here would create a fee-less or duplicate record. The edge
+      // enforces this too — we mirror it so the preview counts are honest.
+      const cutoffMs = Date.now() - API_WINDOW_DAYS * 86400000
+      const eligible = sales.filter(s => !s.soldAt || new Date(s.soldAt).getTime() < cutoffMs)
+      const recentSkipped = sales.length - eligible.length
+
       // A sale line's identity is (order + item number). Repeated item numbers ACROSS
       // different orders are legitimate (multi-quantity / multi-buyer listings), so we
       // only flag a true (order, item) collision within the file.
       const key = (s) => `${s.orderId || s.itemNumber}|${s.itemNumber}`
       const counts = new Map()
-      sales.forEach(s => counts.set(key(s), (counts.get(key(s)) || 0) + 1))
+      eligible.forEach(s => counts.set(key(s), (counts.get(key(s)) || 0) + 1))
       const dupItems = [...counts.entries()].filter(([, n]) => n > 1).map(([k]) => k.split('|')[1])
 
       // Which (order, item) sales do we already hold? (existing records win)
-      const itemNumbers = [...new Set(sales.map(s => s.itemNumber))]
+      const itemNumbers = [...new Set(eligible.map(s => s.itemNumber))]
       const have = new Set()
       for (let i = 0; i < itemNumbers.length; i += 300) {
         const slice = itemNumbers.slice(i, i + 300)
@@ -120,15 +132,15 @@ export default function EbayHistoryUpload({ storeId, canUpload }) {
         ;(data ?? []).forEach(d => d.legacy_item_id && have.add(`${d.order_id}|${d.legacy_item_id}`))
       }
 
-      const dates = sales.map(s => s.soldAt).filter(Boolean).sort()
-      const newCount = sales.filter(s => !have.has(key(s))).length
+      const dates = eligible.map(s => s.soldAt).filter(Boolean).sort()
+      const newCount = eligible.filter(s => !have.has(key(s))).length
       setPreview({
         fileName: file.name,
-        sales, summaryRows,
-        total: sales.reduce((a, s) => a + s.soldPrice, 0),
+        sales, summaryRows, recentSkipped,
+        total: eligible.reduce((a, s) => a + s.soldPrice, 0),
         range: dates.length ? [dates[0], dates[dates.length - 1]] : null,
         dupItems,
-        alreadyHave: sales.length - newCount,
+        alreadyHave: eligible.length - newCount,
         newCount,
       })
     } catch (err) {
@@ -141,7 +153,7 @@ export default function EbayHistoryUpload({ storeId, canUpload }) {
   const runImport = async () => {
     if (!preview) return
     setImporting(true); setError(''); setResult(null)
-    const agg = { inserted: 0, linked: 0, skippedExisting: 0, skippedNoItem: 0 }
+    const agg = { inserted: 0, linked: 0, skippedExisting: 0, skippedRecent: 0, skippedNoItem: 0 }
     try {
       const rows = preview.sales
       for (let i = 0; i < rows.length; i += 300) {
@@ -155,6 +167,7 @@ export default function EbayHistoryUpload({ storeId, canUpload }) {
         agg.inserted += d.inserted || 0
         agg.linked += d.linked || 0
         agg.skippedExisting += d.skippedExisting || 0
+        agg.skippedRecent += d.skippedRecent || 0
         agg.skippedNoItem += d.skippedNoItem || 0
       }
       setResult(agg); setPreview(null)
@@ -198,6 +211,9 @@ export default function EbayHistoryUpload({ storeId, canUpload }) {
                 <span>Date range: <strong>{preview.range ? `${fmtDate(preview.range[0])} → ${fmtDate(preview.range[1])}` : '—'}</strong></span>
                 <span style={{ color: C.green }}><strong>{preview.newCount}</strong> new to import</span>
                 <span style={{ color: C.muted }}>{preview.alreadyHave} already in PartVault (skipped)</span>
+                {preview.recentSkipped > 0 && (
+                  <span style={{ color: C.muted }}>{preview.recentSkipped} recent (&lt;90d) left to eBay sync</span>
+                )}
                 {preview.dupItems.length > 0
                   ? <span style={{ color: C.red }}>⚠ {preview.dupItems.length} duplicate sale line(s) in file</span>
                   : <span style={{ color: C.muted }}>No duplicate sale lines ✓</span>}
@@ -220,7 +236,8 @@ export default function EbayHistoryUpload({ storeId, canUpload }) {
             <div style={{ fontSize: 12, color: C.green, background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 8, padding: '8px 12px', marginTop: 10 }}>
               ✓ Imported <strong>{result.inserted}</strong> historical sales
               {result.linked ? ` · ${result.linked} linked to a part` : ''}
-              {result.skippedExisting ? ` · ${result.skippedExisting} already had records` : ''}.
+              {result.skippedExisting ? ` · ${result.skippedExisting} already had records` : ''}
+              {result.skippedRecent ? ` · ${result.skippedRecent} recent left to eBay sync` : ''}.
               <span style={{ color: C.muted }}> Switch the Dashboard period to “All” to see them.</span>
             </div>
           )}
