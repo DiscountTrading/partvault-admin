@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.76'
+const EDGE_FN_VERSION         = '3.14.78'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -778,20 +778,38 @@ async function handleRequest(req: Request): Promise<Response> {
             // different live listing, this is a concurrent duplicate, so it gets
             // its own part under a fresh internal SKU (eBay's SKU stays on the
             // listing's platform_sku). Keeps inventory count = eBay live count.
-            const makePart = async (sku: string) => {
-              const { data: np, error: pErr } = await sb.from('parts').insert(buildPartRow(xml, sku)).select('id').single()
-              if (pErr) throw pErr
-              return np.id as string
-            }
             const freshSku = async () => {
               const { data: g, error: e } = await sb.rpc('generate_next_sku', { p_store_id: storeId })
               if (e || !g) throw new Error(`SKU generation failed: ${e?.message}`)
               return g as string
             }
+            // Create a part with a guaranteed-unique store SKU. eBay SKUs are NOT
+            // unique — sellers reuse one custom label (e.g. "NEW LIBERTY") across
+            // many listings — so inserting the eBay SKU verbatim can violate
+            // parts_sku_store_unique and silently drop the listing. On any unique
+            // collision, fall back to a freshly generated internal SKU and retry.
+            const makePart = async (sku: string): Promise<string> => {
+              let candidate = sku
+              for (let attempt = 0; attempt < 6; attempt++) {
+                const { data: np, error: pErr } = await sb.from('parts')
+                  .insert(buildPartRow(xml, candidate)).select('id').single()
+                if (!pErr) return np.id as string
+                if (pErr.code === '23505' || /parts_sku_store_unique|duplicate key/i.test(pErr.message || '')) {
+                  candidate = await freshSku() // collision — fall back to a clean internal SKU
+                  continue
+                }
+                throw pErr
+              }
+              throw new Error('Could not allocate a unique SKU for part after repeated collisions')
+            }
 
             if (ebaySkuRaw) {
-              const { data: existingPart } = await sb.from('parts')
-                .select('id').eq('store_id', storeId).eq('sku', ebaySkuRaw).maybeSingle()
+              // limit(1), NOT maybeSingle: duplicate eBay SKUs can already have
+              // produced multiple parts, and maybeSingle THROWS on >1 row — which
+              // would fail the import. Take the first match instead.
+              const { data: existingParts } = await sb.from('parts')
+                .select('id').eq('store_id', storeId).eq('sku', ebaySkuRaw).limit(1)
+              const existingPart = existingParts?.[0]
               if (existingPart) {
                 const { data: liveOther } = await sb.from('listings')
                   .select('id').eq('store_id', storeId).eq('platform', 'ebay').eq('part_id', existingPart.id)
@@ -1573,6 +1591,31 @@ async function handleRequest(req: Request): Promise<Response> {
       const statusBreakdown: Record<string, number> = {}
       for (const l of (allRows ?? [])) statusBreakdown[l.status || 'null'] = (statusBreakdown[l.status || 'null'] || 0) + 1
       return json({ ok: true, version: EDGE_FN_VERSION, ebayActive: ebayIds.length, pvActive: ourActive.length, stale, missing, outOfSync: stale + missing, statusBreakdown, checkedAt: new Date().toISOString() })
+    }
+
+    // TEMP DEBUG: for a list of item IDs, report whether GetSellerList (the recent
+    // supplement) returns them, and what GetItem says. Read-only. Used to diagnose
+    // why specific active listings aren't importing. Safe to remove later.
+    if (action === 'debug_listings') {
+      const { token, certId } = await getToken()
+      const ids: string[] = body.itemIds ?? []
+      const recent = await fetchRecentlyListedIds(token, certId, 30)
+      const recentSet = new Set(recent)
+      const perId: any[] = []
+      for (const id of ids) {
+        let gi: Record<string, unknown> = {}
+        try {
+          const xml = await trading(token, certId, 'GetItem', `<?xml version="1.0" encoding="utf-8"?>
+<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><ItemID>${id}</ItemID><DetailLevel>ReturnAll</DetailLevel></GetItemRequest>`)
+          gi = {
+            ack: getTag(xml, 'Ack'), listingStatus: getTag(xml, 'ListingStatus'),
+            sellingState: getTag(xml, 'SellingState'), sku: getTag(xml, 'SKU'),
+            title: getTag(xml, 'Title').slice(0, 60), error: getTag(xml, 'LongMessage'),
+          }
+        } catch (e) { gi = { ack: 'FETCH_ERROR', error: (e as Error).message } }
+        perId.push({ id, inGetSellerList30d: recentSet.has(id), getItem: gi })
+      }
+      return json({ ok: true, version: EDGE_FN_VERSION, getSellerListCount: recent.length, perId })
     }
 
     if (action === 'reconcile') {
