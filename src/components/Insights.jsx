@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { sb } from '../lib/supabase'
 import { C, S, fmt } from '../lib/constants'
 
@@ -59,6 +59,25 @@ function Card({ label, value, sub }) {
 export default function Insights({ storeId, initial }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
+
+  // Progressive paged load: render the first page as soon as it lands and stream the
+  // rest in, so the tab shows something immediately instead of blocking on the whole
+  // part_insights view. Also fixes the old select('*') silently capping at 1000 rows.
+  const loadRows = useCallback(async () => {
+    if (!storeId) return
+    const PAGE = 500
+    const all = []
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await sb.from('part_insights').select('*')
+        .eq('store_id', storeId).order('part_id').range(from, from + PAGE - 1)
+      if (error) { setLoading(false); return }
+      if (data && data.length) { all.push(...data); setRows([...all]) }
+      if (from === 0) setLoading(false)            // first page on screen ASAP
+      if (!data || data.length < PAGE) break
+    }
+    setLoading(false)
+  }, [storeId])
+
   const [refreshingMkt, setRefreshingMkt] = useState(false)
   const [mktMsg, setMktMsg] = useState('')
   const refreshMarket = async () => {
@@ -73,8 +92,7 @@ export default function Insights({ storeId, initial }) {
       const d = await res.json()
       if (!res.ok || d.error) throw new Error(d.error || 'Refresh failed')
       setMktMsg(`Updated ${d.updated} of ${d.checked} parts`)
-      const { data } = await sb.from('part_insights').select('*').eq('store_id', storeId)
-      setRows(data || [])
+      await loadRows()
     } catch (e) { setMktMsg(e.message) }
     setRefreshingMkt(false)
   }
@@ -110,11 +128,11 @@ export default function Insights({ storeId, initial }) {
 
   useEffect(() => {
     if (!storeId) return
-    setLoading(true)
+    setLoading(true); setRows([])
     sb.auth.getUser().then(({ data: { user } }) => setMeId(user?.id || null))
-    sb.from('part_insights').select('*').eq('store_id', storeId).then(({ data }) => { setRows(data || []); setLoading(false) })
+    loadRows()
     loadViews()
-  }, [storeId])
+  }, [storeId, loadRows])
 
   const loadViews = () => sb.from('saved_views').select('*').eq('store_id', storeId).order('name').then(({ data }) => setViews(data || []))
 
