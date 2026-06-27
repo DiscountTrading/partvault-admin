@@ -2651,9 +2651,11 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
             </Section>
 
             {/* Historical sales backfill from an uploaded eBay Orders report.
-                Gated until a full sync has run (so the API pulls the last ~90 days
-                first and the CSV only fills the older gap). */}
-            <EbayHistoryUpload storeId={storeId} canUpload={!!lastSync} />
+                Gated until a sync has run (so the API pulls the last ~90 days first
+                and the CSV only fills the older gap). Accept any sync signal: a
+                server-recorded sync (lastSync, set by nightly/quick sync) OR this
+                browser's run markers — the main "Sync now" only sets the latter. */}
+            <EbayHistoryUpload storeId={storeId} canUpload={!!lastSync || !!lastRun.backfill || !!lastRun.import} />
 
             {/* Reconcile (advanced) */}
             {showAdvSync && <div ref={reconcileRef}><ReconcileSection /></div>}
