@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { C, S, fmt, partEffectiveCost } from '../lib/constants'
+import { C, S, fmt, partEffectiveCost, estimateCostBasis, storageCostFor } from '../lib/constants'
 
 const PERIODS = [[30, '30d'], [90, '90d'], [365, '12mo'], [0, 'All']]
 const RENDER_CAP = 400
@@ -7,6 +7,37 @@ const RENDER_CAP = 400
 const fmtDate = t => t ? new Date(t).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: '2-digit' }) : '—'
 // Net to the seller for a line: item + shipping paid − refund − eBay fee.
 export const saleNet = s => (+s.soldPrice || 0) + (+s.shipping || 0) - (+s.refund || 0) - (+s.fees || 0)
+
+// Resolve a sale's money + cost from the right source: a matched inventory part
+// gives the live cost model; an imported (historical) sale uses its locked snapshot.
+// eBay fee is its own column (and in Net); Cost is goods + overhead only, so
+// Net − Cost = Profit reads cleanly. Returns a per-category breakdown for the tooltip.
+function deriveSale(s, partById, costing) {
+  const p = s.partId && partById.get(s.partId)
+  const hc = s.source === 'csv_orders_report' && s.costs ? s.costs : null
+  const fee = hc ? ((+hc.ebay_listing || 0) + (+hc.promotion || 0)) : (+s.fees || 0)
+  const net = (+s.soldPrice || 0) + (+s.shipping || 0) - (+s.refund || 0) - fee
+  let cost = null, breakdown = null
+  if (p) {
+    cost = partEffectiveCost(p, costing).value
+    const b = estimateCostBasis(p, costing, 0, 0)
+    const c = p.costs || {}
+    const manualPost = +c.postage || 0
+    breakdown = {
+      Purchase: (+c.acquisition || 0) + (+c.carShare || 0) + b.baseCost,
+      Admin: b.admin, Labour: b.labour,
+      Storage: storageCostFor(p, costing).value,
+      Postage: manualPost > 0 ? manualPost : b.postage,
+    }
+    const known = Object.values(breakdown).reduce((a, v) => a + v, 0)
+    const other = Math.round((cost - known) * 100) / 100
+    if (other > 0.01) breakdown.Other = other          // recorded costs outside the 5 buckets
+  } else if (hc) {
+    breakdown = { Purchase: +hc.purchase || 0, Admin: +hc.admin || 0, Labour: +hc.labour || 0, Storage: +hc.storage || 0, Postage: +hc.postage || 0 }
+    cost = Object.values(breakdown).reduce((a, v) => a + v, 0)
+  }
+  return { p, fee, net, cost, breakdown, profit: cost != null ? net - cost : null }
+}
 
 export default function Sales({ sales = [], parts = [], costing = {} }) {
   const [period, setPeriod] = useState(90)
@@ -28,11 +59,11 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
   }, [sales, period, query, partById])
 
   const totals = useMemo(() => rows.reduce((a, s) => {
+    const d = deriveSale(s, partById, costing)
     a.gross += (+s.soldPrice || 0) + (+s.shipping || 0)
-    a.fees += (+s.fees || 0)
-    a.net += saleNet(s)
-    const p = s.partId && partById.get(s.partId)
-    if (p) { a.cogs += partEffectiveCost(p, costing).value; a.matched++ }
+    a.fees += d.fee
+    a.net += d.net
+    if (d.cost != null) { a.cogs += d.cost; a.matched++ }
     return a
   }, { gross: 0, fees: 0, net: 0, cogs: 0, matched: 0 }), [rows, partById, costing])
 
@@ -66,7 +97,7 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
       </div>
 
       <div style={{ overflowX: 'auto', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>
-        <table style={{ width: '100%', minWidth: 900, borderCollapse: 'collapse', fontSize: 13 }}>
+        <table style={{ width: '100%', minWidth: 1000, borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr style={{ borderBottom: `2px solid ${C.border}` }}>
               <th style={th}>Date</th>
@@ -77,20 +108,22 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
               <th style={{ ...th, textAlign: 'right' }}>Ship</th>
               <th style={{ ...th, textAlign: 'right' }}>Fee</th>
               <th style={{ ...th, textAlign: 'right' }}>Net</th>
+              <th style={{ ...th, textAlign: 'right' }}>Cost</th>
               <th style={{ ...th, textAlign: 'right' }}>Profit</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
-              <tr><td colSpan={9} style={{ padding: 24, textAlign: 'center', color: C.muted }}>No sales in this period.</td></tr>
+              <tr><td colSpan={10} style={{ padding: 24, textAlign: 'center', color: C.muted }}>No sales in this period.</td></tr>
             ) : shown.map(s => {
-              const p = s.partId && partById.get(s.partId)
-              const profit = p ? saleNet(s) - partEffectiveCost(p, costing).value : null
+              const d = deriveSale(s, partById, costing)
+              const p = d.p
               // Matched sale → show OUR inventory record (title + SKU). Unmatched →
               // there's no local record, so show the eBay text but flag it clearly
               // rather than passing it off as one of our records.
               const title = p ? (p.title || '—') : (s.title || '—')
               const sku = p ? (p.sku || '—') : (s.sku || '—')
+              const costTip = d.breakdown ? Object.entries(d.breakdown).map(([k, v]) => `${k} ${fmt(v)}`).join(' · ') : ''
               return (
                 <tr key={s.id} style={{ borderBottom: `1px solid ${C.border}` }}>
                   <td style={td()}>{fmtDate(s.soldAt)}</td>
@@ -102,9 +135,10 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
                   <td style={td('right')}>{s.quantity}</td>
                   <td style={td('right')}>{fmt(s.soldPrice)}</td>
                   <td style={td('right')}>{s.shipping ? fmt(s.shipping) : '—'}</td>
-                  <td style={{ ...td('right'), color: C.red }}>{s.fees ? '−' + fmt(s.fees) : '—'}</td>
-                  <td style={{ ...td('right'), fontWeight: 600 }}>{fmt(saleNet(s))}</td>
-                  <td style={{ ...td('right'), color: profit == null ? '#bbb' : profit >= 0 ? C.green : C.red }}>{profit == null ? '—' : fmt(profit)}</td>
+                  <td style={{ ...td('right'), color: C.red }}>{d.fee ? '−' + fmt(d.fee) : '—'}</td>
+                  <td style={{ ...td('right'), fontWeight: 600 }}>{fmt(d.net)}</td>
+                  <td style={{ ...td('right'), color: d.cost == null ? '#bbb' : C.red }} title={costTip}>{d.cost == null ? '—' : '−' + fmt(d.cost)}</td>
+                  <td style={{ ...td('right'), color: d.profit == null ? '#bbb' : d.profit >= 0 ? C.green : C.red }}>{d.profit == null ? '—' : fmt(d.profit)}</td>
                 </tr>
               )
             })}
@@ -113,7 +147,7 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
       </div>
       <div style={{ marginTop: 10, fontSize: 12, color: C.muted }}>
         {rows.length > RENDER_CAP ? `Showing newest ${RENDER_CAP} of ${rows.length}.` : `Showing ${rows.length} sales.`}
-        {' '}Net = sale + shipping − refund − eBay fee. Profit also subtracts the part's cost (— when no inventory link).
+        {' '}Net = sale + shipping − refund − eBay fee. Cost = goods + overhead (hover for the breakdown). Profit = Net − Cost (— when there's no cost source).
       </div>
     </div>
   )
