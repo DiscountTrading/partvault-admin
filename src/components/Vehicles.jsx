@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useCallback } from 'react'
 import { C, S, fmt, totalCost, estimateCostBasis, partEffectiveCost, storageCostFor, storageConfigured } from '../lib/constants'
 import { parseVehicle } from '../lib/vehicles'
 import { sb } from '../lib/supabase'
@@ -84,33 +84,59 @@ const withScores = (rows) => {
   })
 }
 
-export default function Vehicles({ parts = [], cars = [], costing = {}, onRefresh }) {
+export default function Vehicles({ parts = [], cars = [], sales = [], costing = {}, onRefresh }) {
   const [level, setLevel] = useState('models') // 'models' | 'cars'
   const [carSort, setCarSort] = useState({ key: 'score', dir: 'desc' })
   const [modelSort, setModelSort] = useState({ key: 'score', dir: 'desc' })
   const [query, setQuery] = useState('')
   const [parsing, setParsing] = useState(false)
   const [parseMsg, setParseMsg] = useState('')
+  // Which data sources to include. PartVault = manually-created parts; eBay API =
+  // synced listing imports (source='ebay_import'); Imported history = the CSV
+  // Orders-report sales (no part/car — folded into By-model via title parsing).
+  const [src, setSrc] = useState({ partvault: true, ebay: true, history: true })
 
   // Per-part operating cost: everything except the acquisition/car cost (counted
   // once at the car level) and the synthetic base-cost proxy. Mirrors the app's
   // cost model (partEffectiveCost) minus those two so we don't double-count the
   // car's purchase price against itself.
-  const opCost = (p) => {
+  const opCost = useCallback((p) => {
     const useStorage = storageConfigured(costing)
     const recorded = totalCost(p) - (+p.costs?.acquisition || 0) - (useStorage ? (+p.costs?.storage || 0) : 0)
     const b = estimateCostBasis(p, costing, 0, 0)
     const manualPost = +(p.costs?.postage) || 0
     const supplement = b.labour + b.admin + (manualPost > 0 ? 0 : b.postage) + storageCostFor(p, costing).value // exclude baseCost
     return recorded + supplement
-  }
+  }, [costing])
+
+  // ---- source-filtered inputs -------------------------------------------
+  // Parts passing the source filter, each with its effective cost precomputed.
+  const filteredParts = useMemo(() =>
+    parts.filter(p => !p.deletedAt && (p.source === 'ebay_import' ? src.ebay : src.partvault))
+         .map(p => ({ ...p, _cost: partEffectiveCost(p, costing).value })),
+    [parts, costing, src])
+
+  // CSV-imported historical sales as synthetic, model-level items (no donor car):
+  // make/model parsed from the eBay title, cost from the locked snapshot.
+  const histItems = useMemo(() => {
+    if (!src.history || !sales.length) return []
+    return sales.filter(s => s.source === 'csv_orders_report' && !s.cancelled).map(s => {
+      const v = parseVehicle(s.title || '')
+      const cost = s.costs ? Object.values(s.costs).reduce((a, x) => a + (+x || 0), 0) : 0
+      return { _hist: true, make: v.make, model: v.model, status: 'sold',
+        soldPrice: +s.soldPrice || 0, list_price: 0, _cost: cost, soldDate: s.soldAt, createdAt: s.soldAt }
+    })
+  }, [sales, src])
+
+  // Model leaderboard input = filtered parts + (optionally) historical items.
+  const modelItems = useMemo(() => [...filteredParts, ...histItems], [filteredParts, histItems])
 
   // ---- per-car roll-up --------------------------------------------------
   const carRows = useMemo(() => {
     const now = new Date().toISOString()
     const byCar = new Map()
-    for (const p of parts) {
-      if (p.deletedAt || !p.car_id) continue
+    for (const p of filteredParts) {
+      if (!p.car_id) continue
       if (!byCar.has(p.car_id)) byCar.set(p.car_id, [])
       byCar.get(p.car_id).push(p)
     }
@@ -146,7 +172,7 @@ export default function Vehicles({ parts = [], cars = [], costing = {}, onRefres
         untapped: onShelf.reduce((a, p) => a + (+p.list_price || 0), 0),
       }
     })
-  }, [parts, cars, costing])
+  }, [filteredParts, cars, opCost])
 
   // ---- per make/model roll-up (DIRECT from part fields) ------------------
   // eBay-imported parts carry make/model on the part itself (not a donor car),
@@ -157,8 +183,7 @@ export default function Vehicles({ parts = [], cars = [], costing = {}, onRefres
   const modelRows = useMemo(() => {
     const now = new Date().toISOString()
     const byModel = new Map()
-    for (const p of parts) {
-      if (p.deletedAt) continue
+    for (const p of modelItems) {
       const make = (p.make || '').trim(), model = (p.model || '').trim()
       const key = (make || model) ? `${make} ${model}`.trim().toLowerCase() : '__unassigned__'
       if (!byModel.has(key)) byModel.set(key, { make, model, parts: [] })
@@ -169,7 +194,7 @@ export default function Vehicles({ parts = [], cars = [], costing = {}, onRefres
       const sold = cp.filter(p => p.status === 'sold')
       const onShelf = cp.filter(p => p.status === 'in_stock' || p.status === 'listed')
       const revenue = sold.reduce((a, p) => a + (+p.soldPrice || 0), 0)
-      const cost = sold.reduce((a, p) => a + partEffectiveCost(p, costing).value, 0)
+      const cost = sold.reduce((a, p) => a + (+p._cost || 0), 0)
       const netProfit = revenue - cost
       const dts = sold.map(p => days(p.acquiredDate || p.createdAt, p.soldDate)).filter(v => v != null)
       const yieldScore = cp.reduce((a, p) => a + conversionCredit(p, now), 0)
@@ -190,23 +215,22 @@ export default function Vehicles({ parts = [], cars = [], costing = {}, onRefres
         untapped: onShelf.reduce((a, p) => a + (+p.list_price || 0), 0),
       }
     })
-  }, [parts, costing])
+  }, [modelItems])
 
-  // ---- summary (catalogue-wide, from all parts) -------------------------
+  // ---- summary (reflects the included sources) --------------------------
   const summary = useMemo(() => {
-    const live = parts.filter(p => !p.deletedAt)
-    const sold = live.filter(p => p.status === 'sold')
+    const sold = modelItems.filter(p => p.status === 'sold')
     const revenue = sold.reduce((a, p) => a + (+p.soldPrice || 0), 0)
-    const cost = sold.reduce((a, p) => a + partEffectiveCost(p, costing).value, 0)
-    const unparsed = live.filter(p => !(p.make || '').trim()).length
+    const cost = sold.reduce((a, p) => a + (+p._cost || 0), 0)
+    const unparsed = modelItems.filter(p => !(p.make || '').trim()).length
     return {
       revenue,
       estProfit: revenue - cost,
       cars: cars.length,
       unparsed,
-      total: live.length,
+      total: modelItems.length,
     }
-  }, [parts, cars, costing])
+  }, [modelItems, cars])
 
   const scoredCars = useMemo(() => withScores(carRows), [carRows])
   const scoredModels = useMemo(() => withScores(modelRows), [modelRows])
@@ -350,6 +374,16 @@ export default function Vehicles({ parts = [], cars = [], costing = {}, onRefres
             {label}
           </button>
         ))}
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 12, color: C.muted, flexWrap: 'wrap', marginLeft: 4 }}>
+          <span>Include:</span>
+          {[['partvault', 'PartVault'], ['ebay', 'eBay API'], ['history', 'Imported history']].map(([k, label]) => (
+            <label key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}
+              title={k === 'history' ? 'CSV-imported sales — model-level only (no donor car)' : ''}>
+              <input type="checkbox" checked={src[k]} onChange={e => setSrc(s => ({ ...s, [k]: e.target.checked }))} />
+              {label}
+            </label>
+          ))}
+        </div>
         <div style={{ flex: 1 }} />
         {parseMsg && <span style={{ fontSize: 12, color: C.muted, maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={parseMsg}>{parseMsg}</span>}
         <button onClick={runParse} disabled={parsing} title="Fill missing make/model and refresh year ranges from part titles"
