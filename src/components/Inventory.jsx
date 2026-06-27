@@ -861,7 +861,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
 
   const paged = useMemo(() => filtered.slice(page*PAGE,(page+1)*PAGE), [filtered,page])
   const pages = Math.ceil(filtered.length/PAGE)
-  const totals = filtered.reduce((acc,p) => { const c=totalCost(p),lp=+p.list_price||0; return{cost:acc.cost+c,list:acc.list+lp,profit:acc.profit+(lp-c),sold:acc.sold+(+p.soldPrice||0),count:acc.count+1} }, {cost:0,list:0,profit:0,sold:0,count:0})
+  const totals = filtered.reduce((acc,p) => { const c=totalCost(p),lp=+p.list_price||0; return{cost:acc.cost+c,list:acc.list+lp,profit:acc.profit+(lp-c),count:acc.count+1} }, {cost:0,list:0,profit:0,count:0})
   const clearFilters = () => { setSearch('');setFilterMake('');setFilterModel('');setFilterYear('');setFilterCat('');setFilterStatus('');setFilterCond('');setPage(0) }
   const handleDeleteCar = async group => { await onDeleteCar(group.carId||null, group.parts.map(p=>p.id)); setDeleteCarTarget(null) }
 
@@ -931,7 +931,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
       </div>
 
       <div style={{ display:'flex', gap:12, marginBottom:14, flexWrap:'wrap' }}>
-        {[['Stock Value',`$${totals.list.toFixed(0)}`,C.blue],['Total Cost',`$${totals.cost.toFixed(0)}`,C.red],['Est. Profit',`$${totals.profit.toFixed(0)}`,totals.profit>=0?C.green:C.red],['Sold Revenue',`$${totals.sold.toFixed(0)}`,C.accent]].map(([l,v,col])=>(
+        {[['Stock Value',`$${totals.list.toFixed(0)}`,C.blue],['Total Cost',`$${totals.cost.toFixed(0)}`,C.red],['Est. Profit',`$${totals.profit.toFixed(0)}`,totals.profit>=0?C.green:C.red]].map(([l,v,col])=>(
           <div key={l} style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:8, padding:'8px 16px', borderTop:`3px solid ${col}` }}>
             <div style={{ fontSize:10, color:C.muted, textTransform:'uppercase', letterSpacing:'0.5px' }}>{l}</div>
             <div style={{ fontSize:20, fontWeight:800, color:col }}>{v}</div>
