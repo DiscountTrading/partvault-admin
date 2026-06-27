@@ -42,6 +42,7 @@ function deriveSale(s, partById, costing) {
 export default function Sales({ sales = [], parts = [], costing = {} }) {
   const [period, setPeriod] = useState(90)
   const [query, setQuery] = useState('')
+  const [detail, setDetail] = useState(null) // sale whose cost breakdown is open
 
   const partById = useMemo(() => new Map(parts.filter(p => !p.deletedAt).map(p => [p.id, p])), [parts])
 
@@ -123,7 +124,6 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
               // rather than passing it off as one of our records.
               const title = p ? (p.title || '—') : (s.title || '—')
               const sku = p ? (p.sku || '—') : (s.sku || '—')
-              const costTip = d.breakdown ? Object.entries(d.breakdown).map(([k, v]) => `${k} ${fmt(v)}`).join(' · ') : ''
               return (
                 <tr key={s.id} style={{ borderBottom: `1px solid ${C.border}` }}>
                   <td style={td()}>{fmtDate(s.soldAt)}</td>
@@ -137,7 +137,11 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
                   <td style={td('right')}>{s.shipping ? fmt(s.shipping) : '—'}</td>
                   <td style={{ ...td('right'), color: C.red }}>{d.fee ? '−' + fmt(d.fee) : '—'}</td>
                   <td style={{ ...td('right'), fontWeight: 600 }}>{fmt(d.net)}</td>
-                  <td style={{ ...td('right'), color: d.cost == null ? '#bbb' : C.red }} title={costTip}>{d.cost == null ? '—' : '−' + fmt(d.cost)}</td>
+                  <td style={{ ...td('right'), color: d.cost == null ? '#bbb' : C.red, cursor: d.cost == null ? 'default' : 'pointer', textDecoration: d.cost == null ? 'none' : 'underline dotted' }}
+                      title={d.cost == null ? '' : 'Click for breakdown'}
+                      onClick={() => d.cost != null && setDetail({ s, d, title, sku })}>
+                    {d.cost == null ? '—' : '−' + fmt(d.cost)}
+                  </td>
                   <td style={{ ...td('right'), color: d.profit == null ? '#bbb' : d.profit >= 0 ? C.green : C.red }}>{d.profit == null ? '—' : fmt(d.profit)}</td>
                 </tr>
               )
@@ -147,7 +151,49 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
       </div>
       <div style={{ marginTop: 10, fontSize: 12, color: C.muted }}>
         {rows.length > RENDER_CAP ? `Showing newest ${RENDER_CAP} of ${rows.length}.` : `Showing ${rows.length} sales.`}
-        {' '}Net = sale + shipping − refund − eBay fee. Cost = goods + overhead (hover for the breakdown). Profit = Net − Cost (— when there's no cost source).
+        {' '}Net = sale + shipping − refund − eBay fee. Cost = goods + overhead (click a Cost figure for its breakdown). Profit = Net − Cost (— when there's no cost source).
+      </div>
+
+      {detail && <CostBreakdown detail={detail} onClose={() => setDetail(null)} />}
+    </div>
+  )
+}
+
+// One line in the breakdown popup. Module-scoped so it isn't redefined per render.
+function BRow({ label, val, sign = '−', strong, color, top }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 24, padding: '5px 0', borderTop: top ? `1px solid ${C.border}` : 'none', fontWeight: strong ? 700 : 400, color: color || C.text }}>
+      <span>{label}</span>
+      <span>{val < 0 ? `(${fmt(Math.abs(val))})` : `${sign === '+' ? '' : sign}${fmt(val)}`}</span>
+    </div>
+  )
+}
+
+// Full derivation popup for one sale: Sale → Net → each cost category → Profit.
+function CostBreakdown({ detail, onClose }) {
+  const { s, d, title, sku } = detail
+  const matched = !!d.p
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: '20px 24px', width: 380, maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 8px 30px rgba(0,0,0,0.2)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 4 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{title}</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, lineHeight: 1, cursor: 'pointer', color: C.muted }}>×</button>
+        </div>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>{sku} · {fmtDate(s.soldAt)} {matched ? '' : '· cost from imported snapshot'}</div>
+
+        <div style={{ fontSize: 13 }}>
+          <BRow label="Sale price" val={+s.soldPrice || 0} sign="+" />
+          {(+s.shipping || 0) > 0 && <BRow label="Shipping received" val={+s.shipping} sign="+" />}
+          {(+s.refund || 0) > 0 && <BRow label="Refund" val={+s.refund} color={C.red} />}
+          {(d.fee || 0) > 0 && <BRow label="eBay fee" val={d.fee} color={C.red} />}
+          <BRow label="Net" val={d.net} sign="+" strong top />
+          {d.breakdown && Object.entries(d.breakdown).map(([k, v]) => (
+            <BRow key={k} label={k} val={+v || 0} color={C.red} />
+          ))}
+          <BRow label="Total cost" val={d.cost || 0} color={C.red} top />
+          <BRow label="Profit" val={d.profit} sign="+" strong top color={d.profit >= 0 ? C.green : C.red} />
+        </div>
       </div>
     </div>
   )
