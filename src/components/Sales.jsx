@@ -19,8 +19,13 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
     const q = query.trim().toLowerCase()
     return sales
       .filter(s => !s.cancelled && (!period || (s.soldAt && new Date(s.soldAt).getTime() >= cutoff)))
-      .filter(s => !q || `${s.title} ${s.sku}`.toLowerCase().includes(q))
-  }, [sales, period, query])
+      .filter(s => {
+        if (!q) return true
+        // Search the local record where we have one, plus the eBay text as a fallback.
+        const p = s.partId && partById.get(s.partId)
+        return `${p ? `${p.title} ${p.sku}` : ''} ${s.title} ${s.sku}`.toLowerCase().includes(q)
+      })
+  }, [sales, period, query, partById])
 
   const totals = useMemo(() => rows.reduce((a, s) => {
     a.gross += (+s.soldPrice || 0) + (+s.shipping || 0)
@@ -38,7 +43,7 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
   return (
     <div>
       <h2 style={{ ...S.h1, marginBottom: 4 }}>Recent Sales</h2>
-      <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>Every eBay sale, newest first — what each item made after fees.</div>
+      <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>Every eBay sale, newest first — what each item made after fees. Item &amp; SKU come from your inventory record (matched by eBay item number); sales with no inventory match are tagged <strong>eBay only</strong>.</div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
         {PERIODS.map(([d, lbl]) => (
@@ -81,11 +86,19 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
             ) : shown.map(s => {
               const p = s.partId && partById.get(s.partId)
               const profit = p ? saleNet(s) - partEffectiveCost(p, costing).value : null
+              // Matched sale → show OUR inventory record (title + SKU). Unmatched →
+              // there's no local record, so show the eBay text but flag it clearly
+              // rather than passing it off as one of our records.
+              const title = p ? (p.title || '—') : (s.title || '—')
+              const sku = p ? (p.sku || '—') : (s.sku || '—')
               return (
                 <tr key={s.id} style={{ borderBottom: `1px solid ${C.border}` }}>
                   <td style={td()}>{fmtDate(s.soldAt)}</td>
-                  <td style={{ ...td(), maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis' }} title={s.title}>{s.title || '—'}</td>
-                  <td style={{ ...td(), color: C.muted }}>{s.sku || '—'}</td>
+                  <td style={{ ...td(), maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis' }} title={title}>
+                    {title}
+                    {!p && <span title="No matching inventory item — shown from eBay" style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: C.muted, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 6, padding: '1px 5px', verticalAlign: 'middle' }}>eBay only</span>}
+                  </td>
+                  <td style={{ ...td(), color: p ? C.text : C.muted }}>{sku}</td>
                   <td style={td('right')}>{s.quantity}</td>
                   <td style={td('right')}>{fmt(s.soldPrice)}</td>
                   <td style={td('right')}>{s.shipping ? fmt(s.shipping) : '—'}</td>
