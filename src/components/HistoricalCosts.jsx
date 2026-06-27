@@ -58,13 +58,16 @@ export default function HistoricalCosts({ storeId }) {
 
       const partIds = [...new Set(real.map(s => s.part_id))]
       const partById = new Map()
-      for (let i = 0; i < partIds.length; i += 300) {
-        const slice = partIds.slice(i, i + 300)
-        const { data: parts } = await sb.from('parts')
+      // Small slices: a long uuid `in()` list can blow the request URL length.
+      for (let i = 0; i < partIds.length; i += 100) {
+        const slice = partIds.slice(i, i + 100)
+        const { data: parts, error: pErr } = await sb.from('parts')
           .select('id, costs, list_price, weight, removal_minutes, category, acquired_date, sold_date, created_at')
-          .in('id', slice)
+          .eq('store_id', storeId).in('id', slice)
+        if (pErr) throw new Error(`Reading parts: ${pErr.message}`)
         ;(parts || []).forEach(p => partById.set(p.id, p))
       }
+      if (!partById.size) throw new Error(`Found ${real.length} recent sales with a part link, but none of those parts are readable (they may be deleted). Can’t average costs.`)
 
       // 3. Per-category totals across the sampled sales.
       const sum = { purchase: 0, admin: 0, labour: 0, storage: 0, postage: 0, fee: 0 }
