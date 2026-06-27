@@ -61,9 +61,10 @@ export default function HistoricalCosts({ storeId }) {
       // Small slices: a long uuid `in()` list can blow the request URL length.
       for (let i = 0; i < partIds.length; i += 100) {
         const slice = partIds.slice(i, i + 100)
+        // select('*') mirrors useParts — avoids naming a column that may not exist
+        // (e.g. removal_minutes) and gives the cost functions every field they read.
         const { data: parts, error: pErr } = await sb.from('parts')
-          .select('id, costs, list_price, weight, removal_minutes, category, acquired_date, sold_date, created_at')
-          .eq('store_id', storeId).in('id', slice)
+          .select('*').eq('store_id', storeId).in('id', slice)
         if (pErr) throw new Error(`Reading parts: ${pErr.message}`)
         ;(parts || []).forEach(p => partById.set(p.id, p))
       }
