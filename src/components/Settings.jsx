@@ -223,6 +223,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   const [parseProgress, setParseProgress] = useState(null) // { processed, total, failed }
   const parseCancelRef = useRef(false)
   const pollRef = useRef(null)
+  const reconcileRef = useRef(null) // scroll target for "Review & resolve"
 
   // Reconcile state
   const [reconciling, setReconciling] = useState(false)
@@ -813,6 +814,15 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       setReconcileError(e.message)
     }
     setReconciling(false)
+  }
+
+  // Jump from the out-of-sync banner straight to resolution: reveal the Reconcile
+  // section, run it (lists stale items + fetches each one's eBay status with a
+  // suggested action), and scroll to it.
+  const openReconcile = async () => {
+    setShowAdvSync(true)
+    setTimeout(() => reconcileRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120)
+    if (!reconciling) runReconcile()
   }
 
   // Lightweight live check: how many parts are out of step with eBay.
@@ -2377,7 +2387,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                     {s && !s.error && (
                       <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>
                         {s.stale} listed here but ended on eBay · {s.missing} on eBay not here · {s.ebayActive} active on eBay vs {s.pvActive} here
-                        {s.outOfSync > 0 && <span style={{ color: '#b45309' }}> — run Sync to resolve</span>}
+                        {s.outOfSync > 0 && <> — <button onClick={openReconcile} style={{ background: 'none', border: 'none', padding: 0, color: C.accent, cursor: 'pointer', fontWeight: 600, textDecoration: 'underline', fontSize: 'inherit', fontFamily: 'inherit' }}>Review &amp; resolve →</button></>}
                         {s.checkedAt && (() => {
                           const mins = Math.floor((Date.now() - new Date(s.checkedAt).getTime()) / 60000)
                           const ago = mins < 1 ? 'just now' : mins < 60 ? `${mins}m ago` : `${Math.floor(mins / 60)}h ago`
@@ -2640,7 +2650,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
             </Section>
 
             {/* Reconcile (advanced) */}
-            {showAdvSync && <ReconcileSection />}
+            {showAdvSync && <div ref={reconcileRef}><ReconcileSection /></div>}
           </div>{/* end right column */}
         </div>
       )}
