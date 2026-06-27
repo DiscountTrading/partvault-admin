@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.14.78'
+const EDGE_FN_VERSION         = '3.14.80'
 const CHUNK_SIZE              = 20
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
@@ -789,18 +789,22 @@ async function handleRequest(req: Request): Promise<Response> {
             // parts_sku_store_unique and silently drop the listing. On any unique
             // collision, fall back to a freshly generated internal SKU and retry.
             const makePart = async (sku: string): Promise<string> => {
-              let candidate = sku
-              for (let attempt = 0; attempt < 6; attempt++) {
+              // Guarantee a unique store SKU. eBay SKUs aren't unique (sellers reuse
+              // one label across many parts) AND generate_next_sku can itself return
+              // an already-used value, so the final fallbacks use the eBay item id —
+              // globally unique, cannot collide. Otherwise the listing is dropped.
+              for (let attempt = 0; attempt < 5; attempt++) {
+                const candidate =
+                  attempt === 0 ? sku :
+                  attempt === 1 ? await freshSku() :
+                  attempt === 2 ? `EB-${itemId}` :
+                                  `EB-${itemId}-${attempt}`
                 const { data: np, error: pErr } = await sb.from('parts')
                   .insert(buildPartRow(xml, candidate)).select('id').single()
                 if (!pErr) return np.id as string
-                if (pErr.code === '23505' || /parts_sku_store_unique|duplicate key/i.test(pErr.message || '')) {
-                  candidate = await freshSku() // collision — fall back to a clean internal SKU
-                  continue
-                }
-                throw pErr
+                if (!(pErr.code === '23505' || /parts_sku_store_unique|duplicate key/i.test(pErr.message || ''))) throw pErr
               }
-              throw new Error('Could not allocate a unique SKU for part after repeated collisions')
+              throw new Error('Could not allocate a unique SKU for part')
             }
 
             if (ebaySkuRaw) {
@@ -1616,6 +1620,50 @@ async function handleRequest(req: Request): Promise<Response> {
         perId.push({ id, inGetSellerList30d: recentSet.has(id), getItem: gi })
       }
       return json({ ok: true, version: EDGE_FN_VERSION, getSellerListCount: recent.length, perId })
+    }
+
+    // Lightweight, frequent "catch new listings" check (pg_cron calls this every
+    // 5 min). One GetSellerList call over a short window; imports ONLY listings not
+    // already in the DB, reusing the same collision-proof import path via a job +
+    // process_chunk self-calls. Read-only on eBay, purely additive in our DB, and
+    // a no-op (1 API call) when nothing new has been listed.
+    if (action === 'import_recent') {
+      const days = Math.min(+body.days || 3, 30)
+      const { token, certId } = await getToken()
+      const recent = await fetchRecentlyListedIds(token, certId, days)
+      if (!recent.length) return json({ ok: true, version: EDGE_FN_VERSION, checked: 0, missing: 0, imported: 0 })
+
+      const { data: have } = await sb.from('listings').select('platform_listing_id')
+        .eq('store_id', storeId).eq('platform', 'ebay').in('platform_listing_id', recent)
+      const haveSet = new Set((have ?? []).map((l: any) => l.platform_listing_id))
+      const missing = recent.filter(id => !haveSet.has(id))
+      if (!missing.length) return json({ ok: true, version: EDGE_FN_VERSION, checked: recent.length, missing: 0, imported: 0 })
+
+      const { data: job, error: jobErr } = await sb.from('jobs').insert({
+        store_id: storeId, type: 'ebay_import', status: 'running',
+        total_items: missing.length, current_item: 'Importing new listings…',
+        started_at: new Date().toISOString(),
+        meta: { all_item_ids: missing, batch_offset: 0, failed_reasons: {} },
+      }).select('id').single()
+      if (jobErr) throw new Error(`Failed to create job: ${jobErr.message}`)
+
+      // Drive the existing chunk processor to completion (few items, fast).
+      const SELF_URL = `${Deno.env.get('SUPABASE_URL')}/functions/v1/ebay-import`
+      let imported = 0, failed = 0, guard = 0
+      while (guard++ < 50) {
+        const r = await fetch(SELF_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', apikey: Deno.env.get('SUPABASE_ANON_KEY')! },
+          body: JSON.stringify({ action: 'process_chunk', jobId: job.id, storeId }),
+        })
+        const c = await r.json()
+        if (c.error && c.retry) continue
+        if (c.error) throw new Error(c.error)
+        imported = c.imported ?? imported
+        failed   = c.failed ?? failed
+        if (c.isComplete || c.status === 'completed') break
+      }
+      return json({ ok: true, version: EDGE_FN_VERSION, checked: recent.length, missing: missing.length, imported, failed })
     }
 
     if (action === 'reconcile') {
