@@ -5,16 +5,15 @@ import { sb } from '../lib/supabase'
 const EDGE_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import'
 const WINDOW_DAYS = 90
 
-const CATS = [
-  ['purchase',    'Purchase (COGS)'],
-  ['admin',       'Admin'],
-  ['labour',      'Labour'],
-  ['storage',     'Storage'],
-  ['ebay_listing','eBay listing fees'],
-  ['promotion',   'Promotion fees'],
-  ['postage',     'Postage'],
-]
+// Value-scaling costs are a % of sale price; fixed costs are a flat $ per item.
+const PCT_ROWS  = [['purchase_pct', 'Purchase (COGS)'], ['listing_pct', 'eBay listing fees'], ['promo_pct', 'Promotion fees']]
+const FLAT_ROWS = [['postage', 'Postage'], ['storage', 'Storage'], ['admin', 'Admin'], ['labour', 'Labour']]
 const r2 = (n) => Math.round((+n || 0) * 100) / 100
+
+// Cost the model would assign to a sale at the given price.
+const modelCost = (m, price) =>
+  price * ((+m.purchase_pct || 0) + (+m.listing_pct || 0) + (+m.promo_pct || 0))
+  + (+m.postage || 0) + (+m.storage || 0) + (+m.admin || 0) + (+m.labour || 0)
 
 // Build the costing object the cost functions expect (mirrors App.costingFull).
 function buildCosting(settings) {
@@ -27,8 +26,8 @@ function buildCosting(settings) {
 }
 
 export default function HistoricalCosts({ storeId }) {
-  const [lock, setLock] = useState(null)        // { locked, computedAt, costs } | null
-  const [draft, setDraft] = useState(null)      // freshly computed averages awaiting confirm
+  const [lock, setLock] = useState(null)        // { locked, computedAt, model } | null
+  const [draft, setDraft] = useState(null)      // freshly computed model awaiting confirm
   const [meta, setMeta] = useState(null)        // { sampleSize, fvfRatio }
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -50,7 +49,7 @@ export default function HistoricalCosts({ storeId }) {
       // 2. Last-90-day REAL (API) sales with their linked parts.
       const since = new Date(Date.now() - WINDOW_DAYS * 86400000).toISOString()
       const { data: sales, error: sErr } = await sb.from('ebay_sales')
-        .select('part_id, ship_cost, fees, sold_at, source')
+        .select('part_id, ship_cost, fees, sold_price, sold_at, source')
         .eq('store_id', storeId).eq('cancelled', false).gte('sold_at', since)
       if (sErr) throw new Error(sErr.message)
       const real = (sales || []).filter(s => s.source !== 'csv_orders_report' && s.part_id)
@@ -58,11 +57,8 @@ export default function HistoricalCosts({ storeId }) {
 
       const partIds = [...new Set(real.map(s => s.part_id))]
       const partById = new Map()
-      // Small slices: a long uuid `in()` list can blow the request URL length.
       for (let i = 0; i < partIds.length; i += 100) {
         const slice = partIds.slice(i, i + 100)
-        // select('*') mirrors useParts — avoids naming a column that may not exist
-        // (e.g. removal_minutes) and gives the cost functions every field they read.
         const { data: parts, error: pErr } = await sb.from('parts')
           .select('*').eq('store_id', storeId).in('id', slice)
         if (pErr) throw new Error(`Reading parts: ${pErr.message}`)
@@ -70,8 +66,8 @@ export default function HistoricalCosts({ storeId }) {
       }
       if (!partById.size) throw new Error(`Found ${real.length} recent sales with a part link, but none of those parts are readable (they may be deleted). Can’t average costs.`)
 
-      // 3. Per-category totals across the sampled sales.
-      const sum = { purchase: 0, admin: 0, labour: 0, storage: 0, postage: 0, fee: 0 }
+      // 3. Totals across the sampled sales (value-scaling vs fixed).
+      const sum = { purchase: 0, admin: 0, labour: 0, storage: 0, postage: 0, fee: 0, sale: 0 }
       let n = 0
       for (const s of real) {
         const p = partById.get(s.part_id)
@@ -85,11 +81,12 @@ export default function HistoricalCosts({ storeId }) {
         sum.storage  += storageCostFor(p, costing).value
         sum.postage  += (+s.ship_cost > 0 ? +s.ship_cost : (manualPost > 0 ? manualPost : b.postage))
         sum.fee      += (+s.fees || 0)
+        sum.sale     += (+s.sold_price || 0)
         n++
       }
       if (!n) throw new Error('Could not match any sampled sales to a part.')
 
-      // 4. Split the averaged eBay fee into listing vs promotion via the real 90-day ratio.
+      // 4. eBay fee → listing vs promotion split via the real 90-day ratio.
       const fr = await fetch(EDGE_FN, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'import_fees', storeId, days: WINDOW_DAYS, dryRun: true }),
@@ -97,19 +94,20 @@ export default function HistoricalCosts({ storeId }) {
       const fd = await fr.json().catch(() => ({}))
       const fvfTotal = (+fd.saleFees || 0) + (+fd.otherFees || 0)
       const fvfRatio = fvfTotal > 0 ? (+fd.saleFees || 0) / fvfTotal : 1
-      const avgFee = sum.fee / n
 
-      const costs = {
-        purchase:     r2(sum.purchase / n),
-        admin:        r2(sum.admin / n),
-        labour:       r2(sum.labour / n),
-        storage:      r2(sum.storage / n),
-        ebay_listing: r2(avgFee * fvfRatio),
-        promotion:    r2(avgFee * (1 - fvfRatio)),
-        postage:      r2(sum.postage / n),
+      // Value-scaling categories as a fraction of total sales $; fixed as flat avg $.
+      const saleBase = sum.sale > 0 ? sum.sale : 1
+      const model = {
+        purchase_pct: sum.purchase / saleBase,
+        listing_pct:  (sum.fee * fvfRatio) / saleBase,
+        promo_pct:    (sum.fee * (1 - fvfRatio)) / saleBase,
+        postage: r2(sum.postage / n),
+        storage: r2(sum.storage / n),
+        admin:   r2(sum.admin / n),
+        labour:  r2(sum.labour / n),
       }
-      setDraft(costs)
-      setMeta({ sampleSize: n, fvfRatio })
+      setDraft(model)
+      setMeta({ sampleSize: n, fvfRatio, avgSale: sum.sale / n })
     } catch (e) {
       setError(e.message || 'Compute failed')
     } finally {
@@ -123,7 +121,7 @@ export default function HistoricalCosts({ storeId }) {
     try {
       const res = await fetch(EDGE_FN, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'apply_historical_costs', storeId, costs: draft, force: lock?.locked || false }),
+        body: JSON.stringify({ action: 'apply_historical_costs', storeId, model: draft, force: lock?.locked || false }),
       })
       const d = await res.json().catch(() => ({}))
       if (!res.ok || d.error) throw new Error(d.error || d.message || `HTTP ${res.status}`)
@@ -155,8 +153,7 @@ export default function HistoricalCosts({ storeId }) {
   }
 
   const isLocked = !!lock?.locked
-  const shownCosts = draft || (isLocked ? lock.costs : null)
-  const total = shownCosts ? CATS.reduce((a, [k]) => a + (+shownCosts[k] || 0), 0) : 0
+  const model = draft || (isLocked ? lock.model : null)
   const fmtDate = (iso) => iso ? new Date(iso).toLocaleString('en-AU', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''
 
   return (
@@ -166,25 +163,32 @@ export default function HistoricalCosts({ storeId }) {
         {isLocked && <span style={{ fontSize: 11, fontWeight: 700, color: C.green, background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 999, padding: '2px 8px' }}>🔒 Locked</span>}
       </div>
       <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>
-        Imported sales have no real cost. This averages your <strong>last {WINDOW_DAYS} days</strong> of real sales by category and applies that snapshot to every imported sale, so revenue never sits in the books without a cost. Computed once and locked — figures won’t drift as the average moves.
+        Imported sales have no real cost. This builds a cost model from your <strong>last {WINDOW_DAYS} days</strong> of real sales — value-scaling costs (purchase, eBay &amp; promotion fees) as a <strong>% of sale price</strong>, fixed costs (postage, storage, admin, labour) as a <strong>flat $</strong> — then applies it to every imported sale and locks it.
       </div>
 
-      {shownCosts && (
+      {model && (
         <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 14px', background: '#f9f8f5', marginBottom: 12 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>
-            {draft ? 'Computed averages (per sale) — review before applying' : `Applied snapshot · ${fmtDate(lock.computedAt)}`}
+            {draft ? 'Computed cost model — review before applying' : `Applied model · ${fmtDate(lock.computedAt)}`}
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '4px 16px', fontSize: 13, maxWidth: 340 }}>
-            {CATS.map(([k, label]) => (
+            {PCT_ROWS.map(([k, label]) => (
               <div key={k} style={{ display: 'contents' }}>
                 <span style={{ color: C.muted }}>{label}</span>
-                <span style={{ textAlign: 'right', color: C.text }}>{fmt(shownCosts[k])}</span>
+                <span style={{ textAlign: 'right', color: C.text }}>{((+model[k] || 0) * 100).toFixed(1)}% of sale</span>
               </div>
             ))}
-            <span style={{ fontWeight: 700, color: C.text, borderTop: `1px solid ${C.border}`, paddingTop: 4 }}>Total cost / sale</span>
-            <span style={{ fontWeight: 700, textAlign: 'right', color: C.text, borderTop: `1px solid ${C.border}`, paddingTop: 4 }}>{fmt(total)}</span>
+            {FLAT_ROWS.map(([k, label]) => (
+              <div key={k} style={{ display: 'contents' }}>
+                <span style={{ color: C.muted }}>{label}</span>
+                <span style={{ textAlign: 'right', color: C.text }}>{fmt(model[k])} flat</span>
+              </div>
+            ))}
           </div>
-          {meta && <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>From {meta.sampleSize} recent sales · fee split {Math.round(meta.fvfRatio * 100)}% listing / {Math.round((1 - meta.fvfRatio) * 100)}% promotion</div>}
+          <div style={{ fontSize: 12, color: C.text, marginTop: 10, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
+            Worked examples: a <strong>$50</strong> sale → cost <strong>{fmt(modelCost(model, 50))}</strong> · a <strong>$500</strong> sale → cost <strong>{fmt(modelCost(model, 500))}</strong>
+          </div>
+          {meta && <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>From {meta.sampleSize} recent sales (avg sale {fmt(meta.avgSale)}) · fee split {Math.round(meta.fvfRatio * 100)}% listing / {Math.round((1 - meta.fvfRatio) * 100)}% promotion</div>}
         </div>
       )}
 

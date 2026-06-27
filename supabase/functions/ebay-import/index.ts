@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.16.5'
+const EDGE_FN_VERSION         = '3.17.0'
 const CHUNK_SIZE              = 20
 // eBay's getOrders can't return orders older than this, so the live sync only ever
 // manages sales within this window. The CSV history import must stay strictly OLDER
@@ -1581,29 +1581,33 @@ async function handleRequest(req: Request): Promise<Response> {
       })
     }
 
-    // Snapshot the per-category cost AVERAGES (computed client-side from the last 90
-    // days of real sales) onto every historical CSV row, then LOCK so the figures
-    // can't drift as the rolling average moves. The client shows the numbers for
-    // confirmation before calling this. Refuses if already locked unless force=true
-    // (set by an explicit unlock+recompute).
+    // Apply the historical cost MODEL (value-scaling % + fixed flats, computed
+    // client-side from the last 90 days of real sales) to every imported sale, then
+    // LOCK so figures can't drift as the rolling average moves. Each row's cost is
+    // price-dependent, so the bulk per-row write is done in one SQL statement via the
+    // apply_historical_costs() function. Refuses if already locked unless force=true.
     if (action === 'apply_historical_costs') {
-      const costs = body.costs || {}                  // {purchase, admin, labour, storage, ebay_listing, promotion, postage}
+      const m = body.model || {}
       const now = new Date().toISOString()
       const { data: store } = await sb.from('stores').select('settings').eq('id', storeId).single()
       const settings = store?.settings || {}
       if (settings.historicalCostLock?.locked && !body.force) {
         return json({ error: 'Historical costs are locked. Unlock first to recompute.' }, 409)
       }
-      const { error: upErr } = await sb.from('ebay_sales')
-        .update({ costs, updated_at: now })
-        .eq('store_id', storeId).eq('source', 'csv_orders_report')
-      if (upErr) throw new Error(`apply costs: ${upErr.message}`)
-      const { count } = await sb.from('ebay_sales')
-        .select('id', { count: 'exact', head: true })
-        .eq('store_id', storeId).eq('source', 'csv_orders_report')
-      const newSettings = { ...settings, historicalCostLock: { locked: true, computedAt: now, costs } }
+      const { data: applied, error: rpcErr } = await sb.rpc('apply_historical_costs', {
+        p_store: storeId,
+        p_purchase_pct: +m.purchase_pct || 0,
+        p_listing_pct:  +m.listing_pct || 0,
+        p_promo_pct:    +m.promo_pct || 0,
+        p_postage:      +m.postage || 0,
+        p_storage:      +m.storage || 0,
+        p_admin:        +m.admin || 0,
+        p_labour:       +m.labour || 0,
+      })
+      if (rpcErr) throw new Error(`apply costs: ${rpcErr.message}`)
+      const newSettings = { ...settings, historicalCostLock: { locked: true, computedAt: now, model: m } }
       await sb.from('stores').update({ settings: newSettings }).eq('id', storeId)
-      return json({ ok: true, version: EDGE_FN_VERSION, applied: count || 0, computedAt: now, costs })
+      return json({ ok: true, version: EDGE_FN_VERSION, applied: applied || 0, computedAt: now, model: m })
     }
 
     // Lift the lock so the costs can be recomputed. The client warns that this can
