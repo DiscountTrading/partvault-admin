@@ -25,25 +25,29 @@ function deriveSale(s, partById, costing) {
     cost = partEffectiveCost(p, costing).value
     const b = estimateCostBasis(p, costing, 0, 0)
     const c = p.costs || {}
+    const useStorage = storageConfigured(costing)
     const manualPost = +c.postage || 0
-    // Name every component so the breakdown sums to Cost with no mystery bucket:
-    // recorded per-part costs (acquisition/carShare/labour/admin/packaging/holding/
-    // storage) PLUS the estimated supplements (baseCost/labour/admin/postage/storage),
-    // exactly as partEffectiveCost combines them. Any residual "Other" = an unexpected
-    // cost key on the part (e.g. a legacy ebay_fees that shouldn't be in COGS).
-    const cat = {
-      Purchase:  (+c.acquisition || 0) + (+c.carShare || 0) + b.baseCost,
-      Labour:    (+c.labour || 0) + b.labour,
-      Admin:     (+c.admin || 0) + b.admin,
-      Storage:   storageConfigured(costing) ? storageCostFor(p, costing).value : (+c.storage || 0),
-      Postage:   manualPost > 0 ? manualPost : b.postage,
-      Packaging: (+c.packaging || 0),
-      Holding:   (+c.holding || 0),
+    // Enumerate EVERY actual cost — each recorded part cost (by its own name) plus the
+    // estimated supplements — decomposed exactly as partEffectiveCost combines them, so
+    // the lines sum to Cost with no catch-all. Unexpected keys (e.g. a legacy ebay_fees)
+    // show under their own name rather than hiding in an "Other".
+    const LABELS = { acquisition: 'Purchase', carShare: 'Purchase', car_share: 'Purchase', labour: 'Labour', admin: 'Admin', packaging: 'Packaging', holding: 'Holding', postage: 'Postage', storage: 'Storage', ebay_fees: 'eBay fees', ebayFees: 'eBay fees' }
+    const pretty = (k) => LABELS[k] || k.replace(/[_-]+/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase())
+    const bd = {}
+    const add = (label, v) => { if (!v) return; bd[label] = (bd[label] || 0) + v }
+    for (const [k, raw] of Object.entries(c)) {
+      const v = +raw || 0
+      if (!v) continue
+      if (k === 'postage') continue                 // handled with the postage estimate below
+      if (k === 'storage' && useStorage) continue   // replaced by the warehouse calc below
+      add(pretty(k), v)
     }
-    const known = Object.values(cat).reduce((a, v) => a + v, 0)
-    const other = Math.round((cost - known) * 100) / 100
-    if (other > 0.01) cat.Other = other
-    breakdown = Object.fromEntries(Object.entries(cat).filter(([, v]) => Math.abs(v) > 0.005))
+    add('Purchase', b.baseCost)
+    add('Labour', b.labour)
+    add('Admin', b.admin)
+    add('Postage', manualPost > 0 ? manualPost : b.postage)
+    if (useStorage) add('Storage', storageCostFor(p, costing).value)
+    breakdown = bd
   } else if (hc) {
     breakdown = { Purchase: +hc.purchase || 0, Admin: +hc.admin || 0, Labour: +hc.labour || 0, Storage: +hc.storage || 0,
       Postage: +s.shipCost > 0 ? +s.shipCost : (+hc.postage || 0) } // real label cost wins
