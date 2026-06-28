@@ -229,7 +229,63 @@ export default function Vehicles({ parts = [], cars = [], sales = [], costing = 
     }
   }, [modelItems, cars])
 
-  const scoredCars = useMemo(() => withScores(carRows), [carRows])
+  // ---- generated cars (onboarding) --------------------------------------
+  // Infer donor cars from unassigned parts so By-car has rich data from day one.
+  // Group by make/model/year, then split into separate cars only where listing
+  // dates are >= 6 months apart (so a re-stock of the same model becomes its own
+  // car); drop tiny 1-2 part clusters. Computed live, flagged 'generated', and
+  // self-retires as parts get linked to real donor cars. Profit uses the part
+  // cost basis (no real purchase price), so ROI/recouped stay blank.
+  const GEN_GAP_MS = 182 * 86400000
+  const GEN_MIN_PARTS = 3
+  const generatedCars = useMemo(() => {
+    const now = new Date().toISOString()
+    const dateOf = (p) => new Date(p.listedDate || p.acquiredDate || p.createdAt || 0).getTime()
+    const pool = filteredParts.filter(p => !p.car_id && (p.make || '').trim())
+    const groups = new Map()
+    for (const p of pool) {
+      const key = `${(p.make || '').trim()} ${(p.model || '').trim()} ${(p.year || '').trim()}`.replace(/\s+/g, ' ').trim()
+      if (!groups.has(key)) groups.set(key, [])
+      groups.get(key).push(p)
+    }
+    const clusters = []
+    for (const [key, ps] of groups) {
+      ps.sort((a, b) => dateOf(a) - dateOf(b))
+      let cur = [], prev = null
+      for (const p of ps) {
+        const d = dateOf(p)
+        if (prev !== null && d - prev >= GEN_GAP_MS) { clusters.push({ key, ps: cur }); cur = [] }
+        cur.push(p); prev = d
+      }
+      if (cur.length) clusters.push({ key, ps: cur })
+    }
+    return clusters.filter(c => c.ps.length >= GEN_MIN_PARTS).map((c, i) => {
+      const cp = c.ps
+      const sold = cp.filter(p => p.status === 'sold')
+      const onShelf = cp.filter(p => p.status === 'in_stock' || p.status === 'listed')
+      const revenue = sold.reduce((a, p) => a + (+p.soldPrice || 0), 0)
+      const cost = sold.reduce((a, p) => a + (+p._cost || 0), 0)
+      const dts = sold.map(p => days(p.acquiredDate || p.createdAt, p.soldDate)).filter(v => v != null)
+      const yieldScore = cp.reduce((a, p) => a + conversionCredit(p, now), 0)
+      const first = new Date(dateOf(cp[0]))
+      return {
+        id: `gen-${c.key}-${i}`, generated: true, name: c.key,
+        make: cp[0].make || '', model: cp[0].model || '',
+        purchase_date: isFinite(first.getTime()) ? first.toLocaleDateString('en-AU', { month: 'short', year: 'numeric' }) : null,
+        invested: null, recouped: null, roi: null,
+        partsTotal: cp.length, partsSold: sold.length, partsOnShelf: onShelf.length,
+        sellThrough: cp.length ? (sold.length / cp.length) * 100 : null,
+        yieldScore, yieldPct: cp.length ? (yieldScore / cp.length) * 100 : null,
+        revenue, opCost: cost, netProfit: revenue - cost,
+        avgDts: avg(dts) != null ? Math.round(avg(dts)) : null,
+        untapped: onShelf.reduce((a, p) => a + (+p.list_price || 0), 0),
+      }
+    })
+  }, [filteredParts])
+
+  // Real cars scored among real; generated scored among generated (so a tiny set of
+  // real cars doesn't make every generated car score 100). Both shown in By-car.
+  const scoredCars = useMemo(() => [...withScores(carRows), ...withScores(generatedCars)], [carRows, generatedCars])
   const scoredModels = useMemo(() => withScores(modelRows), [modelRows])
 
   // Make/model parsing now runs server-side inside every Sync (Settings → eBay),
@@ -274,7 +330,9 @@ export default function Vehicles({ parts = [], cars = [], sales = [], costing = 
     { key: 'untapped', label: 'Untapped', align: 'right', w: 100, render: r => money(r.untapped) },
   ]
   const CAR_COLS = [
-    { key: 'name', label: 'Vehicle', align: 'left', w: 200, render: r => r.name },
+    { key: 'name', label: 'Vehicle', align: 'left', w: 200, render: r => r.generated
+      ? <span>{r.name} <span title="Inferred from part titles — not a recorded donor car" style={{ fontSize: 10, fontWeight: 700, color: C.blue, background: C.blue + '18', border: `1px solid ${C.blue}40`, borderRadius: 6, padding: '1px 5px', marginLeft: 6, verticalAlign: 'middle' }}>generated</span></span>
+      : r.name },
     { key: 'score', label: 'Score', align: 'center', w: 80, render: scoreCell },
     { key: 'purchase_date', label: 'Bought', align: 'left', w: 110, render: r => r.purchase_date || '—' },
     { key: 'invested', label: 'Invested', align: 'right', w: 100, render: r => money(r.invested) },
@@ -307,7 +365,7 @@ export default function Vehicles({ parts = [], cars = [], sales = [], costing = 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
         <Card label="Revenue (all sales)" value={money(summary.revenue)} color={C.accent} />
         <Card label="Est. profit" value={money(summary.estProfit)} sub={summary.revenue > 0 ? `${Math.round((summary.estProfit / summary.revenue) * 100)}% margin` : null} color={summary.estProfit >= 0 ? C.green : C.red} />
-        <Card label="Donor cars tracked" value={summary.cars} sub="with purchase price" color={C.blue} />
+        <Card label="Donor cars tracked" value={summary.cars} sub={`recorded · +${generatedCars.length} generated`} color={C.blue} />
         <Card label="Parts without make" value={summary.unparsed} sub={`of ${summary.total} — filled by Sync`} color={summary.unparsed > 0 ? C.yellow : C.green} />
       </div>
 
