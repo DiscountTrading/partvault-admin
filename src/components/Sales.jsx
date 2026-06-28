@@ -66,11 +66,12 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
   const totals = useMemo(() => rows.reduce((a, s) => {
     const d = deriveSale(s, partById, costing)
     a.gross += (+s.soldPrice || 0) + (+s.shipping || 0)
+    a.refunds += (+s.refund || 0)
     a.fees += d.fee
     a.net += d.net
     if (d.cost != null) { a.cogs += d.cost; a.matched++ }
     return a
-  }, { gross: 0, fees: 0, net: 0, cogs: 0, matched: 0 }), [rows, partById, costing])
+  }, { gross: 0, refunds: 0, fees: 0, net: 0, cogs: 0, matched: 0 }), [rows, partById, costing])
 
   const shown = rows.slice(0, RENDER_CAP)
   const th = { textAlign: 'left', padding: '9px 12px', color: C.muted, fontWeight: 700, fontSize: 11, whiteSpace: 'nowrap' }
@@ -94,11 +95,12 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
       </div>
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
-        <Stat label="Sales" value={rows.length} />
-        <Stat label="Gross (incl. ship)" value={fmt(totals.gross)} color={C.accent} />
-        <Stat label="eBay fees" value={'−' + fmt(totals.fees)} color={C.red} />
-        <Stat label="Net after fees" value={fmt(totals.net)} color={C.green} />
-        <Stat label="Est. profit" value={fmt(totals.net - totals.cogs)} sub={`${totals.matched}/${rows.length} cost-linked`} color={(totals.net - totals.cogs) >= 0 ? C.green : C.red} />
+        <Stat label="Sold" value={rows.length} />
+        <Stat label="Gross sales" value={fmt(totals.gross)} color={C.accent} />
+        <Stat label="Refunds" value={totals.refunds > 0 ? '−' + fmt(totals.refunds) : fmt(0)} color={totals.refunds > 0 ? C.red : C.muted} />
+        <Stat label="eBay fees" value={totals.fees > 0 ? '−' + fmt(totals.fees) : fmt(0)} color={C.red} />
+        <Stat label="Net sales" value={fmt(totals.net)} color={C.green} />
+        <Stat label="Profit" value={fmt(totals.net - totals.cogs)} sub={`${totals.matched}/${rows.length} cost-linked`} color={(totals.net - totals.cogs) >= 0 ? C.green : C.red} />
       </div>
 
       <div style={{ overflowX: 'auto', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>
@@ -155,7 +157,7 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
       </div>
       <div style={{ marginTop: 10, fontSize: 12, color: C.muted }}>
         {rows.length > RENDER_CAP ? `Showing newest ${RENDER_CAP} of ${rows.length}.` : `Showing ${rows.length} sales.`}
-        {' '}Net = sale + shipping − refund − eBay fee. Cost = goods + overhead (click a Cost figure for its breakdown). Profit = Net − Cost (— when there's no cost source).
+        {' '}Net sales = Gross sales − refunds − eBay fees. Cost = goods + overhead (click a Cost figure for its breakdown). Profit = Net sales − Cost (— when there's no cost source).
       </div>
 
       {detail && <CostBreakdown detail={detail} onClose={() => setDetail(null)} />}

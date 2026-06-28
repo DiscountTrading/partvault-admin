@@ -35,7 +35,7 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
   const periodLabel = periodDays ? `last ${periodDays===365?'12 months':periodDays+' days'}` : 'all time'
   // Revenue includes the shipping the buyer paid (income), net of any refund
   // returned to the buyer (a ship-then-refund nets toward $0 revenue).
-  const soldRev = sold.reduce((a,s)=>a+(+s.soldPrice||0)+(+s.shipping||0)-(+s.refund||0),0)
+  const grossSales = sold.reduce((a,s)=>a+(+s.soldPrice||0)+(+s.shipping||0),0)  // item + shipping, before refunds/fees
   const refundTotal = sold.reduce((a,s)=>a+(+s.refund||0),0)
   // COGS: use the linked inventory part's effective cost where we have one; sales
   // with no matching part contribute 0 cost (item was never in our inventory).
@@ -47,16 +47,17 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
     if (!p) return a
     const c = partEffectiveCost(p, costing||{}); if (c.estimated) cogsEstimated = true; return a + c.value
   },0)
-  const gross = soldRev - soldCogs
-  const margin = soldRev>0?(gross/soldRev)*100:0
-  // eBay selling fees (from Finances API, stored per sale row) and net sales after
-  // them — mirrors eBay's report: Total sales − Selling costs = Net sales.
+  // eBay selling fees: real where available, modelled fallback for old history.
   const ebayFees = sold.reduce((a,s)=>{
     if ((+s.fees||0) > 0) return a + (+s.fees)                                       // real (incl. Finances backfill)
     if (isHist(s) && s.costs) return a + (+s.costs.ebay_listing||0)+(+s.costs.promotion||0) // modelled fallback
     return a
   },0)
-  const netSales = soldRev - ebayFees
+  // One ladder, identical to the Sales tab:
+  //   Gross sales − Refunds − eBay fees = Net sales;  Net sales − COGS = Profit.
+  const netSales = grossSales - refundTotal - ebayFees
+  const profit = netSales - soldCogs
+  const margin = netSales>0?(profit/netSales)*100:0
   // Shipping: income the buyer paid vs the postage cost we paid the carrier.
   // Cost uses the linked part's recorded carrier cost / weight estimate.
   const shipInc = sold.reduce((a,s)=>a+(+s.shipping||0),0)
@@ -126,8 +127,8 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
         <StatCard label="Total Parts" value={active.length} sub={`${inStock.length} in stock`} />
         <StatCard label="Listed on eBay" value={listed.length} color={C.accent} />
         <StatCard label="Sold" value={sold.length} color={C.blue} sub={periodLabel} />
-        <StatCard label="Sales" value={fmt(soldRev)} color={C.green} sub={`item + shipping · ${periodLabel}`} />
-        <StatCard label="Gross Profit" value={fmt(gross)} color={margin>30?C.green:C.yellow} sub={pct(margin)+' margin'+(cogsEstimated?' · incl. est. cost':'')} />
+        <StatCard label="Net sales" value={fmt(netSales)} color={C.green} sub={`after refunds & fees · ${periodLabel}`} />
+        <StatCard label="Profit" value={fmt(profit)} color={margin>30?C.green:C.yellow} sub={pct(margin)+' margin'+(cogsEstimated?' · incl. est. cost':'')} />
       </div>
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, marginBottom:12 }}>
         <div style={{ ...S.card, padding:18 }}>
@@ -197,13 +198,13 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
         <h2 style={{ ...S.h2, marginBottom:10 }}>P&L Summary <span style={{ fontWeight:400, fontSize:12, color:C.muted }}>· {periodLabel}{cogsEstimated?' · cost incl. estimates':''}</span></h2>
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:20, rowGap:14 }}>
           {[
-            ['Total Sales',fmt(soldRev),C.text],
-            ['Refunds (netted)',refundTotal>0?('−'+fmt(refundTotal)):fmt(0),refundTotal>0?C.red:C.muted],
-            ['eBay Fees',ebayFees>0?('−'+fmt(ebayFees)):fmt(0),ebayFees>0?C.red:C.muted],
-            ['Net Sales (after fees)',fmt(netSales),C.text],
-            ['Total COGS',soldCogs>0?fmt(soldCogs):fmt(0),soldCogs>0?C.red:C.muted],
-            ['Gross Profit',fmt(gross),C.green],
-            ['Gross Margin',pct(margin),margin>30?C.green:C.yellow],
+            ['Gross sales',fmt(grossSales),C.text],
+            ['Refunds',refundTotal>0?('−'+fmt(refundTotal)):fmt(0),refundTotal>0?C.red:C.muted],
+            ['eBay fees',ebayFees>0?('−'+fmt(ebayFees)):fmt(0),ebayFees>0?C.red:C.muted],
+            ['Net sales',fmt(netSales),C.text],
+            ['COGS',soldCogs>0?('−'+fmt(soldCogs)):fmt(0),soldCogs>0?C.red:C.muted],
+            ['Profit',fmt(profit),profit>=0?C.green:C.red],
+            ['Margin',pct(margin),margin>30?C.green:C.yellow],
           ].map(([l,v,col])=>(
             <div key={l}>
               <div style={{ ...S.statLbl, marginBottom:4 }}>{l}</div>
@@ -211,7 +212,7 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
             </div>
           ))}
         </div>
-        <div style={{ fontSize:11, color:C.muted, marginTop:8 }}>Total Sales − eBay Fees = Net Sales (matches eBay's report). Gross Profit also subtracts part cost, postage & admin.</div>
+        <div style={{ fontSize:11, color:C.muted, marginTop:8 }}>Gross sales − Refunds − eBay fees = Net sales (matches eBay's report). Net sales − COGS (part cost, postage &amp; admin) = Profit.</div>
       </div>
 
       {/* Recent sales — last few, click through to the full Sales tab */}
