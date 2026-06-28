@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.19.1'
+const EDGE_FN_VERSION         = '3.19.2'
 const CHUNK_SIZE              = 20
 // eBay's getOrders can't return orders older than this, so the live sync only ever
 // manages sales within this window. The CSV history import must stay strictly OLDER
@@ -1861,6 +1861,42 @@ async function handleRequest(req: Request): Promise<Response> {
           .in('id', stale.map((l: any) => l.id))
       }
 
+      // Auto-resolve clear-cut stale items: GetItem-classify, then apply —
+      //   sold → listing+part 'sold';
+      //   ended-unsold / not-found → listing 'ended' + part back to 'in_stock';
+      //   still active on eBay (false positive) → just clear the flag.
+      // Ambiguous or errored items stay flagged for manual review. Bounded by time +
+      // count so a big backlog clears over a few runs instead of timing out.
+      let autoSold = 0, autoEnded = 0, autoKept = 0, autoErr = 0
+      const resolvedIds = new Set<string>()
+      const arStart = Date.now()
+      for (const l of (stale as any[])) {
+        if (Date.now() - arStart > 45000 || (autoSold + autoEnded + autoKept) >= 150) break
+        try {
+          const xml = await trading(token, certId, 'GetItem', `<?xml version="1.0" encoding="utf-8"?>
+<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><ItemID>${l.platform_listing_id}</ItemID><DetailLevel>ReturnAll</DetailLevel><IncludeItemSpecifics>false</IncludeItemSpecifics></GetItemRequest>`)
+          const ack = getTag(xml, 'Ack'), errCode = getTag(xml, 'ErrorCode'), longMsg = (getTag(xml, 'LongMessage') || '').toLowerCase()
+          const notFound = errCode === '17' || errCode === '291' || (ack === 'Failure' && longMsg.includes('not found'))
+          if (ack === 'Failure' && !notFound) { autoErr++; continue }   // transient/error → leave flagged
+          const sellingState = getTag(xml, 'SellingState'), listingStatus = getTag(xml, 'ListingStatus')
+          if (sellingState === 'EndedWithSales' || sellingState === 'Sold') {
+            const salePrice = parseFloat(getTag(xml, 'ConvertedCurrentPrice') || getTag(xml, 'CurrentPrice')) || null
+            const soldDate  = getTag(xml, 'PaidTime') || getTag(xml, 'EndTime') || null
+            await sb.from('listings').update({ status: 'sold', sold_price: salePrice, sold_at: soldDate, reconcile_flagged: false, reconcile_flagged_at: null }).eq('id', l.id)
+            if (l.part_id) await sb.from('parts').update({ status: 'sold', ...(salePrice ? { sold_price: salePrice } : {}), ...(soldDate ? { sold_date: soldDate } : {}) }).eq('id', l.part_id)
+            autoSold++; resolvedIds.add(l.id)
+          } else if (!notFound && (listingStatus === 'Active' || sellingState === 'Active')) {
+            await sb.from('listings').update({ reconcile_flagged: false, reconcile_flagged_at: null }).eq('id', l.id)
+            autoKept++; resolvedIds.add(l.id)
+          } else {  // Ended unsold (or not found on eBay) → part returns to stock
+            await sb.from('listings').update({ status: 'ended', reconcile_flagged: false, reconcile_flagged_at: null }).eq('id', l.id)
+            if (l.part_id) await sb.from('parts').update({ status: 'in_stock' }).eq('id', l.part_id)
+            autoEnded++; resolvedIds.add(l.id)
+          }
+        } catch { autoErr++ }
+      }
+      const remainingStale = (stale as any[]).filter(l => !resolvedIds.has(l.id))
+
       const { data: lastJob } = await sb.from('jobs')
         .select('id, meta, failed_items')
         .eq('store_id', storeId)
@@ -1876,8 +1912,9 @@ async function handleRequest(req: Request): Promise<Response> {
         pvActiveCount:   (activeListings ?? []).length,
         missingCount:    missingIds.length,
         missingIds:      missingIds.slice(0, 50),
-        staleCount:      stale.length,
-        staleListings:   stale.map((l: any) => ({
+        autoResolved:    { sold: autoSold, ended: autoEnded, keptActive: autoKept, errors: autoErr },
+        staleCount:      remainingStale.length,
+        staleListings:   remainingStale.slice(0, 50).map((l: any) => ({
           id:                l.id,
           partId:            l.part_id,
           platformListingId: l.platform_listing_id,
