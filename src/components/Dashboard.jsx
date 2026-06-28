@@ -52,8 +52,9 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
   // eBay selling fees (from Finances API, stored per sale row) and net sales after
   // them — mirrors eBay's report: Total sales − Selling costs = Net sales.
   const ebayFees = sold.reduce((a,s)=>{
-    if (isHist(s) && s.costs) return a + (+s.costs.ebay_listing||0)+(+s.costs.promotion||0)
-    return a + (+s.fees||0)
+    if ((+s.fees||0) > 0) return a + (+s.fees)                                       // real (incl. Finances backfill)
+    if (isHist(s) && s.costs) return a + (+s.costs.ebay_listing||0)+(+s.costs.promotion||0) // modelled fallback
+    return a
   },0)
   const netSales = soldRev - ebayFees
   // Shipping: income the buyer paid vs the postage cost we paid the carrier.
@@ -64,8 +65,8 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
   // else fall back to the linked part's recorded/estimated postage.
   let shipCostEstimated = false
   const shipCost = sold.reduce((a,s)=>{
-    if (isHist(s) && s.costs) return a + (+s.costs.postage||0) // imported history snapshot
-    if ((+s.shipCost||0) > 0) return a + (+s.shipCost)        // real eBay label cost
+    if ((+s.shipCost||0) > 0) return a + (+s.shipCost)        // real eBay label cost (incl. backfill)
+    if (isHist(s) && s.costs) return a + (+s.costs.postage||0) // imported history snapshot fallback
     const p = s.partId && partById.get(s.partId)
     if (p) {                                                  // linked part → its cost/estimate
       const c = postageCostFor(p, costing||{})

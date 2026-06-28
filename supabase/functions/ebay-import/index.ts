@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.18.0'
+const EDGE_FN_VERSION         = '3.19.0'
 const CHUNK_SIZE              = 20
 // eBay's getOrders can't return orders older than this, so the live sync only ever
 // manages sales within this window. The CSV history import must stay strictly OLDER
@@ -1627,10 +1627,14 @@ async function handleRequest(req: Request): Promise<Response> {
     // what makes net sales / margins match eBay's report — fees are ~24% of sales.
     if (action === 'import_fees') {
       const days = Math.min(+body.days || 120, 365)
-      const startDate = new Date(Date.now() - days * 86400000)
+      // Explicit fromDate/toDate (used by the full-history fee backfill, which loops
+      // 90-day windows) overrides the rolling `days` window. eBay's getTransactions
+      // accepts ~90-day ranges, so callers window accordingly.
+      const startDate = body.fromDate ? new Date(body.fromDate) : new Date(Date.now() - days * 86400000)
+      const endDate   = body.toDate   ? new Date(body.toDate)   : new Date()
       const { token } = await getToken()
       const headers = { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU', 'Accept': 'application/json' }
-      const dateRange = `transactionDate:[${startDate.toISOString()}..${new Date().toISOString()}]`
+      const dateRange = `transactionDate:[${startDate.toISOString()}..${endDate.toISOString()}]`
 
       const startedAt = Date.now()
       const feeByOrder: Record<string, number> = {}

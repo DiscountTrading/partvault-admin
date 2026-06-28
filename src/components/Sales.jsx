@@ -15,7 +15,10 @@ export const saleNet = s => (+s.soldPrice || 0) + (+s.shipping || 0) - (+s.refun
 function deriveSale(s, partById, costing) {
   const p = s.partId && partById.get(s.partId)
   const hc = s.source === 'csv_orders_report' && s.costs ? s.costs : null
-  const fee = hc ? ((+hc.ebay_listing || 0) + (+hc.promotion || 0)) : (+s.fees || 0)
+  // Prefer REAL fees (Finances backfill) over the modelled estimate; fall back to the
+  // snapshot only where eBay has no financial record for the sale.
+  const realFee = +s.fees || 0
+  const fee = realFee > 0 ? realFee : (hc ? (+hc.ebay_listing || 0) + (+hc.promotion || 0) : 0)
   const net = (+s.soldPrice || 0) + (+s.shipping || 0) - (+s.refund || 0) - fee
   let cost = null, breakdown = null
   if (p) {
@@ -33,7 +36,8 @@ function deriveSale(s, partById, costing) {
     const other = Math.round((cost - known) * 100) / 100
     if (other > 0.01) breakdown.Other = other          // recorded costs outside the 5 buckets
   } else if (hc) {
-    breakdown = { Purchase: +hc.purchase || 0, Admin: +hc.admin || 0, Labour: +hc.labour || 0, Storage: +hc.storage || 0, Postage: +hc.postage || 0 }
+    breakdown = { Purchase: +hc.purchase || 0, Admin: +hc.admin || 0, Labour: +hc.labour || 0, Storage: +hc.storage || 0,
+      Postage: +s.shipCost > 0 ? +s.shipCost : (+hc.postage || 0) } // real label cost wins
     cost = Object.values(breakdown).reduce((a, v) => a + v, 0)
   }
   return { p, fee, net, cost, breakdown, profit: cost != null ? net - cost : null }

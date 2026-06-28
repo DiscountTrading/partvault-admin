@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { C, S, fmt, estimateCostBasis, storageCostFor, rentPerDay } from '../lib/constants'
 import { sb } from '../lib/supabase'
 
@@ -31,6 +31,47 @@ export default function HistoricalCosts({ storeId }) {
   const [meta, setMeta] = useState(null)        // { sampleSize, fvfRatio }
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // Real fee/refund backfill from the Finances API (full history, 90-day windows).
+  const [feeBusy, setFeeBusy] = useState(false)
+  const [feeMsg, setFeeMsg] = useState('')
+  const [feeResult, setFeeResult] = useState(null)
+  const feeCancel = useRef(false)
+
+  const backfillFees = async () => {
+    setFeeBusy(true); setFeeResult(null); setError(''); feeCancel.current = false
+    const agg = { windows: 0, ordersMatched: 0, updated: 0, feeTotal: 0, refundTotal: 0 }
+    try {
+      // Earliest recorded sale → how far back to walk.
+      const { data: first } = await sb.from('ebay_sales').select('sold_at')
+        .eq('store_id', storeId).not('sold_at', 'is', null)
+        .order('sold_at', { ascending: true }).limit(1).maybeSingle()
+      const earliestMs = first?.sold_at ? new Date(first.sold_at).getTime() : (Date.now() - 365 * 86400000)
+      const WINDOW = 88 * 86400000
+      let end = Date.now()
+      while (end > earliestMs && !feeCancel.current) {
+        const start = Math.max(earliestMs, end - WINDOW)
+        setFeeMsg(`${new Date(start).toLocaleDateString('en-AU', { month: 'short', year: '2-digit' })} → ${new Date(end).toLocaleDateString('en-AU', { month: 'short', year: '2-digit' })}…`)
+        const res = await fetch(EDGE_FN, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'import_fees', storeId, fromDate: new Date(start).toISOString(), toDate: new Date(end).toISOString() }),
+        })
+        const d = await res.json().catch(() => ({}))
+        if (!res.ok || d.error) throw new Error(d.error || d.message || `HTTP ${res.status}`)
+        agg.windows++
+        agg.ordersMatched += d.ordersMatched || 0
+        agg.updated += d.updated || 0
+        agg.feeTotal += +d.feeTotal || 0
+        agg.refundTotal += +d.refundTotal || 0
+        end = start
+      }
+      setFeeResult({ ...agg, cancelled: feeCancel.current })
+      setFeeMsg('')
+    } catch (e) {
+      setError(e.message || 'Fee backfill failed')
+    } finally {
+      setFeeBusy(false)
+    }
+  }
 
   const loadLock = useCallback(async () => {
     if (!storeId) return
@@ -202,6 +243,27 @@ export default function HistoricalCosts({ storeId }) {
           <button style={{ ...S.btn('secondary'), opacity: busy ? 0.6 : 1 }} onClick={unlock} disabled={busy}>🔓 Unlock to recompute</button>
         ) : (
           <button style={{ ...S.btn('primary'), opacity: busy ? 0.6 : 1 }} onClick={compute} disabled={busy}>{busy ? '⏳ Computing…' : `Compute from last ${WINDOW_DAYS} days`}</button>
+        )}
+      </div>
+
+      {/* Real fees/refunds from the Finances API — overrides the modelled estimate
+          for any sale eBay still has financial records for (≈4 years back). */}
+      <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 4 }}>💳 Real eBay fees &amp; refunds</div>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>
+          Pulls actual fees &amp; refunds from eBay’s Finances API across your whole history and writes them onto matching sales (by order + line). Sales with a real figure use it instead of the modelled estimate; unmatched orders are skipped. Safe to re-run.
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {feeBusy
+            ? <button style={S.btn('danger')} onClick={() => { feeCancel.current = true }}>Stop</button>
+            : <button style={{ ...S.btn('secondary'), opacity: busy ? 0.6 : 1 }} onClick={backfillFees} disabled={busy}>Backfill real fees &amp; refunds</button>}
+          {feeMsg && <span style={{ fontSize: 12, color: C.muted }}>⏳ {feeMsg}</span>}
+        </div>
+        {feeResult && (
+          <div style={{ fontSize: 12, color: C.green, background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 8, padding: '8px 12px', marginTop: 10 }}>
+            ✓ {feeResult.windows} windows · {feeResult.updated} sale lines updated · {fmt(feeResult.feeTotal)} fees · {fmt(feeResult.refundTotal)} refunds{feeResult.cancelled ? ' (stopped)' : ''}.
+            <span style={{ color: C.muted }}> Reload to see updated figures.</span>
+          </div>
         )}
       </div>
 
