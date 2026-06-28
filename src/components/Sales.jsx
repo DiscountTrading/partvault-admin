@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { C, S, fmt, partEffectiveCost, estimateCostBasis, storageCostFor } from '../lib/constants'
+import { C, S, fmt, partEffectiveCost, estimateCostBasis, storageCostFor, storageConfigured } from '../lib/constants'
 
 const PERIODS = [[30, '30d'], [90, '90d'], [365, '12mo'], [0, 'All']]
 const RENDER_CAP = 400
@@ -26,15 +26,24 @@ function deriveSale(s, partById, costing) {
     const b = estimateCostBasis(p, costing, 0, 0)
     const c = p.costs || {}
     const manualPost = +c.postage || 0
-    breakdown = {
-      Purchase: (+c.acquisition || 0) + (+c.carShare || 0) + b.baseCost,
-      Admin: b.admin, Labour: b.labour,
-      Storage: storageCostFor(p, costing).value,
-      Postage: manualPost > 0 ? manualPost : b.postage,
+    // Name every component so the breakdown sums to Cost with no mystery bucket:
+    // recorded per-part costs (acquisition/carShare/labour/admin/packaging/holding/
+    // storage) PLUS the estimated supplements (baseCost/labour/admin/postage/storage),
+    // exactly as partEffectiveCost combines them. Any residual "Other" = an unexpected
+    // cost key on the part (e.g. a legacy ebay_fees that shouldn't be in COGS).
+    const cat = {
+      Purchase:  (+c.acquisition || 0) + (+c.carShare || 0) + b.baseCost,
+      Labour:    (+c.labour || 0) + b.labour,
+      Admin:     (+c.admin || 0) + b.admin,
+      Storage:   storageConfigured(costing) ? storageCostFor(p, costing).value : (+c.storage || 0),
+      Postage:   manualPost > 0 ? manualPost : b.postage,
+      Packaging: (+c.packaging || 0),
+      Holding:   (+c.holding || 0),
     }
-    const known = Object.values(breakdown).reduce((a, v) => a + v, 0)
+    const known = Object.values(cat).reduce((a, v) => a + v, 0)
     const other = Math.round((cost - known) * 100) / 100
-    if (other > 0.01) breakdown.Other = other          // recorded costs outside the 5 buckets
+    if (other > 0.01) cat.Other = other
+    breakdown = Object.fromEntries(Object.entries(cat).filter(([, v]) => Math.abs(v) > 0.005))
   } else if (hc) {
     breakdown = { Purchase: +hc.purchase || 0, Admin: +hc.admin || 0, Labour: +hc.labour || 0, Storage: +hc.storage || 0,
       Postage: +s.shipCost > 0 ? +s.shipCost : (+hc.postage || 0) } // real label cost wins
