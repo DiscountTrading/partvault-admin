@@ -2530,7 +2530,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                   {syncingAll ? '⏳ Syncing…' : '🔄 Sync now'}
                 </button>
                 <div style={{ fontSize: 11, color: C.muted, marginTop: 5 }}>
-                  Imports listings, sold orders &amp; fees, then reconciles — read-only, and keeps running in the background even if you leave this page.
+                  One pass to match eBay: imports listings, sold orders &amp; fees, fills make/model from titles, then reconciles &amp; auto-resolves ended/sold items. Read-only; keeps running in the background even if you leave this page.
                 </div>
               </div>
               {syncPhase && (
@@ -2568,20 +2568,8 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
               <div style={{ fontSize: 11, color: C.green, marginBottom: 8 }}>🌙 Auto-syncs every night around midnight (Sydney) — no need to click unless you want an update now.</div>
 
               <button onClick={() => setShowAdvSync(v => !v)} style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12, padding: '2px 0', marginBottom: showAdvSync ? 10 : 4 }}>
-                {showAdvSync ? '▴ Hide advanced tools' : '⚙ Advanced tools (run a single step)'}
+                {showAdvSync ? '▴ Hide one-time & maintenance tools' : '⚙ One-time & maintenance tools'}
               </button>
-
-              {showAdvSync && (
-              <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-                <button style={{ ...S.btn('secondary'), flex: 1, minWidth: 200, opacity: (syncingAll || !ebayConnected) ? 0.6 : 1 }} onClick={quickSync} disabled={syncingAll || importing || backfilling || reconciling || !ebayConnected} title="Skip listing import — just sold orders, fees & reconcile (~30s). Runs client-side.">
-                  ⚡ Quick sync (sold + fees + reconcile)
-                </button>
-                <button style={{ ...S.btn('secondary'), flex: 1, minWidth: 200, opacity: (importing || syncingAll || !ebayConnected) ? 0.6 : 1 }} onClick={importAllListings} disabled={importing || syncingAll || !ebayConnected}>
-                  {importing ? '⏳ Importing...' : '📥 Import listings only'}
-                </button>
-                {importing && <button style={S.btn('danger')} onClick={cancelImport}>Cancel</button>}
-              </div>
-              )}
 
               {/* Maintenance tools — compact rows */}
               {showAdvSync && (

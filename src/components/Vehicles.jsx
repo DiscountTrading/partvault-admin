@@ -1,7 +1,6 @@
 import { useState, useMemo, useCallback } from 'react'
 import { C, S, fmt, totalCost, estimateCostBasis, partEffectiveCost, storageCostFor, storageConfigured } from '../lib/constants'
 import { parseVehicle } from '../lib/vehicles'
-import { sb } from '../lib/supabase'
 
 // ============================================================================
 // Vehicle analytics — which donor cars and which makes/models actually make
@@ -84,13 +83,11 @@ const withScores = (rows) => {
   })
 }
 
-export default function Vehicles({ parts = [], cars = [], sales = [], costing = {}, onRefresh }) {
+export default function Vehicles({ parts = [], cars = [], sales = [], costing = {} }) {
   const [level, setLevel] = useState('models') // 'models' | 'cars'
   const [carSort, setCarSort] = useState({ key: 'score', dir: 'desc' })
   const [modelSort, setModelSort] = useState({ key: 'score', dir: 'desc' })
   const [query, setQuery] = useState('')
-  const [parsing, setParsing] = useState(false)
-  const [parseMsg, setParseMsg] = useState('')
   // Which data sources to include. PartVault = manually-created parts; eBay API =
   // synced listing imports (source='ebay_import'); Imported history = the CSV
   // Orders-report sales (no part/car — folded into By-model via title parsing).
@@ -235,52 +232,8 @@ export default function Vehicles({ parts = [], cars = [], sales = [], costing = 
   const scoredCars = useMemo(() => withScores(carRows), [carRows])
   const scoredModels = useMemo(() => withScores(modelRows), [modelRows])
 
-  // Backfill make/model/year onto parts that have none, by parsing the title.
-  // Only fills blanks (never overwrites a set make), so it's safe to re-run.
-  const runParse = async () => {
-    setParsing(true); setParseMsg('Reading titles…')
-    // Target parts with no make, plus eBay-imported parts (uncurated) so we can
-    // refresh their year to the full range. Never overwrites a curated make/model,
-    // and only upgrades a year (blank → value, or single → range) so we don't
-    // fight a deliberately-specific year.
-    const targets = parts.filter(p => !p.deletedAt && (!(p.make || '').trim() || !(p.model || '').trim() || p.source === 'ebay_import'))
-    const updates = []
-    const unmatched = []
-    for (const p of targets) {
-      const blankMake = !(p.make || '').trim()
-      const v = parseVehicle(p.title || '')
-      const patch = {}
-      if (blankMake && v.make) patch.make = v.make
-      if (!(p.model || '').trim() && v.model) patch.model = v.model
-      if (v.year && v.year !== (p.year || '') && (v.year.includes('-') || !(p.year || '').trim())) patch.year = v.year
-      if (Object.keys(patch).length) updates.push({ id: p.id, ...patch })
-      else if (blankMake && !v.make && p.title) unmatched.push(p.title)
-    }
-    // Log every unmatched title to the console so we can widen the lists, and
-    // keep a few on screen.
-    if (unmatched.length) console.log(`[parse] ${unmatched.length} unmatched titles:`, unmatched)
-    const sample = unmatched.slice(0, 8).map(s => `“${s.slice(0, 60)}”`).join('  ·  ')
-    if (updates.length === 0) {
-      setParseMsg(`No make matched from ${targets.length} titles. Examples: ${sample}`); setParsing(false); return
-    }
-    // Per-row UPDATE (not upsert — upsert's INSERT path trips parts' NOT NULL
-    // columns like sku). Bounded concurrency keeps it fast without flooding.
-    let done = 0, failed = 0
-    const CONC = 25
-    for (let i = 0; i < updates.length; i += CONC) {
-      const batch = updates.slice(i, i + CONC)
-      const errs = await Promise.all(batch.map(({ id, ...patch }) =>
-        sb.from('parts').update(patch).eq('id', id)
-          .then(({ error }) => { if (error) console.error('[parse] update failed', id, error.message); return error ? 1 : 0 })
-      ))
-      failed += errs.reduce((a, b) => a + b, 0)
-      done += batch.length
-      setParseMsg(`Updating ${done}/${updates.length}…`)
-    }
-    setParseMsg(`Done — updated ${updates.length - failed} parts (make/model/year range)${failed ? `, ${failed} write errors (see console)` : ''}, ${unmatched.length} still without a make${unmatched.length ? ' (see console)' : ''}. Refreshing…`)
-    setParsing(false)
-    onRefresh && onRefresh()
-  }
+  // Make/model parsing now runs server-side inside every Sync (Settings → eBay),
+  // so there's no manual parse button here any more.
 
   const q = query.trim().toLowerCase()
   const filteredCars = q ? scoredCars.filter(r => r.name.toLowerCase().includes(q)) : scoredCars
@@ -355,14 +308,14 @@ export default function Vehicles({ parts = [], cars = [], sales = [], costing = 
         <Card label="Revenue (all sales)" value={money(summary.revenue)} color={C.accent} />
         <Card label="Est. profit" value={money(summary.estProfit)} sub={summary.revenue > 0 ? `${Math.round((summary.estProfit / summary.revenue) * 100)}% margin` : null} color={summary.estProfit >= 0 ? C.green : C.red} />
         <Card label="Donor cars tracked" value={summary.cars} sub="with purchase price" color={C.blue} />
-        <Card label="Parts without make" value={summary.unparsed} sub={`of ${summary.total} — parse to fill`} color={summary.unparsed > 0 ? C.yellow : C.green} />
+        <Card label="Parts without make" value={summary.unparsed} sub={`of ${summary.total} — filled by Sync`} color={summary.unparsed > 0 ? C.yellow : C.green} />
       </div>
 
       {summary.unparsed > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', background: C.yellow + '14', border: `1px solid ${C.yellow}55`, borderRadius: 10, padding: '12px 16px', marginBottom: 16 }}>
           <span style={{ fontSize: 13, color: C.text, flex: 1, minWidth: 220 }}>
-            <strong>{summary.unparsed}</strong> parts (mostly eBay imports) have no make, so they don't roll up by model.
-            Use <strong>✨ Parse from titles</strong> below to populate them.
+            <strong>{summary.unparsed}</strong> parts (mostly eBay imports) have no make yet, so they don't roll up by model.
+            The next <strong>🔄 Sync</strong> fills make/model from their titles automatically.
           </span>
         </div>
       )}
@@ -385,11 +338,6 @@ export default function Vehicles({ parts = [], cars = [], sales = [], costing = 
           ))}
         </div>
         <div style={{ flex: 1 }} />
-        {parseMsg && <span style={{ fontSize: 12, color: C.muted, maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={parseMsg}>{parseMsg}</span>}
-        <button onClick={runParse} disabled={parsing} title="Fill missing make/model and refresh year ranges from part titles"
-          style={{ ...S.btn(summary.unparsed > 0 ? 'primary' : 'secondary'), padding: '7px 12px', fontSize: 12, opacity: parsing ? 0.6 : 1 }}>
-          {parsing ? '⏳ Parsing…' : summary.unparsed > 0 ? '✨ Parse from titles' : '↻ Re-parse titles'}
-        </button>
         <input value={query} onChange={e => setQuery(e.target.value)} placeholder={isModels ? 'Search models…' : 'Search vehicles…'}
           style={{ ...S.input, marginBottom: 0, padding: '7px 12px', width: 180 }} />
       </div>

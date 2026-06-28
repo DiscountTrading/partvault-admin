@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.19.2'
+const EDGE_FN_VERSION         = '3.20.0'
 const CHUNK_SIZE              = 20
 // eBay's getOrders can't return orders older than this, so the live sync only ever
 // manages sales within this window. The CSV history import must stay strictly OLDER
@@ -24,6 +24,87 @@ const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000
 const FUNCTION_TIMEOUT_MS     = 45 * 1000 // safety net; the chunk soft-limits at ~18s
 const EBAY_TOKEN_URL          = 'https://api.ebay.com/identity/v1/oauth2/token'
 const EBAY_SCOPES = 'https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.inventory.readonly https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly https://api.ebay.com/oauth/api_scope/sell.finances https://api.ebay.com/oauth/api_scope/sell.account.readonly'
+
+// ── Vehicle title parser (server copy of src/lib/vehicles.js) ─────────────────
+// Recovers make/model/year from an eBay title so the sync can fill them in itself.
+// Keep in sync with the client copy if the lists change.
+const MAKES = ['Toyota','Ford','Holden','Mazda','Hyundai','Kia','Mitsubishi','Nissan','Subaru','Honda','Volkswagen','BMW','Mercedes-Benz','Audi','Land Rover','Isuzu','Suzuki','Lexus','Jeep','Volvo','Renault','Peugeot','Citroen','Skoda','Fiat','Alfa Romeo','MINI','Porsche','Jaguar','Chrysler','Dodge','MG','LDV','GWM','Haval','Chery','SsangYong','Daihatsu','Proton','Tesla','Genesis','Saab','Other']
+const MODEL_SUGS: Record<string, string[]> = {
+  Toyota:['Hilux','Camry','Corolla','RAV4','LandCruiser','LandCruiser 200','LandCruiser 79','Prado','HiAce','Kluger','Yaris','Aurion','C-HR','86','Fortuner','Tarago','Echo','Avensis','FJ Cruiser','Rukus','Supra','Granvia'],
+  Ford:['Ranger','Falcon','Territory','Focus','Fiesta','Escape','Explorer','Mustang','Transit','Mondeo','Kuga','Everest','Endura','Puma','Ecosport','Courier','Laser','Fairmont','Fairlane','Festiva'],
+  Holden:['Commodore','Colorado','Trax','Captiva','Cruze','Astra','Barina','Trailblazer','Calais','Caprice','Statesman','Crewman','Rodeo','Epica','Viva','Spark','Acadia','Equinox','Malibu','Ute','Berlina','Monaro'],
+  Mazda:['CX-5','CX-3','CX-9','CX-7','CX-8','CX-30','Mazda2','Mazda3','Mazda6','BT-50','MX-5','RX-7','RX-8','121','323','626','Tribute','Premacy','Bravo'],
+  Hyundai:['i30','Tucson','Santa Fe','i20','i40','Accent','Elantra','Sonata','ix35','Kona','Getz','Veloster','iLoad','iMax','Palisade','Venue','Staria','Terracan','Excel','Iload'],
+  Kia:['Sportage','Cerato','Rio','Sorento','Carnival','Stinger','Seltos','Picanto','Soul','Spectra','Optima','Niro','EV6','Grand Carnival','Magentis'],
+  Mitsubishi:['Triton','ASX','Outlander','Eclipse Cross','Pajero','Pajero Sport','Lancer','Mirage','Magna','Express','380','Challenger','Colt','Grandis','Verada','Outlander PHEV'],
+  Nissan:['Navara','X-Trail','Patrol','Pathfinder','Qashqai','Pulsar','Skyline','Micra','Maxima','350Z','370Z','Murano','Juke','Dualis','Tiida','Almera','Cube','Leaf','Elgrand','Note','GT-R'],
+  Subaru:['Forester','Outback','Impreza','Liberty','WRX','BRZ','XV','Tribeca','Levorg','Crosstrek','Exiga'],
+  Honda:['CR-V','HR-V','Jazz','Civic','Accord','City','Odyssey','Legend','Integra','S2000','NSX','Insight','Accord Euro','CR-Z','MDX'],
+  Volkswagen:['Golf','Polo','Tiguan','Passat','Amarok','Caddy','Transporter','Touareg','Jetta','Beetle','Multivan','Crafter','T-Cross','T-Roc','Up','Eos','Scirocco','Bora'],
+  BMW:['1 Series','2 Series','3 Series','4 Series','5 Series','6 Series','7 Series','8 Series','X1','X2','X3','X4','X5','X6','X7','Z4','M3','M5','i3'],
+  'Mercedes-Benz':['A-Class','B-Class','C-Class','E-Class','S-Class','CLA','CLS','GLA','GLB','GLC','GLE','GLS','ML','GL','Vito','Sprinter','V-Class','Valente','SLK','Viano'],
+  Audi:['A1','A3','A4','A5','A6','A7','A8','Q2','Q3','Q5','Q7','Q8','TT','S3','RS3','S4','S5'],
+  'Land Rover':['Discovery','Discovery Sport','Range Rover','Range Rover Sport','Range Rover Evoque','Range Rover Velar','Defender','Freelander'],
+  Isuzu:['D-Max','MU-X','NPR','NLR','FRR'],
+  Suzuki:['Swift','Vitara','Grand Vitara','Jimny','Baleno','Ignis','S-Cross','Alto','SX4','Liana','APV','Kizashi'],
+  Lexus:['RX','NX','GX','IS','ES','LS','UX','LC','RC','CT','LX'],
+  Jeep:['Wrangler','Cherokee','Grand Cherokee','Compass','Renegade','Patriot'],
+  Volvo:['XC90','XC60','XC40','S60','S90','V40','V60','XC70','C30','S40','V50'],
+  Renault:['Megane','Clio','Koleos','Trafic','Master','Captur','Kangoo','Scenic','Latitude'],
+  Peugeot:['208','308','3008','2008','5008','partner','expert','boxer','207','206','307','4007','508'],
+  Citroen:['C3','C4','C5','Berlingo','Dispatch','Relay','C4 Aircross'],
+  Skoda:['Octavia','Fabia','Superb','Kodiaq','Karoq','Rapid','Yeti','Kamiq'],
+  Fiat:['500','Ducato','Punto','Doblo','Scudo','Freemont'],
+  'Alfa Romeo':['Giulietta','Giulia','Stelvio','159','Mito','147'],
+  MINI:['Cooper','Countryman','Clubman','Paceman'],
+  Porsche:['Cayenne','Macan','911','Panamera','Boxster','Cayman'],
+  Jaguar:['XF','XE','XJ','F-Pace','E-Pace','F-Type','S-Type','X-Type'],
+  Chrysler:['300C','300','Sebring','Grand Voyager','PT Cruiser'],
+  Dodge:['Journey','Caliber','Nitro','Ram'],
+  MG:['ZS','MG3','HS','MG6','GS','ZST','MG5'],
+  LDV:['G10','T60','V80','Deliver 9','D90','G10+'],
+  GWM:['Cannon','Ute','H6','Jolion','Steed','V200','X240'],
+  Haval:['H6','H2','H9','Jolion'],
+  Chery:['Tiggo','J11','J3','Omoda'],
+  SsangYong:['Musso','Rexton','Korando','Actyon','Stavic'],
+  Daihatsu:['Sirion','Terios','Charade','YRV','Cuore'],
+  Proton:['Gen-2','Persona','Jumbuck','Satria'],
+  Tesla:['Model 3','Model Y','Model S','Model X'],
+  Genesis:['G70','G80','GV70','GV80'],
+  Saab:['9-3','9-5'],
+}
+const MAKE_ALIASES: Record<string, string> = {
+  vw:'Volkswagen', volkswagon:'Volkswagen', 'volks wagen':'Volkswagen',
+  mercedes:'Mercedes-Benz', merc:'Mercedes-Benz', benz:'Mercedes-Benz', 'mercedes benz':'Mercedes-Benz', 'merc benz':'Mercedes-Benz',
+  landrover:'Land Rover', 'range rover':'Land Rover', rangerover:'Land Rover',
+  chevrolet:'Holden', chev:'Holden', chevy:'Holden', vauxhall:'Holden', hsv:'Holden',
+  'great wall':'GWM', greatwall:'GWM', 'ssang yong':'SsangYong', alfa:'Alfa Romeo', alfaromeo:'Alfa Romeo', volvo:'Volvo',
+}
+const SKIP_DIRECT = new Set(['MINI'])
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const tokenRe = (tok: string) => new RegExp('\\b' + escapeRe(tok.toLowerCase())
+  .replace(/[-\s]+/g, '[-\\s]?').replace(/([a-z])(\d)/g, '$1[-\\s]?$2').replace(/(\d)([a-z])/g, '$1[-\\s]?$2') + '\\b')
+function parseYearRange(title = ''): string {
+  let years = [...title.matchAll(/\b(19[5-9]\d|20[0-4]\d)\b/g)].map(m => +m[1])
+  if (!years.length) years = [...title.matchAll(/\b\d{1,2}\/(\d{2})\b/g)].map(m => { const n = +m[1]; return n <= 49 ? 2000 + n : 1900 + n })
+  if (!years.length) return ''
+  const lo = Math.min(...years), hi = Math.max(...years)
+  return lo === hi ? String(lo) : `${lo}-${hi}`
+}
+function parseVehicle(title = ''): { make: string; model: string; year: string } {
+  const t = (title || '').toLowerCase()
+  let make = '', makeIdx = Infinity
+  for (const mk of MAKES) { if (mk === 'Other' || SKIP_DIRECT.has(mk)) continue; const idx = t.search(tokenRe(mk)); if (idx >= 0 && idx < makeIdx) { make = mk; makeIdx = idx } }
+  for (const [alias, mk] of Object.entries(MAKE_ALIASES)) { const idx = t.search(tokenRe(alias)); if (idx >= 0 && idx < makeIdx) { make = mk; makeIdx = idx } }
+  let model = ''
+  const matchModel = (mk: string) => { const cands = (MODEL_SUGS[mk] || []).slice().sort((a, b) => b.length - a.length); for (const md of cands) if (tokenRe(md).test(t)) return md; return '' }
+  if (make) model = matchModel(make)
+  if (!model) {
+    const all = Object.entries(MODEL_SUGS).flatMap(([mk, ms]) => ms.map(md => [mk, md] as [string, string])).filter(([, md]) => md.length >= 3).sort((a, b) => b[1].length - a[1].length)
+    for (const [mk, md] of all) { if (tokenRe(md).test(t)) { model = md; if (!make) make = mk; break } }
+  }
+  return { make, model, year: parseYearRange(title) }
+}
 
 const CATEGORY_ID_MAP: Record<string, string> = {
   '33549':'Air & Fuel Delivery','33542':'Air Conditioning & Heating',
@@ -953,8 +1034,12 @@ async function handleRequest(req: Request): Promise<Response> {
               if (c.error && c.retry) continue
               if (c.error) throw new Error(c.error)
               await save({ detail: `import ${c.offset}/${c.total} · ${c.imported} new, ${c.skipped} existing, ${c.failed} failed` })
-              if (c.isComplete || c.status === 'completed') { phase = 'backfill'; await save({ phase }) }
+              if (c.isComplete || c.status === 'completed') { phase = 'parse'; await save({ phase }) }
             }
+          } else if (phase === 'parse') {
+            const pr = await selfCall({ action: 'parse_titles', storeId })
+            phase = 'backfill'
+            await save({ phase, detail: `parse: ${pr.updated ?? 0} make/model filled` })
           } else if (phase === 'backfill') {
             bRes = await selfCall({ action: 'import_sold_orders', storeId, days: 120 })
             phase = 'fees'
@@ -1830,6 +1915,35 @@ async function handleRequest(req: Request): Promise<Response> {
         if (c.isComplete || c.status === 'completed') break
       }
       return json({ ok: true, version: EDGE_FN_VERSION, checked: recent.length, missing: missing.length, imported, failed })
+    }
+
+    // Fill blank make/model (and a missing year) from the part title — one bounded,
+    // local pass per call (no eBay calls). Runs as a sync phase so every sync keeps
+    // the catalogue's vehicle fields current; newest parts first.
+    if (action === 'parse_titles') {
+      const { data: parts } = await sb.from('parts')
+        .select('id, title, make, model, year')
+        .eq('store_id', storeId).is('deleted_at', null)
+        .or('make.is.null,make.eq.,model.is.null,model.eq.')
+        .order('created_at', { ascending: false })
+        .limit(500)
+      const updates: Array<{ id: string; patch: any }> = []
+      for (const p of (parts ?? [])) {
+        const blankMake = !(p.make || '').trim(), blankModel = !(p.model || '').trim()
+        if (!blankMake && !blankModel) continue
+        const v = parseVehicle(p.title || '')
+        const patch: any = {}
+        if (blankMake && v.make) patch.make = v.make
+        if (blankModel && v.model) patch.model = v.model
+        if (!(p.year || '').trim() && v.year) patch.year = v.year
+        if (Object.keys(patch).length) updates.push({ id: p.id, patch })
+      }
+      let updated = 0
+      for (let i = 0; i < updates.length; i += 25) {
+        await Promise.all(updates.slice(i, i + 25).map(({ id, patch }) =>
+          sb.from('parts').update(patch).eq('id', id).then(({ error }: any) => { if (!error) updated++ })))
+      }
+      return json({ ok: true, version: EDGE_FN_VERSION, scanned: (parts ?? []).length, updated })
     }
 
     if (action === 'reconcile') {
