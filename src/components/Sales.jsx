@@ -179,9 +179,9 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
 }
 
 // One line in the breakdown popup. Module-scoped so it isn't redefined per render.
-function BRow({ label, val, sign = '−', strong, color, top }) {
+function BRow({ label, val, sign = '−', strong, color, top, doubleBottom }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 24, padding: '5px 0', borderTop: top ? `1px solid ${C.border}` : 'none', fontWeight: strong ? 700 : 400, color: color || C.text }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 24, padding: '5px 0', borderTop: top ? `1px solid ${C.border}` : 'none', borderBottom: doubleBottom ? `3px double ${C.border}` : 'none', fontWeight: strong ? 700 : 400, color: color || C.text }}>
       <span>{label}</span>
       <span>{val < 0 ? `(${fmt(Math.abs(val))})` : `${sign === '+' ? '' : sign}${fmt(val)}`}</span>
     </div>
@@ -211,7 +211,7 @@ function CostBreakdown({ detail, onClose }) {
             <BRow key={k} label={k} val={+v || 0} color={C.red} />
           ))}
           <BRow label="Total cost" val={d.cost || 0} color={C.red} top />
-          <BRow label="Profit" val={d.profit} sign="+" strong top color={d.profit >= 0 ? C.green : C.red} />
+          <BRow label="Profit" val={d.profit} sign="+" strong top doubleBottom color={d.profit >= 0 ? C.green : C.red} />
         </div>
       </div>
     </div>
