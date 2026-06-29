@@ -178,9 +178,9 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
                   <td style={td('right')}>{s.quantity}</td>
                   <td style={td('right')}>{fmt(s.soldPrice)}</td>
                   <td style={td('right')}>{s.shipping ? fmt(s.shipping) : '—'}</td>
-                  <td style={{ ...td('right'), color: C.red, cursor: d.feeBreakdown ? 'pointer' : 'default', textDecoration: d.feeBreakdown ? 'underline dotted' : 'none' }}
-                      title={d.feeBreakdown ? 'Click for breakdown' : ''}
-                      onClick={() => d.feeBreakdown && setDetail({ title, sub: `${sku} · ${fmtDate(s.soldAt)}`, entries: d.feeBreakdown, totalLabel: 'Total eBay fee', totalValue: d.fee })}>
+                  <td style={{ ...td('right'), color: C.red, cursor: d.fee ? 'pointer' : 'default', textDecoration: d.fee ? 'underline dotted' : 'none' }}
+                      title={d.fee ? 'Click for breakdown' : ''}
+                      onClick={() => d.fee && setDetail({ title, sub: `${sku} · ${fmtDate(s.soldAt)}`, entries: d.feeBreakdown || {}, totalLabel: 'Total eBay fee', totalValue: d.fee })}>
                     {d.fee ? '−' + fmt(d.fee) : '—'}
                   </td>
                   <td style={{ ...td('right'), fontWeight: 600 }}>{fmt(d.net)}</td>
