@@ -202,16 +202,10 @@ function CostBreakdown({ detail, onClose }) {
         <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>{sku} · {fmtDate(s.soldAt)} {matched ? '' : '· cost from imported snapshot'}</div>
 
         <div style={{ fontSize: 13 }}>
-          <BRow label="Sale price" val={+s.soldPrice || 0} sign="+" />
-          {(+s.shipping || 0) > 0 && <BRow label="Shipping received" val={+s.shipping} sign="+" />}
-          {(+s.refund || 0) > 0 && <BRow label="Refund" val={+s.refund} color={C.red} />}
-          {(d.fee || 0) > 0 && <BRow label="eBay fee" val={d.fee} color={C.red} />}
-          <BRow label="Net" val={d.net} sign="+" strong top />
           {d.breakdown && Object.entries(d.breakdown).map(([k, v]) => (
             <BRow key={k} label={k} val={+v || 0} color={C.red} />
           ))}
-          <BRow label="Total cost" val={d.cost || 0} color={C.red} top />
-          <BRow label="Profit" val={d.profit} sign="+" strong top doubleBottom color={d.profit >= 0 ? C.green : C.red} />
+          <BRow label="Total cost" val={d.cost || 0} strong top doubleBottom color={C.red} />
         </div>
       </div>
     </div>
