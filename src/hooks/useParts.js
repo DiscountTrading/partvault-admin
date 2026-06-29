@@ -16,6 +16,8 @@ const mapRow = r => ({
   listedDate: r.listed_date||null, soldDate: r.sold_date||null,
   deletedAt: r.deleted_at||null, createdAt: r.created_at,
   car_id: r.car_id||null, source: r.source||null,
+  updatedAt: r.updated_at||null,        // optimistic-concurrency stamp
+
   ai_assessed: r.ai_assessed||false,
   ebayOverrides: r.ebay_overrides||null,
   removalMinutes: r.removal_minutes ?? null,
@@ -125,9 +127,15 @@ export function useParts(storeId) {
   }
 
   const editPart = async p => {
-    const { error } = await sb.from('parts').update(mapToRow(p)).eq('id', p.id)
-    if (!error) setParts(ps => ps.map(x => x.id===p.id ? {...x,...mapRow({...x,...mapToRow(p)})} : x))
-    else throw error
+    // Optimistic concurrency: only update if the row hasn't changed since it was
+    // loaded. If updated_at no longer matches, someone else saved first → reject
+    // (don't silently overwrite their change).
+    let q = sb.from('parts').update(mapToRow(p)).eq('id', p.id)
+    if (p.updatedAt) q = q.eq('updated_at', p.updatedAt)
+    const { data, error } = await q.select()
+    if (error) throw error
+    if (!data || !data.length) { const e = new Error('Part was changed by someone else'); e.code = 'STALE'; throw e }
+    setParts(ps => ps.map(x => x.id===p.id ? mapRow(data[0]) : x))
   }
 
   const softDelete = async id => {

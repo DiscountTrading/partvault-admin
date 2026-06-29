@@ -876,7 +876,16 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
 
   if (showForm) return (
     <PartForm part={editingPart} cars={cars} storeId={storeId} aiSettings={aiSettings} footer={footer} costing={costing} labels={labels} allParts={parts}
-      onSave={async p => { editingPart?await onEdit({...editingPart,...p}):await onAdd(p); setShowForm(false); setEditingPart(null) }}
+      onSave={async p => {
+        try {
+          if (editingPart) await onEdit({ ...editingPart, ...p }); else await onAdd(p)
+          setShowForm(false); setEditingPart(null)
+        } catch (e) {
+          if (e?.code === 'STALE') { alert('This part was changed by someone else since you opened it.\n\nYour edits have NOT been saved. Close and reopen the part to see their changes, then re-apply yours.') }
+          else { alert('Save failed: ' + (e?.message || 'unknown error')); }
+          // keep the form open so edits aren't lost
+        }
+      }}
       onSaveAndAdd={handleSaveAndAdd}
       onCancel={() => { setShowForm(false); setEditingPart(null) }}
     />
