@@ -54,12 +54,16 @@ export function useSales(storeId) {
 
   useEffect(() => {
     fetch()
+    // Debounce so a bulk write (sync / fee backfill = many row events) triggers a
+    // single refetch instead of one per row. Requires ebay_sales in the realtime
+    // publication (see migration) — otherwise the UI needs a manual reload.
+    let t
     const ch = sb.channel(`admin-sales-${storeId || 'none'}`)
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'ebay_sales', filter: storeId ? `store_id=eq.${storeId}` : undefined },
-        () => fetch())
+        () => { clearTimeout(t); t = setTimeout(fetch, 1000) })
       .subscribe()
-    return () => { sb.removeChannel(ch) }
+    return () => { clearTimeout(t); sb.removeChannel(ch) }
   }, [storeId, fetch])
 
   return { sales, loading, refetchSales: fetch }

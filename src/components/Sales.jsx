@@ -84,6 +84,7 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
   const [period, setPeriod] = useState(90)
   const [query, setQuery] = useState('')
   const [detail, setDetail] = useState(null) // sale whose cost breakdown is open
+  const [limit, setLimit] = useState(RENDER_CAP)
 
   const partById = useMemo(() => new Map(parts.filter(p => !p.deletedAt).map(p => [p.id, p])), [parts])
 
@@ -110,7 +111,34 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
     return a
   }, { gross: 0, refunds: 0, fees: 0, net: 0, cogs: 0, matched: 0 }), [rows, partById, costing])
 
-  const shown = rows.slice(0, RENDER_CAP)
+  const shown = rows.slice(0, limit)
+
+  // Export the currently-filtered rows (all of them, not just those rendered) to CSV.
+  const exportCsv = () => {
+    const esc = (v) => { const x = String(v ?? ''); return /[",\n]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x }
+    const header = ['Date', 'Item', 'SKU', 'Qty', 'Sale', 'Shipping', 'Fee', 'Refund', 'Net', 'Cost', 'Profit', 'Source']
+    const lines = [header.join(',')]
+    for (const s of rows) {
+      const d = deriveSale(s, partById, costing)
+      const p = d.p
+      lines.push([
+        s.soldAt ? new Date(s.soldAt).toISOString().slice(0, 10) : '',
+        p ? (p.title || '') : (s.title || ''),
+        p ? (p.sku || '') : (s.sku || ''),
+        s.quantity ?? 1,
+        (+s.soldPrice || 0).toFixed(2), (+s.shipping || 0).toFixed(2),
+        (d.fee || 0).toFixed(2), (+s.refund || 0).toFixed(2), (d.net || 0).toFixed(2),
+        d.cost == null ? '' : d.cost.toFixed(2), d.profit == null ? '' : d.profit.toFixed(2),
+        p ? 'inventory' : (s.source === 'csv_orders_report' ? 'imported' : 'eBay only'),
+      ].map(esc).join(','))
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `partvault-sales-${new Date().toISOString().slice(0, 10)}.csv`
+    document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(a.href)
+  }
+
   const th = { textAlign: 'left', padding: '9px 12px', color: C.muted, fontWeight: 700, fontSize: 11, whiteSpace: 'nowrap' }
   const td = (align = 'left') => ({ textAlign: align, padding: '9px 12px', color: C.text, whiteSpace: 'nowrap' })
 
@@ -129,6 +157,8 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
         <div style={{ flex: 1 }} />
         <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search item or SKU…"
           style={{ ...S.input, marginBottom: 0, padding: '7px 12px', width: 220 }} />
+        <button onClick={exportCsv} disabled={!rows.length} title="Download the filtered sales as a CSV (opens in Excel)"
+          style={{ ...S.btn('secondary'), padding: '7px 12px', fontSize: 12, opacity: rows.length ? 1 : 0.5 }}>⤓ Export CSV</button>
       </div>
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
@@ -196,9 +226,17 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
           </tbody>
         </table>
       </div>
-      <div style={{ marginTop: 10, fontSize: 12, color: C.muted }}>
-        {rows.length > RENDER_CAP ? `Showing newest ${RENDER_CAP} of ${rows.length}.` : `Showing ${rows.length} sales.`}
-        {' '}Net sales = Gross sales − refunds − eBay fees. Profit = Net sales − Cost. Click a <strong>Fee</strong> or <strong>Cost</strong> figure for its breakdown (— when there's no detail).
+      <div style={{ marginTop: 10, fontSize: 12, color: C.muted, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <span>Showing {Math.min(limit, rows.length)} of {rows.length} sales.</span>
+        {rows.length > limit && (
+          <>
+            <button onClick={() => setLimit(l => l + RENDER_CAP)} style={{ ...S.btn('secondary'), padding: '4px 10px', fontSize: 12 }}>Show {Math.min(RENDER_CAP, rows.length - limit)} more</button>
+            <button onClick={() => setLimit(rows.length)} style={{ background: 'none', border: 'none', color: C.accent, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>Show all</button>
+          </>
+        )}
+      </div>
+      <div style={{ marginTop: 6, fontSize: 12, color: C.muted }}>
+        Net sales = Gross sales − refunds − eBay fees. Profit = Net sales − Cost. Click a <strong>Fee</strong> or <strong>Cost</strong> figure for its breakdown (— when there's no detail).
       </div>
 
       {detail && <BreakdownModal detail={detail} onClose={() => setDetail(null)} />}
