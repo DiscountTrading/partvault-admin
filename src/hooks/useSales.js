@@ -24,6 +24,7 @@ const mapRow = r => ({
   partId: r.part_id || null,
   source: r.source || 'api',          // 'api' (live sync) or 'csv_orders_report' (history import)
   costs: r.costs || null,             // snapshotted per-category cost for imported history
+  feeDetail: r.fee_detail || null,    // per-type eBay fee split { FEE_TYPE: amount }
 })
 
 export function useSales(storeId) {

@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.21.1'
+const EDGE_FN_VERSION         = '3.22.0'
 const CHUNK_SIZE              = 20
 // eBay's getOrders can't return orders older than this, so the live sync only ever
 // manages sales within this window. The CSV history import must stay strictly OLDER
@@ -1723,6 +1723,7 @@ async function handleRequest(req: Request): Promise<Response> {
 
       const startedAt = Date.now()
       const feeByOrder: Record<string, number> = {}
+      const feeDetailByOrder: Record<string, Record<string, number>> = {} // oid → { FEE_TYPE: amount }
       const refundByOrder: Record<string, number> = {}
       const shipByOrder: Record<string, number> = {}
       let saleFees = 0, otherFees = 0, unattributed = 0, refundTotalAll = 0, shipCostAll = 0
@@ -1758,13 +1759,32 @@ async function handleRequest(req: Request): Promise<Response> {
               const fee = +tx.totalFeeAmount?.value || 0
               if (!fee) continue
               saleFees += fee
-              if (oid) feeByOrder[oid] = (feeByOrder[oid] || 0) + fee; else unattributed += fee
+              if (oid) {
+                feeByOrder[oid] = (feeByOrder[oid] || 0) + fee
+                // Per-type detail from the line items (sums to totalFeeAmount).
+                const det = feeDetailByOrder[oid] || (feeDetailByOrder[oid] = {})
+                let lineSum = 0
+                for (const li of (tx.orderLineItems ?? [])) {
+                  for (const mf of (li.marketplaceFees ?? [])) {
+                    const a = +mf.amount?.value || 0
+                    if (!a) continue
+                    const ft = mf.feeType || 'FINAL_VALUE_FEE'
+                    det[ft] = (det[ft] || 0) + a; lineSum += a
+                  }
+                }
+                const rem = Math.round((fee - lineSum) * 100) / 100   // any unbroken-down remainder
+                if (Math.abs(rem) > 0.005) det.FINAL_VALUE_FEE = (det.FINAL_VALUE_FEE || 0) + rem
+              } else unattributed += fee
               // A SALE that was refunded usually credits the final value fee back
               // here as a negative — that nets into feeByOrder automatically.
             } else if (txType === 'NON_SALE_CHARGE') {
               if (!amt) continue
               otherFees += amt
-              if (oid) feeByOrder[oid] = (feeByOrder[oid] || 0) + amt; else unattributed += amt
+              if (oid) {
+                feeByOrder[oid] = (feeByOrder[oid] || 0) + amt
+                const det = feeDetailByOrder[oid] || (feeDetailByOrder[oid] = {})
+                det.PROMOTION = (det.PROMOTION || 0) + amt
+              } else unattributed += amt
             } else if (txType === 'REFUND') {
               if (!amt) continue
               refundTotalAll += amt
@@ -1802,13 +1822,18 @@ async function handleRequest(req: Request): Promise<Response> {
         ordersMatched++
         const totalVal = sales.reduce((a: number, s: any) => a + (+s.sold_price || 0), 0)
         const r2x = (n: number) => Math.round(n * 100) / 100
+        const det = feeDetailByOrder[oid] || null
         for (const s of sales) {
           const frac = totalVal > 0 ? (+s.sold_price || 0) / totalVal : 1 / sales.length
+          const feeDetailRow = det
+            ? Object.fromEntries(Object.entries(det).map(([k, v]) => [k, r2x(v * frac)]).filter(([, v]) => Math.abs(+v) > 0.005))
+            : null
           await sb.from('ebay_sales').update({
             fees: r2x(fee * frac),
             refund: r2x(refund * frac),
             ship_cost: r2x(ship * frac),
             refunded: refund > 0,
+            fee_detail: feeDetailRow,
             updated_at: new Date().toISOString(),
           }).eq('id', s.id)
           updated++

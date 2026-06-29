@@ -8,6 +8,17 @@ const fmtDate = t => t ? new Date(t).toLocaleDateString('en-AU', { day: 'numeric
 // Net to the seller for a line: item + shipping paid − refund − eBay fee.
 export const saleNet = s => (+s.soldPrice || 0) + (+s.shipping || 0) - (+s.refund || 0) - (+s.fees || 0)
 
+// Friendly labels for eBay fee types (from the Finances API).
+const FEE_LABELS = {
+  FINAL_VALUE_FEE: 'Final value fee',
+  FINAL_VALUE_FEE_FIXED_PER_ORDER: 'Fixed fee (per order)',
+  PROMOTION: 'Promotion / ad fee',
+  AD_FEE: 'Promotion / ad fee',
+  INTERNATIONAL_FEE: 'International fee',
+  REGULATORY_OPERATING_FEE: 'Regulatory fee',
+}
+const prettyFee = (k) => FEE_LABELS[k] || k.replace(/[_-]+/g, ' ').toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase())
+
 // Resolve a sale's money + cost from the right source: a matched inventory part
 // gives the live cost model; an imported (historical) sale uses its locked snapshot.
 // eBay fee is its own column (and in Net); Cost is goods + overhead only, so
@@ -53,7 +64,19 @@ function deriveSale(s, partById, costing) {
       Postage: +s.shipCost > 0 ? +s.shipCost : (+hc.postage || 0) } // real label cost wins
     cost = Object.values(breakdown).reduce((a, v) => a + v, 0)
   }
-  return { p, fee, net, cost, breakdown, profit: cost != null ? net - cost : null }
+  // Fee breakdown: real per-type split where we have it, else the modelled
+  // listing/promotion split for imported history.
+  let feeBreakdown = null
+  if (s.feeDetail && Object.keys(s.feeDetail).length) {
+    feeBreakdown = {}
+    for (const [k, v] of Object.entries(s.feeDetail)) if (Math.abs(+v) > 0.005) feeBreakdown[prettyFee(k)] = (feeBreakdown[prettyFee(k)] || 0) + (+v)
+  } else if (hc) {
+    const fb = {}
+    if (+hc.ebay_listing) fb['Final value fee'] = +hc.ebay_listing
+    if (+hc.promotion) fb['Promotion / ad fee'] = +hc.promotion
+    if (Object.keys(fb).length) feeBreakdown = fb
+  }
+  return { p, fee, net, cost, breakdown, feeBreakdown, profit: cost != null ? net - cost : null }
 }
 
 export default function Sales({ sales = [], parts = [], costing = {} }) {
@@ -154,11 +177,15 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
                   <td style={td('right')}>{s.quantity}</td>
                   <td style={td('right')}>{fmt(s.soldPrice)}</td>
                   <td style={td('right')}>{s.shipping ? fmt(s.shipping) : '—'}</td>
-                  <td style={{ ...td('right'), color: C.red }}>{d.fee ? '−' + fmt(d.fee) : '—'}</td>
+                  <td style={{ ...td('right'), color: C.red, cursor: d.feeBreakdown ? 'pointer' : 'default', textDecoration: d.feeBreakdown ? 'underline dotted' : 'none' }}
+                      title={d.feeBreakdown ? 'Click for breakdown' : ''}
+                      onClick={() => d.feeBreakdown && setDetail({ title, sub: `${sku} · ${fmtDate(s.soldAt)}`, entries: d.feeBreakdown, totalLabel: 'Total eBay fee', totalValue: d.fee })}>
+                    {d.fee ? '−' + fmt(d.fee) : '—'}
+                  </td>
                   <td style={{ ...td('right'), fontWeight: 600 }}>{fmt(d.net)}</td>
                   <td style={{ ...td('right'), color: d.cost == null ? '#bbb' : C.red, cursor: d.cost == null ? 'default' : 'pointer', textDecoration: d.cost == null ? 'none' : 'underline dotted' }}
                       title={d.cost == null ? '' : 'Click for breakdown'}
-                      onClick={() => d.cost != null && setDetail({ s, d, title, sku })}>
+                      onClick={() => d.cost != null && setDetail({ title, sub: `${sku} · ${fmtDate(s.soldAt)}${p ? '' : ' · cost from imported snapshot'}`, entries: d.breakdown || {}, totalLabel: 'Total cost', totalValue: d.cost || 0 })}>
                     {d.cost == null ? '—' : '−' + fmt(d.cost)}
                   </td>
                   <td style={{ ...td('right'), color: d.profit == null ? '#bbb' : d.profit >= 0 ? C.green : C.red }}>{d.profit == null ? '—' : fmt(d.profit)}</td>
@@ -170,10 +197,10 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
       </div>
       <div style={{ marginTop: 10, fontSize: 12, color: C.muted }}>
         {rows.length > RENDER_CAP ? `Showing newest ${RENDER_CAP} of ${rows.length}.` : `Showing ${rows.length} sales.`}
-        {' '}Net sales = Gross sales − refunds − eBay fees. Cost = goods + overhead (click a Cost figure for its breakdown). Profit = Net sales − Cost (— when there's no cost source).
+        {' '}Net sales = Gross sales − refunds − eBay fees. Profit = Net sales − Cost. Click a <strong>Fee</strong> or <strong>Cost</strong> figure for its breakdown (— when there's no detail).
       </div>
 
-      {detail && <CostBreakdown detail={detail} onClose={() => setDetail(null)} />}
+      {detail && <BreakdownModal detail={detail} onClose={() => setDetail(null)} />}
     </div>
   )
 }
@@ -188,24 +215,22 @@ function BRow({ label, val, sign = '−', strong, color, top, doubleBottom }) {
   )
 }
 
-// Full derivation popup for one sale: Sale → Net → each cost category → Profit.
-function CostBreakdown({ detail, onClose }) {
-  const { s, d, title, sku } = detail
-  const matched = !!d.p
+// Generic breakdown popup: lists named line items and a ruled-off total. Used for
+// both the cost breakdown and the eBay-fee breakdown.
+function BreakdownModal({ detail, onClose }) {
+  const entries = Object.entries(detail.entries || {})
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
       <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: '20px 24px', width: 380, maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 8px 30px rgba(0,0,0,0.2)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 4 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{title}</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{detail.title}</div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, lineHeight: 1, cursor: 'pointer', color: C.muted }}>×</button>
         </div>
-        <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>{sku} · {fmtDate(s.soldAt)} {matched ? '' : '· cost from imported snapshot'}</div>
-
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>{detail.sub}</div>
         <div style={{ fontSize: 13 }}>
-          {d.breakdown && Object.entries(d.breakdown).map(([k, v]) => (
-            <BRow key={k} label={k} val={+v || 0} color={C.red} />
-          ))}
-          <BRow label="Total cost" val={d.cost || 0} strong top doubleBottom color={C.red} />
+          {entries.length === 0 && <div style={{ color: C.muted, padding: '4px 0' }}>No itemised detail recorded for this sale.</div>}
+          {entries.map(([k, v]) => <BRow key={k} label={k} val={+v || 0} color={C.red} />)}
+          <BRow label={detail.totalLabel} val={detail.totalValue || 0} strong top doubleBottom color={C.red} />
         </div>
       </div>
     </div>
