@@ -47,24 +47,45 @@ export default function HistoricalCosts({ storeId }) {
         .order('sold_at', { ascending: true }).limit(1).maybeSingle()
       const earliestMs = first?.sold_at ? new Date(first.sold_at).getTime() : (Date.now() - 365 * 86400000)
       const WINDOW = 88 * 86400000
+      const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+      // Resilient per-window call: tolerate empty/truncated bodies and retry
+      // transient failures (rate limits, gateway timeouts) before giving up.
+      const callWindow = async (fromDate, toDate) => {
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            const res = await fetch(EDGE_FN, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'import_fees', storeId, fromDate, toDate }),
+            })
+            const text = await res.text()
+            let d = {}; try { d = text ? JSON.parse(text) : {} } catch { d = {} }
+            if (res.ok && !d.error) return d
+            const msg = d.error || d.message || `HTTP ${res.status}` + (text ? '' : ' (empty response)')
+            const transient = res.status === 429 || res.status >= 500 || !text || /rate limit|throttl|timeout/i.test(msg)
+            if (transient && attempt < 2) { await sleep(2000 * (attempt + 1)); continue }
+            throw new Error(msg)
+          } catch (e) {
+            if (attempt < 2) { await sleep(2000 * (attempt + 1)); continue }
+            throw e
+          }
+        }
+      }
+      let failedWindows = 0
       let end = Date.now()
       while (end > earliestMs && !feeCancel.current) {
         const start = Math.max(earliestMs, end - WINDOW)
         setFeeMsg(`${new Date(start).toLocaleDateString('en-AU', { month: 'short', year: '2-digit' })} → ${new Date(end).toLocaleDateString('en-AU', { month: 'short', year: '2-digit' })}…`)
-        const res = await fetch(EDGE_FN, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'import_fees', storeId, fromDate: new Date(start).toISOString(), toDate: new Date(end).toISOString() }),
-        })
-        const d = await res.json().catch(() => ({}))
-        if (!res.ok || d.error) throw new Error(d.error || d.message || `HTTP ${res.status}`)
-        agg.windows++
-        agg.ordersMatched += d.ordersMatched || 0
-        agg.updated += d.updated || 0
-        agg.feeTotal += +d.feeTotal || 0
-        agg.refundTotal += +d.refundTotal || 0
+        try {
+          const d = await callWindow(new Date(start).toISOString(), new Date(end).toISOString())
+          agg.windows++
+          agg.ordersMatched += d.ordersMatched || 0
+          agg.updated += d.updated || 0
+          agg.feeTotal += +d.feeTotal || 0
+          agg.refundTotal += +d.refundTotal || 0
+        } catch { failedWindows++ }   // skip this window; re-run later to retry (idempotent)
         end = start
       }
-      setFeeResult({ ...agg, cancelled: feeCancel.current })
+      setFeeResult({ ...agg, failedWindows, cancelled: feeCancel.current })
       setFeeMsg('')
     } catch (e) {
       setError(e.message || 'Fee backfill failed')
@@ -260,8 +281,9 @@ export default function HistoricalCosts({ storeId }) {
           {feeMsg && <span style={{ fontSize: 12, color: C.muted }}>⏳ {feeMsg}</span>}
         </div>
         {feeResult && (
-          <div style={{ fontSize: 12, color: C.green, background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 8, padding: '8px 12px', marginTop: 10 }}>
-            ✓ {feeResult.windows} windows · {feeResult.updated} sale lines updated · {fmt(feeResult.feeTotal)} fees · {fmt(feeResult.refundTotal)} refunds{feeResult.cancelled ? ' (stopped)' : ''}.
+          <div style={{ fontSize: 12, color: feeResult.failedWindows ? C.yellow : C.green, background: feeResult.failedWindows ? '#fffbeb' : '#ecfdf5', border: `1px solid ${feeResult.failedWindows ? '#fde68a' : '#a7f3d0'}`, borderRadius: 8, padding: '8px 12px', marginTop: 10 }}>
+            {feeResult.failedWindows ? '⚠' : '✓'} {feeResult.windows} windows · {feeResult.updated} sale lines updated · {fmt(feeResult.feeTotal)} fees · {fmt(feeResult.refundTotal)} refunds{feeResult.cancelled ? ' (stopped)' : ''}.
+            {feeResult.failedWindows > 0 && <span> {feeResult.failedWindows} window(s) skipped (rate-limited/timeout) — click again to retry them.</span>}
             <span style={{ color: C.muted }}> Reload to see updated figures.</span>
           </div>
         )}
