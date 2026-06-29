@@ -1,4 +1,4 @@
-export const APP_VERSION = '3.22.0'
+export const APP_VERSION = '3.22.1'
 
 export const C = {
   bg:'#f5f4f0', panel:'#edeae3', card:'#ffffff', border:'#ddd9d0',
@@ -231,10 +231,15 @@ export const storageConfigured = (costing = {}) =>
 // counted on top of the cost estimate rather than replacing it. `estimated` flags
 // whether any of the figure is a projection. When a storage facility is set, the
 // computed storage cost replaces the flat recorded `storage` figure.
+// eBay fees are tracked per sale (ebay_sales.fees), NOT cost of goods. Some older
+// parts have a stale `ebay_fees` stamped into costs by a previous fee-sync; exclude
+// any such key so it can never be double-counted in COGS.
+export const FEE_COST_KEYS = ['ebay_fees', 'ebayFees', 'fees']
+const feeKeyTotal = (p = {}) => FEE_COST_KEYS.reduce((a, k) => a + (+p.costs?.[k] || 0), 0)
 export const partEffectiveCost = (p = {}, costing = {}) => {
   const sc = storageCostFor(p, costing)
   const useStorage = storageConfigured(costing)
-  const recorded = totalCost(p) - (useStorage ? (+p.costs?.storage || 0) : 0)
+  const recorded = totalCost(p) - (useStorage ? (+p.costs?.storage || 0) : 0) - feeKeyTotal(p)
   const manualPost = +(p.costs?.postage) || 0
   const b = estimateCostBasis(p, costing, 0, 0) // baseCost (gated on no acquisition), labour, admin, postage
   const supplement = b.baseCost + b.labour + b.admin + (manualPost > 0 ? 0 : b.postage) + sc.value

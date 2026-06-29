@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { C, S, fmt, partEffectiveCost, estimateCostBasis, storageCostFor, storageConfigured } from '../lib/constants'
+import { C, S, fmt, partEffectiveCost, estimateCostBasis, storageCostFor, storageConfigured, FEE_COST_KEYS } from '../lib/constants'
 
 const PERIODS = [[30, '30d'], [90, '90d'], [365, '12mo'], [0, 'All']]
 const RENDER_CAP = 400
@@ -51,6 +51,7 @@ function deriveSale(s, partById, costing) {
       if (!v) continue
       if (k === 'postage') continue                 // handled with the postage estimate below
       if (k === 'storage' && useStorage) continue   // replaced by the warehouse calc below
+      if (FEE_COST_KEYS.includes(k)) continue       // eBay fees aren't COGS (tracked on the sale)
       add(pretty(k), v)
     }
     add('Purchase', b.baseCost)
