@@ -72,21 +72,24 @@ async function callDescribe(body) {
   return data
 }
 
+// Learning context so ai-assess can prefer this store's own recent examples.
+const learnCtx = (part) => ({ make: part.make || '', category: part.category || '', partId: part.id || undefined })
+
 async function generateAIDescription(part, aiSettings, footer, storeId) {
-  const data = await callDescribe({ storeId, prompt: `${descPromptCore(part, aiSettings)} Return ONLY the description text.` })
+  const data = await callDescribe({ storeId, ...learnCtx(part), prompt: `${descPromptCore(part, aiSettings)} Return ONLY the description text.` })
   return (data.text || '').trim()
 }
 
 // Several ranked description options for the seller to choose from.
 async function generateDescriptionOptions(part, aiSettings, storeId, count = 5) {
-  const data = await callDescribe({ storeId, prompt: descPromptCore(part, aiSettings), options: count })
+  const data = await callDescribe({ storeId, ...learnCtx(part), prompt: descPromptCore(part, aiSettings), options: count })
   return Array.isArray(data.descriptions) ? data.descriptions : []
 }
 
 // "Write my own → regenerate": 4 improved variants of the seller's own text.
 async function regenerateDescriptionOptions(userText, part, aiSettings, storeId) {
   const prompt = `${descPromptCore(part, aiSettings)}\n\nThe seller wrote this description:\n"${userText}"\nWrite 4 improved variants based on it — keep the same meaning/intent, improve wording and detail, ranked best first.`
-  const data = await callDescribe({ storeId, prompt, options: 4 })
+  const data = await callDescribe({ storeId, ...learnCtx(part), prompt, options: 4 })
   return Array.isArray(data.descriptions) ? data.descriptions : []
 }
 

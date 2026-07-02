@@ -35,6 +35,32 @@ const CATEGORY_TREE: Record<string, string[]> = {
 }
 const PART_CATEGORIES = Object.keys(CATEGORY_TREE)
 
+// AI learning: the store's own recent listings become a style guide. We feed a
+// few back into the prompt so new titles/descriptions match the seller's voice,
+// structure and detail — and it improves as they create/edit more parts. Prefers
+// same make, then same category, then any recent, de-duplicated.
+async function getStyleExamples(service: any, storeId: string, make?: string, category?: string, excludeId?: string) {
+  if (!storeId) return []
+  const base = () => {
+    let q = service.from('parts').select('title, description')
+      .eq('store_id', storeId).not('description', 'is', null).neq('description', '')
+      .order('updated_at', { ascending: false }).limit(6)
+    if (excludeId) q = q.neq('id', excludeId)
+    return q
+  }
+  const seen = new Set<string>()
+  const out: any[] = []
+  const add = (rows: any[]) => { for (const r of (rows || [])) { const d = String(r.description || '').trim(); if (d && !seen.has(d)) { seen.add(d); out.push({ title: r.title || '', description: d }) } } }
+  try {
+    if (make) add((await base().eq('make', make)).data)
+    if (out.length < 3 && category) add((await base().eq('category', category)).data)
+    if (out.length < 3) add((await base()).data)
+  } catch { return [] }
+  return out.slice(0, 6)
+}
+const styleBlock = (ex: any[]) =>
+  ex.length ? `\n\nMatch THIS seller's established style — tone, structure and level of detail. Examples of their recent listings:\n${ex.map((e: any) => `• ${e.title ? e.title + ': ' : ''}${String(e.description).slice(0, 400)}`).join('\n')}` : ''
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
   let body: any = null
@@ -107,8 +133,15 @@ serve(async (req) => {
     // body.options > 1, returns several ranked variants ({descriptions:[...]})
     // for the seller to pick from; otherwise a single {text}.
     if (mode === 'describe') {
-      const { prompt } = body
-      if (!prompt) return json({ error: 'prompt required' }, 400)
+      const { prompt: rawPrompt } = body
+      if (!rawPrompt) return json({ error: 'prompt required' }, 400)
+      // Learn from the store's own recent descriptions (style guide).
+      let prompt = rawPrompt
+      try {
+        const svc = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+        const ex = await getStyleExamples(svc, body.storeId, body.make, body.category, body.partId)
+        prompt = rawPrompt + styleBlock(ex)
+      } catch { /* best effort */ }
       const optionCount = Math.min(Math.max(Math.round(+body.options || 1), 1), 6)
       if (optionCount > 1) {
         const aiRes = await callAnthropic({
@@ -284,8 +317,15 @@ serve(async (req) => {
     if (adcfg.includeInstallLink && adcfg.installLinkUrl) incld.push(`a line pointing to the install guide at ${adcfg.installLinkUrl}`)
     const descGuide = `\nThe "description" field must be ${lengthGuide}, written for an eBay buyer.${incld.length ? ` Include where relevant: ${incld.join(', ')}.` : ''}${adcfg.customPromptNotes ? ` Store style notes (follow these exactly): ${adcfg.customPromptNotes}` : ''} Plain text only; do NOT add a store footer (it is appended later).`
 
+    // AI learning: bias the auto-assessment toward the store's own recent style.
+    let descLearn = ''
+    try {
+      const svc2 = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const ex = await getStyleExamples(svc2, storeId, carInfo.make || car?.make, undefined, partId)
+      descLearn = styleBlock(ex)
+    } catch { /* best effort */ }
     const catTree = Object.entries(CATEGORY_TREE).map(([c, subs]) => `${c}: ${subs.join(', ')}`).join('\n')
-    const sys = `You are an expert Australian used car parts eBay seller. Return JSON only.\nReturn: {"title":"max 80 chars","category":"exact","subcategory":"exact","condition":"Used – Good","description":"see rules below","partNumber":"OEM or empty","listPrice":number,"weight":number,"removalMinutes":number,"notes":""}\nremovalMinutes is a rough, generic estimate of the labour MINUTES to remove this part from the vehicle (whole number; e.g. a globe ~5, a door mirror ~15, a guard ~45, an engine ~240). It's only an initial basis, not exact.\nCATEGORY: choose the single best category, then a subcategory that is EXACTLY one of the options listed under that category. If none fit, use "Other". Do not invent a subcategory. A loose globe/bulb is "Globes & Bulbs" (or the specific light it's for), NOT a "Headlight Assembly" unless it is the whole light unit. The category list (category: allowed subcategories):\n${catTree}\ntitle MUST be optimised for eBay search (Cassini): front-load the exact terms buyers type — Make Model Year(s) PartType — then key qualifiers (side/position, OEM/part number, variant, colour). Use as much of the 80 chars as possible, no filler words, no ALL CAPS. Example: "Holden Commodore VE 2006-2013 Right Front Headlight Halogen 92193575 Genuine".\nweight is the estimated packed shipping weight in GRAMS (whole number, e.g. 1500 for 1.5kg). Never return kilograms or a value below 50.${descGuide}`
+    const sys = `You are an expert Australian used car parts eBay seller. Return JSON only.\nReturn: {"title":"max 80 chars","category":"exact","subcategory":"exact","condition":"Used – Good","description":"see rules below","partNumber":"OEM or empty","listPrice":number,"weight":number,"removalMinutes":number,"notes":""}\nremovalMinutes is a rough, generic estimate of the labour MINUTES to remove this part from the vehicle (whole number; e.g. a globe ~5, a door mirror ~15, a guard ~45, an engine ~240). It's only an initial basis, not exact.\nCATEGORY: choose the single best category, then a subcategory that is EXACTLY one of the options listed under that category. If none fit, use "Other". Do not invent a subcategory. A loose globe/bulb is "Globes & Bulbs" (or the specific light it's for), NOT a "Headlight Assembly" unless it is the whole light unit. The category list (category: allowed subcategories):\n${catTree}\ntitle MUST be optimised for eBay search (Cassini): front-load the exact terms buyers type — Make Model Year(s) PartType — then key qualifiers (side/position, OEM/part number, variant, colour). Use as much of the 80 chars as possible, no filler words, no ALL CAPS. Example: "Holden Commodore VE 2006-2013 Right Front Headlight Halogen 92193575 Genuine".\nweight is the estimated packed shipping weight in GRAMS (whole number, e.g. 1500 for 1.5kg). Never return kilograms or a value below 50.${descGuide}${descLearn}`
     const vehicleLine = `Donor vehicle: ${carInfo.make || ''} ${carInfo.model || ''} ${carInfo.year || ''}${carInfo.notes ? ` (notes: ${String(carInfo.notes).slice(0, 200)})` : ''}`.trim()
     const partNumberUrl = String(body.partNumberUrl || '')
     const content: any[] = [{ type: 'text', text: `PART photos (${partBlocks.length}) — identify THIS part:` }]
