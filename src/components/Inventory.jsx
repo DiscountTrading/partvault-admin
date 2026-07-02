@@ -46,7 +46,8 @@ function AutoInput({ value, onChange, suggestions, placeholder, style }) {
   )
 }
 
-async function generateAIDescription(part, aiSettings, footer, storeId) {
+// Shared prompt body (no "return only text" / JSON instruction — the caller adds that).
+function descPromptCore(part, aiSettings) {
   const lengthGuide = { short: '2-3 sentences covering key facts', medium: '1-2 paragraphs with good detail', long: 'comprehensive description with full fitment and condition detail' }[aiSettings?.descriptionLength || 'medium']
   const fields = []
   if (aiSettings?.includeMake) fields.push('make')
@@ -56,16 +57,37 @@ async function generateAIDescription(part, aiSettings, footer, storeId) {
   if (aiSettings?.includePartNumber) fields.push('OEM part number')
   if (aiSettings?.includeConditionDetail) fields.push('condition detail')
   if (aiSettings?.includeInstallLink && aiSettings?.installLinkUrl) fields.push(`install guide: ${aiSettings.installLinkUrl} with mechanic disclaimer`)
-  const prompt = `You are writing an eBay listing description for a used Australian auto part.\nPart: ${part.title||'Unknown'}\nMake: ${part.make||''} Model: ${part.model||''} Year: ${part.year||''}\nCategory: ${part.category||''} > ${part.subcategory||''}\nCondition: ${part.condition||'Used – Good'}\nOEM Part#: ${part.partNumber||'Not specified'}\nNotes: ${part.notes||'None'}\nWrite a ${lengthGuide}. Include: ${fields.join(', ')}.\n${aiSettings?.customPromptNotes||''}\nDo NOT include a store footer. Plain text only. Return ONLY the description text.`
+  return `You are writing an eBay listing description for a used Australian auto part.\nPart: ${part.title||'Unknown'}\nMake: ${part.make||''} Model: ${part.model||''} Year: ${part.year||''}\nCategory: ${part.category||''} > ${part.subcategory||''}\nCondition: ${part.condition||'Used – Good'}\nOEM Part#: ${part.partNumber||'Not specified'}\nNotes: ${part.notes||'None'}\nWrite a ${lengthGuide}. Include: ${fields.join(', ')}.\n${aiSettings?.customPromptNotes||''}\nDo NOT include a store footer. Plain text only.`
+}
+
+async function callDescribe(body) {
   const { data: { session } } = await sb.auth.getSession()
   const resp = await fetch('https://mtpektsxaklhedknincs.supabase.co/functions/v1/ai-assess', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-    body: JSON.stringify({ storeId, mode: 'describe', prompt }),
+    body: JSON.stringify({ mode: 'describe', ...body }),
   })
   const data = await resp.json()
   if (!resp.ok || data.error) throw new Error(data.error || 'AI description failed')
+  return data
+}
+
+async function generateAIDescription(part, aiSettings, footer, storeId) {
+  const data = await callDescribe({ storeId, prompt: `${descPromptCore(part, aiSettings)} Return ONLY the description text.` })
   return (data.text || '').trim()
+}
+
+// Several ranked description options for the seller to choose from.
+async function generateDescriptionOptions(part, aiSettings, storeId, count = 5) {
+  const data = await callDescribe({ storeId, prompt: descPromptCore(part, aiSettings), options: count })
+  return Array.isArray(data.descriptions) ? data.descriptions : []
+}
+
+// "Write my own → regenerate": 4 improved variants of the seller's own text.
+async function regenerateDescriptionOptions(userText, part, aiSettings, storeId) {
+  const prompt = `${descPromptCore(part, aiSettings)}\n\nThe seller wrote this description:\n"${userText}"\nWrite 4 improved variants based on it — keep the same meaning/intent, improve wording and detail, ranked best first.`
+  const data = await callDescribe({ storeId, prompt, options: 4 })
+  return Array.isArray(data.descriptions) ? data.descriptions : []
 }
 
 // Extract a usable URL from a stored photo value (string, JSON string, or object).
@@ -205,6 +227,10 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
     partNumber:'', notes:'', ai_assessed:false, car_id:null,
   })
   const [generating, setGenerating] = useState(false)
+  const [descOptions, setDescOptions] = useState([])   // ranked description choices
+  const [descPicker, setDescPicker] = useState(false)  // options panel open
+  const [descBusy, setDescBusy] = useState(false)
+  const [mineText, setMineText] = useState('')         // "write my own" text
   const [analysing, setAnalysing] = useState(false)
   const [aiError, setAiError] = useState('')
   const [aiPhotos, setAiPhotos] = useState([])
@@ -345,6 +371,26 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
     catch(e) { setAiError(e.message) }
     setGenerating(false)
   }
+
+  // Fetch several ranked options to choose from.
+  const handleDescOptions = async () => {
+    setDescBusy(true); setAiError(''); setDescPicker(true); setDescOptions([])
+    try { setDescOptions(await generateDescriptionOptions(form, aiSettings, storeId, 5)) }
+    catch(e) { setAiError(e.message); setDescPicker(false) }
+    setDescBusy(false)
+  }
+
+  // Turn the seller's own text into 4 variants + keep their verbatim as an option.
+  const handleRegenerateMine = async () => {
+    const mine = mineText.trim()
+    if (!mine) return
+    setDescBusy(true); setAiError('')
+    try { setDescOptions([...(await regenerateDescriptionOptions(mine, form, aiSettings, storeId)), mine]) }
+    catch(e) { setAiError(e.message) }
+    setDescBusy(false)
+  }
+
+  const chooseDesc = (text) => { set('description', text); set('ai_assessed', true); setDescPicker(false); setMineText('') }
 
   const handleAIQuickAdd = async () => {
     if (!aiPhotos.length) { setAiError('Add at least one photo for AI analysis'); return }
@@ -640,12 +686,43 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
                 style={{ accentColor:C.green, width:14, height:14 }} />
               <span style={{ fontWeight:600 }}>AI Assessed {form.ai_assessed?'✓':''}</span>
             </label>
-            <button style={{ ...S.btn('blue'), padding:'5px 14px', fontSize:12, borderRadius:20, opacity:generating?0.6:1 }} onClick={handleGenerateDesc} disabled={generating}>
+            <button style={{ ...S.btn(), padding:'5px 14px', fontSize:12, borderRadius:20, opacity:descBusy?0.6:1 }} onClick={handleDescOptions} disabled={descBusy || generating}>
+              {descBusy ? '⏳ …' : '✨ Options'}
+            </button>
+            <button style={{ ...S.btn('blue'), padding:'5px 14px', fontSize:12, borderRadius:20, opacity:generating?0.6:1 }} onClick={handleGenerateDesc} disabled={generating || descBusy}>
               {generating ? '⏳ Generating…' : '✨ Generate'}
             </button>
           </div>
         }>
         <textarea style={{ ...S.textarea, minHeight:140 }} value={form.description||''} onChange={e => { set('description', e.target.value); if (e.target.value) set('ai_assessed', false) }} placeholder="Describe condition, fitment and any defects…" />
+
+        {/* Ranked description options — pick one, or write your own and regenerate */}
+        {descPicker && (
+          <div style={{ marginTop:10, padding:'12px 14px', background:'#f7f5ff', border:`1px solid #ddd6fe`, borderRadius:10 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+              <span style={{ fontSize:12, fontWeight:700, color:C.text }}>{descBusy ? 'Generating options…' : `Pick a description (${descOptions.length})`}</span>
+              <button style={{ background:'none', border:'none', color:C.muted, fontSize:12, cursor:'pointer' }} onClick={() => setDescPicker(false)}>Close ✕</button>
+            </div>
+            {descBusy && !descOptions.length && <div style={{ fontSize:12, color:C.muted }}>⏳ Writing options…</div>}
+            {descOptions.map((opt, i) => (
+              <div key={i} onClick={() => chooseDesc(opt)}
+                style={{ cursor:'pointer', background:'#fff', border:`1px solid ${form.description===opt?C.accent:C.border}`, borderRadius:8, padding:'10px 12px', marginBottom:8, fontSize:13, lineHeight:1.5, color:C.text }}>
+                <div style={{ fontWeight:700, fontSize:11, color:C.accent, marginBottom:4 }}>{i+1}{i===0?' · best match':''} — click to use</div>
+                {opt}
+              </div>
+            ))}
+            {/* Write my own → regenerate */}
+            <div style={{ marginTop:6, paddingTop:10, borderTop:`1px dashed ${C.border}` }}>
+              <div style={{ fontSize:12, fontWeight:700, color:C.text, marginBottom:6 }}>✏️ Write your own — AI will refine it into new options</div>
+              <textarea value={mineText} onChange={e => setMineText(e.target.value)} placeholder="Type your description…"
+                style={{ ...S.textarea, minHeight:70, fontSize:13 }} />
+              <div style={{ display:'flex', gap:8, marginTop:6 }}>
+                <button style={{ ...S.btn('blue'), padding:'6px 14px', fontSize:12, borderRadius:20, opacity:(descBusy||!mineText.trim())?0.6:1 }} onClick={handleRegenerateMine} disabled={descBusy || !mineText.trim()}>✨ Regenerate from mine</button>
+                <button style={{ ...S.btn(), padding:'6px 14px', fontSize:12, borderRadius:20 }} onClick={() => chooseDesc(mineText.trim())} disabled={!mineText.trim()}>Use mine as-is</button>
+              </div>
+            </div>
+          </div>
+        )}
         {footer ? (
           <div style={{ marginTop:10, padding:'10px 12px', background:'#fafafa', border:`1px dashed ${C.border}`, borderRadius:8, fontSize:12, color:C.muted, whiteSpace:'pre-wrap', lineHeight:1.5 }}>
             <div style={{ fontWeight:700, marginBottom:4, color:C.text }}>＋ Store footer (added automatically on publish — edit in Settings → Descriptions)</div>

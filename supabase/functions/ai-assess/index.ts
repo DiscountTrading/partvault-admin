@@ -73,6 +73,10 @@ serve(async (req) => {
       body.existingPrice = p.list_price
       body.categories = body.categories || PART_CATEGORIES
       let urls = Array.isArray(p.photos) ? p.photos.map(urlOf).filter(Boolean) : []
+      // A photo the user tagged as the part/model-number close-up (flagged in the
+      // part.photos JSON) — surfaced to the model so it reads the number exactly.
+      const pnPhoto = Array.isArray(p.photos) ? p.photos.find((x: any) => x && typeof x === 'object' && (x.part_number || x.role === 'part_number')) : null
+      if (pnPhoto) body.partNumberUrl = urlOf(pnPhoto)
       if (!urls.length) {
         const { data: ph } = await service.from('photos').select('url').eq('parent_type', 'part').eq('parent_id', body.partId).order('display_order')
         urls = (ph || []).map((x: any) => x.url).filter(Boolean)
@@ -99,10 +103,25 @@ serve(async (req) => {
     const textOf = (data: any) => (data.content || []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('').trim()
     const parseJson = (raw: string) => { try { return JSON.parse(raw) } catch { const m = raw?.match(/\{[\s\S]*\}/); return m ? JSON.parse(m[0]) : null } }
 
-    // Mode: write an eBay listing description from a prebuilt prompt.
+    // Mode: write an eBay listing description from a prebuilt prompt. With
+    // body.options > 1, returns several ranked variants ({descriptions:[...]})
+    // for the seller to pick from; otherwise a single {text}.
     if (mode === 'describe') {
       const { prompt } = body
       if (!prompt) return json({ error: 'prompt required' }, 400)
+      const optionCount = Math.min(Math.max(Math.round(+body.options || 1), 1), 6)
+      if (optionCount > 1) {
+        const aiRes = await callAnthropic({
+          model: 'claude-sonnet-4-6', max_tokens: 1800,
+          messages: [{ role: 'user', content: `${prompt}\n\nProvide ${optionCount} DISTINCT description options, ranked best/most-likely first — genuinely vary the angle, emphasis and wording (not trivially reworded). Return JSON only: {"descriptions":["...","..."]}` }],
+        })
+        const data = await aiRes.json()
+        if (data.error) return json({ error: data.error.message || 'AI error' }, 400)
+        const parsed = parseJson(textOf(data))
+        const descriptions = Array.isArray(parsed?.descriptions) ? parsed.descriptions.filter((x: any) => typeof x === 'string' && x.trim()).slice(0, optionCount) : []
+        if (!descriptions.length) return json({ error: 'No options generated' }, 400)
+        return json({ ok: true, descriptions })
+      }
       const aiRes = await callAnthropic({
         model: 'claude-sonnet-4-6', max_tokens: 1000,
         messages: [{ role: 'user', content: prompt }],
@@ -253,10 +272,13 @@ serve(async (req) => {
     const catTree = Object.entries(CATEGORY_TREE).map(([c, subs]) => `${c}: ${subs.join(', ')}`).join('\n')
     const sys = `You are an expert Australian used car parts eBay seller. Return JSON only.\nReturn: {"title":"max 80 chars","category":"exact","subcategory":"exact","condition":"Used – Good","description":"see rules below","partNumber":"OEM or empty","listPrice":number,"weight":number,"removalMinutes":number,"notes":""}\nremovalMinutes is a rough, generic estimate of the labour MINUTES to remove this part from the vehicle (whole number; e.g. a globe ~5, a door mirror ~15, a guard ~45, an engine ~240). It's only an initial basis, not exact.\nCATEGORY: choose the single best category, then a subcategory that is EXACTLY one of the options listed under that category. If none fit, use "Other". Do not invent a subcategory. A loose globe/bulb is "Globes & Bulbs" (or the specific light it's for), NOT a "Headlight Assembly" unless it is the whole light unit. The category list (category: allowed subcategories):\n${catTree}\ntitle MUST be optimised for eBay search (Cassini): front-load the exact terms buyers type — Make Model Year(s) PartType — then key qualifiers (side/position, OEM/part number, variant, colour). Use as much of the 80 chars as possible, no filler words, no ALL CAPS. Example: "Holden Commodore VE 2006-2013 Right Front Headlight Halogen 92193575 Genuine".\nweight is the estimated packed shipping weight in GRAMS (whole number, e.g. 1500 for 1.5kg). Never return kilograms or a value below 50.${descGuide}`
     const vehicleLine = `Donor vehicle: ${carInfo.make || ''} ${carInfo.model || ''} ${carInfo.year || ''}${carInfo.notes ? ` (notes: ${String(carInfo.notes).slice(0, 200)})` : ''}`.trim()
-    const content: any[] = [
-      { type: 'text', text: `PART photos (${partBlocks.length}) — identify THIS part:` },
-      ...partBlocks,
-    ]
+    const partNumberUrl = String(body.partNumberUrl || '')
+    const content: any[] = [{ type: 'text', text: `PART photos (${partBlocks.length}) — identify THIS part:` }]
+    urls.forEach((u: string) => {
+      content.push({ type: 'image', source: { type: 'url', url: u } })
+      if (partNumberUrl && u === partNumberUrl) content.push({ type: 'text', text: '☝ The photo above is a close-up of the part / model NUMBER — read it carefully and return it exactly as "partNumber".' })
+    })
+    b64s.forEach((b: string) => content.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b } }))
     if (carBlocks.length) {
       content.push({ type: 'text', text: `DONOR VEHICLE photos (${carBlocks.length}) — context only, to confirm the make/model/variant. Do NOT describe the car; identify the PART above.` })
       content.push(...carBlocks)
