@@ -113,7 +113,7 @@ serve(async (req) => {
       if (optionCount > 1) {
         const aiRes = await callAnthropic({
           model: 'claude-sonnet-4-6', max_tokens: 1800,
-          messages: [{ role: 'user', content: `${prompt}\n\nProvide ${optionCount} DISTINCT description options, ranked best/most-likely first — genuinely vary the angle, emphasis and wording (not trivially reworded). Return JSON only: {"descriptions":["...","..."]}` }],
+          messages: [{ role: 'user', content: `${prompt}\n\nProvide ${optionCount} DISTINCT description options, ranked best/most-likely first — genuinely vary the angle, emphasis and wording (not trivially reworded). If the part's side/position is uncertain (left vs right, driver vs passenger, front vs rear, upper vs lower), you MUST include options for BOTH sides — best guess first, the opposite side as another option. Return JSON only: {"descriptions":["...","..."]}` }],
         })
         const data = await aiRes.json()
         if (data.error) return json({ error: data.error.message || 'AI error' }, 400)
@@ -169,7 +169,7 @@ serve(async (req) => {
       if (nameCount > 1) {
         const aiRes = await callAnthropic({
           model: 'claude-haiku-4-5-20251001', max_tokens: 400,
-          system: `You name a used car part for an eBay listing. Return JSON only: {"titles":["max 80 chars", ...]}. Give ${nameCount} DISTINCT title options, best/most-likely first — vary the part type/variant/qualifier where the photo is ambiguous (e.g. left vs right, halogen vs LED). Front-load Make Model Year(s) then the part type, then a key qualifier. No filler, no ALL CAPS.`,
+          system: `You name a used car part for an eBay listing. Return JSON only: {"titles":["max 80 chars", ...]}. Give ${nameCount} DISTINCT title options, best/most-likely first. CRITICAL: if the part has a side/position that cannot be certain from the photo — left vs right, driver vs passenger, front vs rear, upper vs lower — you MUST include BOTH variants among the options (your best guess first, the opposite side as another option). Otherwise vary the part type/variant/qualifier. Front-load Make Model Year(s) then the part type, then the key qualifier (side/position). No filler, no ALL CAPS.`,
           messages: [{ role: 'user', content: [...blocks, { type: 'text', text: `${vehicleTxt} Give ${nameCount} concise eBay product name options for this part.` }] }],
         })
         const data = await aiRes.json()
