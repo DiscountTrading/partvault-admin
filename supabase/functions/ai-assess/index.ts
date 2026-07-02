@@ -164,10 +164,25 @@ serve(async (req) => {
       ]
       if (!blocks.length) return json({ error: 'At least one photo is required' }, 400)
       const car = body.car || {}
+      const nameCount = Math.min(Math.max(Math.round(+body.options || 1), 1), 6)
+      const vehicleTxt = `Vehicle: ${car.make || ''} ${car.model || ''} ${car.year || ''}.`
+      if (nameCount > 1) {
+        const aiRes = await callAnthropic({
+          model: 'claude-haiku-4-5-20251001', max_tokens: 400,
+          system: `You name a used car part for an eBay listing. Return JSON only: {"titles":["max 80 chars", ...]}. Give ${nameCount} DISTINCT title options, best/most-likely first — vary the part type/variant/qualifier where the photo is ambiguous (e.g. left vs right, halogen vs LED). Front-load Make Model Year(s) then the part type, then a key qualifier. No filler, no ALL CAPS.`,
+          messages: [{ role: 'user', content: [...blocks, { type: 'text', text: `${vehicleTxt} Give ${nameCount} concise eBay product name options for this part.` }] }],
+        })
+        const data = await aiRes.json()
+        if (data.error) return json({ error: data.error.message || 'AI error' }, 400)
+        const parsed = parseJson(textOf(data))
+        const titles = Array.isArray(parsed?.titles) ? parsed.titles.filter((x: any) => typeof x === 'string' && x.trim()).slice(0, nameCount) : []
+        if (!titles.length) return json({ error: 'Could not name the part' }, 502)
+        return json({ ok: true, titles })
+      }
       const aiRes = await callAnthropic({
         model: 'claude-haiku-4-5-20251001', max_tokens: 120,
         system: 'You name a used car part for an eBay listing. Return JSON only: {"title":"max 80 chars"}. Front-load Make Model Year(s) and the part type, then a key qualifier (side/position). No filler, no ALL CAPS.',
-        messages: [{ role: 'user', content: [...blocks, { type: 'text', text: `Vehicle: ${car.make || ''} ${car.model || ''} ${car.year || ''}. Give a concise eBay product name for this part.` }] }],
+        messages: [{ role: 'user', content: [...blocks, { type: 'text', text: `${vehicleTxt} Give a concise eBay product name for this part.` }] }],
       })
       const data = await aiRes.json()
       if (data.error) return json({ error: data.error.message || 'AI error' }, 400)
