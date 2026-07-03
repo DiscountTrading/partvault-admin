@@ -65,23 +65,25 @@ model, per-store location/marketplace, category architecture, and store deletion
 
 ## 5. Store deletion & retention
 
-**Retention is anchored to `paid_through` (end of the paid/committed term), NOT the deletion date** — you can't purge data someone has paid to keep. A committed-annual user keeps being invoiced through the term even if they delete, so their store is retained for the whole term automatically.
+**GUARANTEE: data is never purged before `paid_through` + the full recovery window.** Retention is anchored to `paid_through` (end of the paid/committed term), NOT the deletion date — their paid period is always covered, plus a grace, plus a long win-back window. The purge job is anchored to `paid_through` and cannot run early. A committed/annual user keeps being invoiced through the term even if they delete, so their store is retained for the whole term automatically.
 
-| Phase | Window | State | Recovery |
-|---|---|---|---|
-| Paid / committed | Any time up to `paid_through` | Kept | Self-service restore, **free** |
-| Grace | 0–30 days **after `paid_through`** | Hidden, billing stopped | Self-service restore, **free** |
-| Archived | 31–180 days **after `paid_through`** | Back-end only | Support restore + **one-off recovery fee** |
-| Purged | `paid_through` + 180 days | Permanently hard-deleted | Not recoverable |
+Two paths, because a **churned/expired** user (we want them back) is treated more generously than someone who **deleted their own store**:
 
-Effective max retention: monthly ≈ current period + 180d; annual/committed ≈ term (~12mo) + 180d.
+| Phase (measured from `paid_through`) | Owner-deleted store | Expired / lapsed subscription |
+|---|---|---|
+| Up to `paid_through` | Kept · free self-restore | Kept · active until term end |
+| 0–30 days after | Hidden · **free** self-restore | Suspended · **free** reactivate |
+| 31 days – 12 months after | Archived · restore + **one-off recovery fee** | Archived · **free** reactivation via win-back (free-month offer applies, no fee) |
+| After `paid_through` + 12 months | Purged — permanently hard-deleted | Purged — permanently hard-deleted |
 
-- **Delete:** owner/admin only, type-to-confirm. On delete: hide from all members, stop billing (keep any paid time credited), **revoke eBay tokens immediately** (never archived), stop syncs.
-- **Always offer "delete permanently now"** (GDPR/right-to-erasure override of the archive).
-- Photos ride along in archive, purged at 180 days.
-- Disclose the 180-day retention schedule in Terms/Privacy.
+- **Win-back recovery is free** — churned users reactivating (incl. via marketing/free-month offers) get their data back at no charge. The recovery fee applies only to an owner undoing their *own* deletion after the 30-day grace.
+- **Effective retention:** monthly ≈ current period + ~13 months; annual/committed ≈ term (~12mo) + ~13 months. Comfortably covers "period + minimum 30 days, ideally much more."
+- **Delete:** owner/admin only, type-to-confirm. On delete: hide from all members, stop billing (keep paid time credited), **revoke eBay tokens immediately** (never archived), stop syncs.
+- **Always offer "delete permanently now"** (GDPR/right-to-erasure override of the win-back retention).
+- Photos ride along the whole window (needed to relist on win-back), purged at the end.
+- Disclose the retention schedule in Terms/Privacy.
 - **eBay listings are NOT deleted** (they live on eBay) — stated on the confirm screen.
-- Internal admin tool lists archived stores and triggers restore.
+- Internal admin tool lists archived/suspended stores and triggers restore.
 
 ## 6. Billing on restore
 
