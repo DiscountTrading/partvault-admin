@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.23.1'
+const EDGE_FN_VERSION         = '3.24.0'
 const CHUNK_SIZE              = 20
 // eBay's getOrders can't return orders older than this, so the live sync only ever
 // manages sales within this window. The CSV history import must stay strictly OLDER
@@ -324,6 +324,47 @@ async function getAppToken(): Promise<string> {
   if (!d.access_token) throw new Error(`eBay app token failed: ${d.error_description || 'unknown'}`)
   _appToken = { token: d.access_token, exp: Date.now() + (d.expires_in || 7200) * 1000 }
   return d.access_token
+}
+
+// ── Multi-marketplace support ────────────────────────────────────────────────
+// A store's marketplace (settings.marketplace, default EBAY_AU) drives the eBay
+// headers, currency, and which category_maps row resolves the category id at
+// list time. Parts store only the neutral friendly category; the eBay id is
+// resolved here, per the store's marketplace — never stored on the part.
+const MARKETPLACE_CFG: Record<string, { currency: string; lang: string; treeId: string }> = {
+  EBAY_AU: { currency: 'AUD', lang: 'en-AU', treeId: '15' },
+  EBAY_US: { currency: 'USD', lang: 'en-US', treeId: '100' }, // US vehicle parts = eBay Motors tree 100
+  EBAY_GB: { currency: 'GBP', lang: 'en-GB', treeId: '3' },
+  EBAY_CA: { currency: 'CAD', lang: 'en-CA', treeId: '2' },
+}
+// Legacy AU category ids — fallback if category_maps has no row (matches the
+// pre-multi-country hardcoded map, so AU behaviour is unchanged).
+const AU_CATEGORY_FALLBACK: Record<string, string> = {
+  'Air & Fuel Delivery':'33549','Air Conditioning & Heating':'33542','Brakes & Brake Parts':'33559',
+  'Engines & Engine Parts':'33612','Engine Cooling':'33599','Exhaust & Emission':'33605',
+  'Exterior Parts':'33637','Ignition Systems':'33687','Interior Parts':'33694',
+  'Lighting & Bulbs':'33707','Starters, Alternators & Wiring':'33572','Steering & Suspension':'33579',
+  'Transmission & Drivetrain':'33726','Wheels, Tyres & Parts':'33743','Towing Parts':'180143',
+  'Other Car & Truck Parts':'9886','Legacy Items':'9886',
+}
+async function storeMarketplace(sb: any, storeId: string): Promise<{ mp: string; currency: string; lang: string; treeId: string }> {
+  let mp = 'EBAY_AU'
+  try {
+    const { data } = await sb.from('stores').select('settings').eq('id', storeId).single()
+    const m = data?.settings?.marketplace
+    if (m && MARKETPLACE_CFG[m]) mp = m
+  } catch (_) { /* default AU */ }
+  return { mp, ...MARKETPLACE_CFG[mp] }
+}
+// friendly category -> eBay category id for this marketplace (from category_maps,
+// built by the ebay-taxonomy fn). Falls back to the legacy AU ids.
+async function categoryMapFor(sb: any, mp: string): Promise<Record<string, string>> {
+  const map: Record<string, string> = { ...AU_CATEGORY_FALLBACK }
+  try {
+    const { data } = await sb.from('category_maps').select('friendly_category, ebay_category_id').eq('marketplace', mp)
+    for (const r of (data || [])) if (r.ebay_category_id) map[r.friendly_category] = r.ebay_category_id
+  } catch (_) { /* fallback stands */ }
+  return map
 }
 
 Deno.serve(async (req) => {
@@ -2331,20 +2372,21 @@ async function handleRequest(req: Request): Promise<Response> {
       if (partsErr) throw partsErr
       if (!parts?.length) throw new Error('No parts found')
 
+      const mkt = await storeMarketplace(sb, storeId)
       const ebayHeaders = {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'Accept-Language': 'en-AU',
-        'Content-Language': 'en-AU',
-        'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU',
+        'Accept-Language': mkt.lang,
+        'Content-Language': mkt.lang,
+        'X-EBAY-C-MARKETPLACE-ID': mkt.mp,
       }
 
       // Fetch account policies and location (use first of each)
       const [fpRes, ppRes, rpRes, locRes] = await Promise.all([
-        fetch('https://api.ebay.com/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_AU', { headers: ebayHeaders }),
-        fetch('https://api.ebay.com/sell/account/v1/payment_policy?marketplace_id=EBAY_AU', { headers: ebayHeaders }),
-        fetch('https://api.ebay.com/sell/account/v1/return_policy?marketplace_id=EBAY_AU', { headers: ebayHeaders }),
+        fetch(`https://api.ebay.com/sell/account/v1/fulfillment_policy?marketplace_id=${mkt.mp}`, { headers: ebayHeaders }),
+        fetch(`https://api.ebay.com/sell/account/v1/payment_policy?marketplace_id=${mkt.mp}`, { headers: ebayHeaders }),
+        fetch(`https://api.ebay.com/sell/account/v1/return_policy?marketplace_id=${mkt.mp}`, { headers: ebayHeaders }),
         fetch('https://api.ebay.com/sell/inventory/v1/location', { headers: ebayHeaders }),
       ])
       const [fpData, ppData, rpData, locData] = await Promise.all([fpRes.json(), ppRes.json(), rpRes.json(), locRes.json()])
@@ -2367,14 +2409,8 @@ async function handleRequest(req: Request): Promise<Response> {
         'Refurbished':      'SELLER_REFURBISHED',
       }
 
-      const CATEGORY_ID: Record<string, string> = {
-        'Air & Fuel Delivery':'33549','Air Conditioning & Heating':'33542','Brakes & Brake Parts':'33559',
-        'Engines & Engine Parts':'33612','Engine Cooling':'33599','Exhaust & Emission':'33605',
-        'Exterior Parts':'33637','Ignition Systems':'33687','Interior Parts':'33694',
-        'Lighting & Bulbs':'33707','Starters, Alternators & Wiring':'33572','Steering & Suspension':'33579',
-        'Transmission & Drivetrain':'33726','Wheels, Tyres & Parts':'33743','Towing Parts':'180143',
-        'Other Car & Truck Parts':'9886','Legacy Items':'9886',
-      }
+      // Resolved per the store's marketplace (category_maps; AU fallback).
+      const CATEGORY_ID = await categoryMapFor(sb, mkt.mp)
 
       let drafted = 0
       let failed  = 0
@@ -2430,10 +2466,10 @@ async function handleRequest(req: Request): Promise<Response> {
             headers: ebayHeaders,
             body: JSON.stringify({
               sku,
-              marketplaceId: 'EBAY_AU',
+              marketplaceId: mkt.mp,
               format: 'FIXED_PRICE',
               listingDescription: part.notes || part.title,
-              pricingSummary: { price: { value: String(part.list_price), currency: 'AUD' } },
+              pricingSummary: { price: { value: String(part.list_price), currency: mkt.currency } },
               categoryId,
               merchantLocationKey,
               listingPolicies: { fulfillmentPolicyId, paymentPolicyId, returnPolicyId },
@@ -2589,27 +2625,18 @@ async function handleRequest(req: Request): Promise<Response> {
       if (typeof body.description === 'string') part.description = body.description
 
       const { token } = await getToken()
+      const mkt = await storeMarketplace(sb, storeId)
       const ebayHeaders = {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'Accept-Language': 'en-AU',
-        'Content-Language': 'en-AU',
-        'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU',
+        'Accept-Language': mkt.lang,
+        'Content-Language': mkt.lang,
+        'X-EBAY-C-MARKETPLACE-ID': mkt.mp,
       }
-      const PREVIEW_CATEGORY_ID: Record<string, string> = {
-        'Air & Fuel Delivery':'33549','Air Conditioning & Heating':'33542','Brakes & Brake Parts':'33559',
-        'Engines & Engine Parts':'33612','Engine Cooling':'33599','Exhaust & Emission':'33605',
-        'Exterior Parts':'33637','Ignition Systems':'33687','Interior Parts':'33694',
-        'Lighting & Bulbs':'33707','Starters, Alternators & Wiring':'33572','Steering & Suspension':'33579',
-        'Transmission & Drivetrain':'33726','Wheels, Tyres & Parts':'33743','Towing Parts':'180143',
-        'Other Car & Truck Parts':'9886','Legacy Items':'9886',
-      }
-      let categoryTreeId = '15'
-      try {
-        const tRes = await fetch('https://api.ebay.com/commerce/taxonomy/v1/get_default_category_tree_id?marketplace_id=EBAY_AU', { headers: ebayHeaders })
-        if (tRes.ok) categoryTreeId = (await tRes.json()).categoryTreeId || '15'
-      } catch (_) { /* keep default */ }
+      const PREVIEW_CATEGORY_ID = await categoryMapFor(sb, mkt.mp)
+      // Tree id per marketplace (US = eBay Motors tree 100 — its default tree has no vehicle parts).
+      const categoryTreeId = mkt.treeId
       const catQuery = [part.make, part.model, part.year, part.category, part.title].filter(Boolean).join(' ')
       let categoryId = PREVIEW_CATEGORY_ID[part.category] || '9886'
       let categoryName = ''
@@ -2698,19 +2725,20 @@ async function handleRequest(req: Request): Promise<Response> {
       if (partsErr) throw partsErr
       if (!parts?.length) throw new Error('No parts found')
 
+      const mkt = await storeMarketplace(sb, storeId)
       const ebayHeaders = {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'Accept-Language': 'en-AU',
-        'Content-Language': 'en-AU',
-        'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU',
+        'Accept-Language': mkt.lang,
+        'Content-Language': mkt.lang,
+        'X-EBAY-C-MARKETPLACE-ID': mkt.mp,
       }
 
       const [fpRes, ppRes, rpRes, locRes] = await Promise.all([
-        fetch('https://api.ebay.com/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_AU', { headers: ebayHeaders }),
-        fetch('https://api.ebay.com/sell/account/v1/payment_policy?marketplace_id=EBAY_AU', { headers: ebayHeaders }),
-        fetch('https://api.ebay.com/sell/account/v1/return_policy?marketplace_id=EBAY_AU', { headers: ebayHeaders }),
+        fetch(`https://api.ebay.com/sell/account/v1/fulfillment_policy?marketplace_id=${mkt.mp}`, { headers: ebayHeaders }),
+        fetch(`https://api.ebay.com/sell/account/v1/payment_policy?marketplace_id=${mkt.mp}`, { headers: ebayHeaders }),
+        fetch(`https://api.ebay.com/sell/account/v1/return_policy?marketplace_id=${mkt.mp}`, { headers: ebayHeaders }),
         fetch('https://api.ebay.com/sell/inventory/v1/location', { headers: ebayHeaders }),
       ])
       const [fpData, ppData, rpData, locData] = await Promise.all([fpRes.json(), ppRes.json(), rpRes.json(), locRes.json()])
@@ -2730,14 +2758,8 @@ async function handleRequest(req: Request): Promise<Response> {
         'Used – Excellent': 'USED_EXCELLENT', 'Used – Good': 'USED_EXCELLENT', 'Used – Fair': 'USED_EXCELLENT',
         'For Parts Only': 'FOR_PARTS_OR_NOT_WORKING', 'Refurbished': 'SELLER_REFURBISHED',
       }
-      const CATEGORY_ID: Record<string, string> = {
-        'Air & Fuel Delivery':'33549','Air Conditioning & Heating':'33542','Brakes & Brake Parts':'33559',
-        'Engines & Engine Parts':'33612','Engine Cooling':'33599','Exhaust & Emission':'33605',
-        'Exterior Parts':'33637','Ignition Systems':'33687','Interior Parts':'33694',
-        'Lighting & Bulbs':'33707','Starters, Alternators & Wiring':'33572','Steering & Suspension':'33579',
-        'Transmission & Drivetrain':'33726','Wheels, Tyres & Parts':'33743','Towing Parts':'180143',
-        'Other Car & Truck Parts':'9886','Legacy Items':'9886',
-      }
+      // Resolved per the store's marketplace (category_maps; AU fallback).
+      const CATEGORY_ID = await categoryMapFor(sb, mkt.mp)
 
       // Store-wide image composition config: shared car/marketing images added
       // to every listing, with per-source budgets (eBay allows up to 24 images).
@@ -2764,12 +2786,9 @@ async function handleRequest(req: Request): Promise<Response> {
       }
 
       // eBay requires a LEAF category. Ask the Taxonomy API for the best leaf from
-      // the part's title; the static map (often parent categories) is only a fallback.
-      let categoryTreeId = '15' // EBAY_AU default
-      try {
-        const tRes = await fetch('https://api.ebay.com/commerce/taxonomy/v1/get_default_category_tree_id?marketplace_id=EBAY_AU', { headers: ebayHeaders })
-        if (tRes.ok) categoryTreeId = (await tRes.json()).categoryTreeId || '15'
-      } catch (_) { /* keep default */ }
+      // the part's title; the per-marketplace map is the fallback. Tree id comes
+      // from the store's marketplace (US = eBay Motors tree 100).
+      const categoryTreeId = mkt.treeId
       const leafCategoryFor = async (query: string): Promise<string | null> => {
         try {
           const r = await fetch(`https://api.ebay.com/commerce/taxonomy/v1/category_tree/${categoryTreeId}/get_category_suggestions?q=${encodeURIComponent(query || 'car part')}`, { headers: ebayHeaders })
@@ -2878,9 +2897,9 @@ async function handleRequest(req: Request): Promise<Response> {
 
           // 2. Create the offer — or reuse an existing one for this SKU
           const offerBody = {
-            sku, marketplaceId: 'EBAY_AU', format: 'FIXED_PRICE',
+            sku, marketplaceId: mkt.mp, format: 'FIXED_PRICE',
             listingDescription: fullDescription,
-            pricingSummary: { price: { value: String(part.list_price), currency: 'AUD' } },
+            pricingSummary: { price: { value: String(part.list_price), currency: mkt.currency } },
             categoryId, merchantLocationKey,
             listingPolicies: { fulfillmentPolicyId, paymentPolicyId, returnPolicyId, ...(allowOffers ? { bestOfferTerms: { bestOfferEnabled: true } } : {}) },
             quantityLimitPerBuyer: 1,
@@ -2893,7 +2912,7 @@ async function handleRequest(req: Request): Promise<Response> {
             const offerData = await offerRes.json()
             const msg = offerData.errors?.[0]?.message || ''
             if (offerRes.status === 409 || /already exists/i.test(msg)) {
-              const getRes = await fetch(`https://api.ebay.com/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}&marketplace_id=EBAY_AU`, { headers: ebayHeaders })
+              const getRes = await fetch(`https://api.ebay.com/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}&marketplace_id=${mkt.mp}`, { headers: ebayHeaders })
               offerId = (await getRes.json()).offers?.[0]?.offerId
               if (!offerId) throw new Error('Offer already exists but could not be retrieved')
               // keep price/policies current on the existing offer
