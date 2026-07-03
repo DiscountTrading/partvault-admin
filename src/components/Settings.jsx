@@ -3,6 +3,7 @@ import { C, S, fmt, APP_VERSION, DEFAULT_POSTAGE_TIERS, DEFAULT_AGED_THRESHOLD_D
 import { printLabels, DEFAULT_LABELS } from '../lib/labels'
 import { sb } from '../lib/supabase'
 import { buildSkuPreview, SKU_TOKENS, DEFAULT_SKU_TEMPLATE, DEFAULT_SKU_PAD } from '../lib/sku'
+import { MARKETPLACES, MARKETPLACE_LIST } from '../lib/marketplaces'
 import TeamAccess from './TeamAccess'
 import Activity from './Activity'
 import { compressImage } from '../lib/image'
@@ -184,6 +185,24 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       setTzSaved(true); setTimeout(() => setTzSaved(false), 2000)
     } catch (e) { console.error('Timezone save failed', e) }
   }
+  // Marketplace (country) — set at store creation, locked once parts exist
+  // (DB trigger enforces it; the UI just explains).
+  const [marketplace, setMarketplace] = useState('EBAY_AU')
+  const [mpLocked, setMpLocked] = useState(true) // assume locked until the part count loads
+  const [mpSaved, setMpSaved] = useState(false)
+  const saveMarketplace = async (mp) => {
+    const prev = marketplace
+    setMarketplace(mp)
+    try {
+      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      const { error } = await sb.from('stores').update({ settings: { ...(current?.settings || {}), marketplace: mp } }).eq('id', storeId)
+      if (error) throw error
+      setMpSaved(true); setTimeout(() => setMpSaved(false), 2000)
+    } catch (e) {
+      setMarketplace(prev) // DB trigger rejects the change once parts exist
+      alert(e.message || 'Marketplace could not be changed')
+    }
+  }
   const [salesMatch, setSalesMatch] = useState(null)
   const [salesMatchLoading, setSalesMatchLoading] = useState(false)
   // Sales-match window (local calendar dates, interpreted in the browser's TZ so
@@ -300,7 +319,11 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         // nightly sync runs at THIS store's local midnight rather than a default.
         if (data.settings.timezone) setTimezone(data.settings.timezone)
         else saveTimezone(browserTz)
+        setMarketplace(data.settings.marketplace || 'EBAY_AU')
       }
+      // Marketplace locks once the store has any part (DB-enforced too).
+      const { count: partCount } = await sb.from('parts').select('id', { count: 'exact', head: true }).eq('store_id', storeId)
+      setMpLocked((partCount || 0) > 0)
       // eBay connection status — the keyset is server-side; we only need to know
       // whether this store has connected (i.e. has a valid token expiry).
       const { data: tokenRow } = await sb.from('ebay_tokens').select('expires_at').eq('store_id', storeId).maybeSingle()
@@ -2504,6 +2527,30 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                   })()}
                 </div>
               )}
+
+              {/* Marketplace (country) — chosen at store creation, locked at first part */}
+              <div style={{ background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 14px', marginBottom: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>🌏 Marketplace</span>
+                  {mpLocked ? (
+                    <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
+                      {MARKETPLACES[marketplace]?.flag} {MARKETPLACES[marketplace]?.label || marketplace} — eBay ({MARKETPLACES[marketplace]?.currency})
+                      <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: C.muted, background: '#eee', borderRadius: 10, padding: '2px 8px' }}>🔒 locked</span>
+                    </span>
+                  ) : (
+                    <select value={marketplace} onChange={e => saveMarketplace(e.target.value)}
+                      style={{ border: `1px solid ${C.border}`, borderRadius: 6, padding: '4px 8px', fontSize: 12, background: '#fff' }}>
+                      {MARKETPLACE_LIST.map(m => <option key={m.id} value={m.id}>{m.flag} {m.label} — eBay ({m.currency})</option>)}
+                    </select>
+                  )}
+                  {mpSaved && <span style={{ fontSize: 12, color: C.green }}>✓ saved</span>}
+                </div>
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
+                  {mpLocked
+                    ? 'Locked because this store has parts — their prices and categories are committed to this country. Selling in another country? Create a new store for it.'
+                    : 'Which eBay site this store lists on (sets currency and categories). Locks permanently once the first part is created.'}
+                </div>
+              </div>
 
               {/* Store timezone — drives nightly sync timing + default sales window */}
               <div style={{ background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 14px', marginBottom: 12 }}>

@@ -4,6 +4,7 @@ import { useParts } from './hooks/useParts'
 import { useSales } from './hooks/useSales'
 import { sb } from './lib/supabase'
 import { C, S, APP_VERSION, rentPerDay } from './lib/constants'
+import { MARKETPLACE_LIST, guessMarketplace } from './lib/marketplaces'
 import { DEFAULT_LABELS } from './lib/labels'
 import AuthScreen from './components/AuthScreen'
 import Dashboard from './components/Dashboard'
@@ -50,6 +51,7 @@ function StoreSwitcher({ stores, activeStoreId, setActiveStore, refreshStores })
   const [creating, setCreating] = useState(false)
   const [joining, setJoining] = useState(false)
   const [newName, setNewName] = useState('')
+  const [newMarketplace, setNewMarketplace] = useState(guessMarketplace) // browser-guessed; user confirms
   const [joinCode, setJoinCode] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -61,6 +63,11 @@ function StoreSwitcher({ stores, activeStoreId, setActiveStore, refreshStores })
     try {
       const { data, error } = await sb.rpc('create_store', { p_name: newName.trim() })
       if (error) throw error
+      // Stamp the confirmed marketplace (+ browser timezone) on the new store.
+      // It locks permanently once the first part is created (DB trigger).
+      let tz = ''
+      try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '' } catch { /* optional */ }
+      await sb.from('stores').update({ settings: { marketplace: newMarketplace, ...(tz ? { timezone: tz } : {}) } }).eq('id', data)
       await refreshStores(data) // data = new store id -> switch to it
       setNewName(''); setCreating(false); setOpen(false)
     } catch (e) { setErr(e.message) }
@@ -121,6 +128,11 @@ function StoreSwitcher({ stores, activeStoreId, setActiveStore, refreshStores })
                   <button onClick={createStore} disabled={busy || !newName.trim()}
                     style={{ background: C.accent, color: '#fff', border: 'none', borderRadius: 6, padding: '7px 12px', fontSize: 13, fontWeight: 700, cursor: 'pointer', opacity: (busy || !newName.trim()) ? 0.6 : 1 }}>{busy ? '…' : 'Create'}</button>
                 </div>
+                <select value={newMarketplace} onChange={e => setNewMarketplace(e.target.value)}
+                  style={{ width: '100%', marginTop: 6, border: `1.5px solid ${C.border}`, borderRadius: 6, padding: '7px 10px', fontSize: 13, outline: 'none', background: '#fff' }}>
+                  {MARKETPLACE_LIST.map(m => <option key={m.id} value={m.id}>{m.flag} {m.label} — eBay ({m.currency})</option>)}
+                </select>
+                <div style={{ fontSize: 10.5, color: C.muted, marginTop: 5, lineHeight: 1.4 }}>Which eBay marketplace this store sells on. Locks once the first part is created — a different country needs its own store.</div>
                 {err && <div style={{ fontSize: 11, color: C.red, marginTop: 6 }}>{err}</div>}
               </div>
             ) : joining ? (

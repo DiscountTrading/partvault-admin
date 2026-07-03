@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.24.0'
+const EDGE_FN_VERSION         = '3.24.1'
 const CHUNK_SIZE              = 20
 // eBay's getOrders can't return orders older than this, so the live sync only ever
 // manages sales within this window. The CSV history import must stay strictly OLDER
@@ -797,6 +797,26 @@ async function handleRequest(req: Request): Promise<Response> {
       if (!tokens.access_token) {
         throw new Error(tokens.error_description || tokens.error || 'eBay token exchange failed')
       }
+
+      // Marketplace match guard: the connected eBay account's registration site
+      // must match the store's marketplace (a US account can't list AUD/AU
+      // categories and vice-versa). Definite mismatch → reject BEFORE storing
+      // tokens; unknown/unreadable site → allow (fail-open, eBay is the backstop).
+      try {
+        const mkt = await storeMarketplace(sb, storeId)
+        const SITE_TO_MP: Record<string, string> = {
+          'Australia': 'EBAY_AU', 'US': 'EBAY_US', 'eBayMotors': 'EBAY_US',
+          'UK': 'EBAY_GB', 'Canada': 'EBAY_CA', 'CanadaFrench': 'EBAY_CA',
+        }
+        const xml = `<?xml version="1.0" encoding="utf-8"?><GetUserRequest xmlns="urn:ebay:apis:eBLBaseComponents"></GetUserRequest>`
+        const resp = await trading(tokens.access_token, CERT_ID, 'GetUser', xml)
+        const site = (resp.match(/<Site>([^<]+)<\/Site>/) || [])[1] || ''
+        const acctMp = SITE_TO_MP[site] || ''
+        if (acctMp && acctMp !== mkt.mp) {
+          const label: Record<string, string> = { EBAY_AU: 'Australia', EBAY_US: 'the United States', EBAY_GB: 'the United Kingdom', EBAY_CA: 'Canada' }
+          return json({ error: `This store is set to ${label[mkt.mp] || mkt.mp}, but the eBay account you connected is registered in ${label[acctMp] || site}. Connect a matching eBay account, or create a new store for ${label[acctMp] || 'that country'}.` }, 400)
+        }
+      } catch (_) { /* site unreadable — allow; eBay rejects mismatches at publish */ }
 
       const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString()
       // Create-or-update the store's ebay_tokens row and persist BOTH tokens.
