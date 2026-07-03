@@ -5,6 +5,7 @@ export const MARKETPLACES = {
   EBAY_AU: { id: 'EBAY_AU', country: 'AU', label: 'Australia',      flag: '🇦🇺', ebaySiteId: 15, currency: 'AUD', currencySymbol: '$', locale: 'en-AU', weightUnit: 'g',  ebayDomain: 'ebay.com.au' },
   EBAY_US: { id: 'EBAY_US', country: 'US', label: 'United States',  flag: '🇺🇸', ebaySiteId: 0,  currency: 'USD', currencySymbol: '$', locale: 'en-US', weightUnit: 'oz', ebayDomain: 'ebay.com' },
   EBAY_GB: { id: 'EBAY_GB', country: 'GB', label: 'United Kingdom', flag: '🇬🇧', ebaySiteId: 3,  currency: 'GBP', currencySymbol: '£', locale: 'en-GB', weightUnit: 'g',  ebayDomain: 'ebay.co.uk' },
+  EBAY_CA: { id: 'EBAY_CA', country: 'CA', label: 'Canada',         flag: '🇨🇦', ebaySiteId: 2,  currency: 'CAD', currencySymbol: '$', locale: 'en-CA', weightUnit: 'g',  ebayDomain: 'ebay.ca' },
 }
 
 export const DEFAULT_MARKETPLACE = 'EBAY_AU'
@@ -31,7 +32,9 @@ export function guessMarketplace() {
     if (loc.endsWith('-us') || loc === 'en-us') return 'EBAY_US'
     if (loc.endsWith('-gb') || loc === 'en-gb') return 'EBAY_GB'
     if (loc.endsWith('-au')) return 'EBAY_AU'
+    if (loc.endsWith('-ca') || loc === 'fr-ca') return 'EBAY_CA'
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''
+    if (tz.startsWith('America/Toronto') || tz.startsWith('America/Vancouver') || tz.startsWith('America/Edmonton') || tz.startsWith('America/Winnipeg')) return 'EBAY_CA'
     if (tz.startsWith('America/')) return 'EBAY_US'
     if (tz.startsWith('Europe/London')) return 'EBAY_GB'
   } catch { /* fall through */ }

@@ -19,3 +19,8 @@ verify_jwt = false
 # (is_store_member); JWT-at-gateway would reject the CORS preflight. Off.
 [functions.ai-assess]
 verify_jwt = false
+
+# ebay-taxonomy builds per-marketplace category maps from eBay's public Taxonomy
+# API using an app token. Admin-triggered; no per-user auth needed. Off.
+[functions.ebay-taxonomy]
+verify_jwt = false
