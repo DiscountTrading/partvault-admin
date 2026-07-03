@@ -67,17 +67,17 @@ model, per-store location/marketplace, category architecture, and store deletion
 
 **GUARANTEE: data is never purged before `paid_through` + the full recovery window.** Retention is anchored to `paid_through` (end of the paid/committed term), NOT the deletion date — their paid period is always covered, plus a grace, plus a long win-back window. The purge job is anchored to `paid_through` and cannot run early. A committed/annual user keeps being invoiced through the term even if they delete, so their store is retained for the whole term automatically.
 
-Two paths, because a **churned/expired** user (we want them back) is treated more generously than someone who **deleted their own store**:
+**No recovery fee.** Data always comes back free — but **recovering after the 30-day grace requires starting a fresh 12-month subscription** from the recovery date. The re-commitment is the mechanism (not a fee), so win-back is frictionless and long-gone returns come back as committed customers. Deletion and expiry follow the **same** rules:
 
-| Phase (measured from `paid_through`) | Owner-deleted store | Expired / lapsed subscription |
+| Phase (measured from `paid_through`) | State | How to get back |
 |---|---|---|
-| Up to `paid_through` | Kept · free self-restore | Kept · active until term end |
-| 0–30 days after | Hidden · **free** self-restore | Suspended · **free** reactivate |
-| 31 days – 12 months after | Archived · restore + **one-off recovery fee** | Archived · **free** reactivation via win-back (free-month offer applies, no fee) |
-| After `paid_through` + 12 months | Purged — permanently hard-deleted | Purged — permanently hard-deleted |
+| Up to `paid_through` | Kept (active unless deleted) | **Free** restore, resume, original anchor |
+| 0–30 days after | Hidden / suspended, billing stopped | **Free** restore; resume on their cadence from restore day |
+| 31 days – 12 months after | Archived (data + photos kept) | **Free data recovery, but requires a new 12-month term** from recovery day (win-back free-month/bonus offers can layer on top) |
+| After `paid_through` + 12 months | Purged — permanently hard-deleted | Not recoverable |
 
-- **Win-back recovery is free** — churned users reactivating (incl. via marketing/free-month offers) get their data back at no charge. The recovery fee applies only to an owner undoing their *own* deletion after the 30-day grace.
-- **Effective retention:** monthly ≈ current period + ~13 months; annual/committed ≈ term (~12mo) + ~13 months. Comfortably covers "period + minimum 30 days, ideally much more."
+- **>30-day recovery = a 12-month plan** (committed-monthly or paid-upfront), not the flexible monthly. New `paid_through` = recovery day + 12 months (re-anchors retention).
+- **Effective retention ≈ paid period + ~13 months** — comfortably "period + minimum 30 days, ideally much more"; gives marketing a full year to win them back with data + photos intact.
 - **Delete:** owner/admin only, type-to-confirm. On delete: hide from all members, stop billing (keep paid time credited), **revoke eBay tokens immediately** (never archived), stop syncs.
 - **Always offer "delete permanently now"** (GDPR/right-to-erasure override of the win-back retention).
 - Photos ride along the whole window (needed to relist on win-back), purged at the end.
@@ -87,13 +87,13 @@ Two paths, because a **churned/expired** user (we want them back) is treated mor
 
 ## 6. Billing on restore
 
-- Restore **requires a valid payment method** (fails → stays deleted/archived).
+- Restore **requires a valid payment method** (fails → stays deleted/archived). **No recovery fee, ever.**
 - **Deletion keeps already-paid time credited** (track `paid_through`):
-  - Restore **within the paid window** → resume **free**, original billing anchor.
-  - Restore **after it lapsed** → subscription **restarts at current price, charged on the recovery day** (new anchor), no gap back-charge.
-- **Archive restores (31–180) always pay the one-off recovery fee**; the subscription charge only applies if the paid window has lapsed.
+  - **Within the paid window** → resume **free**, original billing anchor.
+  - **0–30 days after `paid_through`** → resume free-to-recover; billing resumes on their prior cadence, charged from the recovery day (new anchor), no gap back-charge.
+  - **31 days – 12 months after `paid_through`** → **data recovery is free but requires starting a new 12-month term** (committed-monthly or paid-upfront) at current price, charged on the recovery day; new `paid_through` = recovery + 12 months.
 - **Trials never resurrect** (trial eligibility is account-level, used once) — restoring a former trial starts paid on the recovery day.
-- Resume at **current list price**, not grandfathered.
+- Resume/restart at **current list price**, not grandfathered.
 
 ## 7. Build sequence
 
