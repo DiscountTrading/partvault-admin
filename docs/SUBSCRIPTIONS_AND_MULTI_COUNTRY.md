@@ -9,7 +9,7 @@ model, per-store location/marketplace, category architecture, and store deletion
 
 | | **Free Trial** | **Basic** | **Pro** | **Business** |
 |---|---|---|---|---|
-| Price | 14 days, full | **$19/mo** | ~$59/mo | ~$99/mo |
+| Committed rate | 14 days, full | **$19/mo** | $59/mo | $99/mo |
 | Mobile capture + inventory | ✅ | ✅ | ✅ | ✅ |
 | List / sync to eBay | ✅ | ✅ | ✅ | ✅ |
 | AI | Full (capped ~100) | Limited: fast Haiku naming + ~50 full assessments/mo | Full (fair-use ~1,000/mo) | Highest limits |
@@ -22,6 +22,19 @@ model, per-store location/marketplace, category architecture, and store deletion
 - Start Basic at **$19** deliberately (land cheap, upsell to Pro/Business). Price can rise later.
 - **AI is the only real variable cost** (~5¢/full Sonnet assessment) — it is the primary gating lever. Overage sold as credit packs.
 - Item allowances, not a per-stored-item monthly fee (a monthly tax on stored rows punishes keeping full inventory — the product's core value).
+
+### 1a. Billing cadence & commitment (each paid tier)
+
+| Cadence | Basic | Pro | Business | Notes |
+|---|---|---|---|---|
+| **Monthly, cancel anytime** | $29/mo | $79/mo | $129/mo | Flexibility premium (~+50%/smaller % higher up) |
+| **12-month, paid monthly** | $19/mo | $59/mo | $99/mo | **Full 12-month commitment — billing continues for all 12 months; cancel only stops renewal at month 12, no early exit** |
+| **12-month, paid upfront** | $228 (12×$19) → **14 months** | $708 → 14 mo | $1,188 → 14 mo | 2 bonus months; best value + cash upfront |
+
+- The "committed rate" column in §1 = the $19/$59/$99 12-month rate. Monthly-flexible is the premium.
+- **Upfront prepaid: no refund on early cancel — access continues to period end** (already discounted).
+- Trial runs first, then converts to the chosen cadence.
+- Stripe: monthly-flex and paid-upfront-annual are native; "12-month paid monthly" = a monthly subscription + an enforced 12-month minimum term.
 
 ## 2. Billing model
 
@@ -52,11 +65,16 @@ model, per-store location/marketplace, category architecture, and store deletion
 
 ## 5. Store deletion & retention
 
+**Retention is anchored to `paid_through` (end of the paid/committed term), NOT the deletion date** — you can't purge data someone has paid to keep. A committed-annual user keeps being invoiced through the term even if they delete, so their store is retained for the whole term automatically.
+
 | Phase | Window | State | Recovery |
 |---|---|---|---|
-| Soft-deleted | Days 0–30 | Hidden in-app, billing stopped | Self-service restore, **free** |
-| Archived | Days 31–180 | Back-end only | Support restore + **one-off recovery fee** |
-| Purged | 180+ days | Permanently hard-deleted | Not recoverable |
+| Paid / committed | Any time up to `paid_through` | Kept | Self-service restore, **free** |
+| Grace | 0–30 days **after `paid_through`** | Hidden, billing stopped | Self-service restore, **free** |
+| Archived | 31–180 days **after `paid_through`** | Back-end only | Support restore + **one-off recovery fee** |
+| Purged | `paid_through` + 180 days | Permanently hard-deleted | Not recoverable |
+
+Effective max retention: monthly ≈ current period + 180d; annual/committed ≈ term (~12mo) + 180d.
 
 - **Delete:** owner/admin only, type-to-confirm. On delete: hide from all members, stop billing (keep any paid time credited), **revoke eBay tokens immediately** (never archived), stop syncs.
 - **Always offer "delete permanently now"** (GDPR/right-to-erasure override of the archive).
