@@ -11,7 +11,6 @@ import AuthScreen from './components/AuthScreen'
 import Dashboard from './components/Dashboard'
 import Inventory from './components/Inventory'
 import Settings from './components/Settings'
-import SystemAdmin from './components/SystemAdmin'
 import JoinStore from './components/JoinStore'
 import Insights from './components/Insights'
 import Vehicles from './components/Vehicles'
@@ -186,19 +185,6 @@ export default function App() {
   const [cars, setCars] = useState([])
   const [marketplaceId, setMarketplaceId] = useState('EBAY_AU') // re-render trigger for currency
   const [plan, setPlan] = useState(() => planState(null)) // store's subscription plan (defaults open)
-  const [isPlatformAdmin, setIsPlatformAdmin] = useState(false) // superadmin → System tab
-
-  // One-time platform-admin check. Never surfaced as a link/tab — the panel is
-  // reachable ONLY via a hidden URL hash AND only renders for a verified admin;
-  // the real security is server-side RLS (system_settings → platform_admins).
-  useEffect(() => { sb.rpc('is_platform_admin').then(({ data }) => setIsPlatformAdmin(!!data)) }, [session])
-  const [systemOpen, setSystemOpen] = useState(false)
-  useEffect(() => {
-    const check = () => setSystemOpen(window.location.hash.toLowerCase() === '#superadmin')
-    check(); window.addEventListener('hashchange', check)
-    return () => window.removeEventListener('hashchange', check)
-  }, [])
-  const closeSystem = () => { if (window.location.hash) history.replaceState(null, '', window.location.pathname); setSystemOpen(false) }
 
   // Enrich costing with the storage-facility config (rent normalised to /day) and
   // the per-category shipping box dims, so partEffectiveCost can compute storage.
@@ -255,10 +241,6 @@ export default function App() {
     </div>
   )
   if (!session) return <AuthScreen />
-
-  // Hidden superadmin panel — only via #superadmin AND only for a verified
-  // platform admin (server-checked). Non-admins with the hash just see the app.
-  if (systemOpen && isPlatformAdmin) return <SystemAdmin email={session.user?.email} onClose={closeSystem} />
 
   // Authenticated but not a member of any store yet — let them join with a code.
   if (!stores || stores.length === 0) return <JoinStore onJoined={(id) => refreshStores(id)} onSignOut={signOut} />
