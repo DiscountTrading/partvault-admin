@@ -4,7 +4,7 @@ import { useParts } from './hooks/useParts'
 import { useSales } from './hooks/useSales'
 import { sb } from './lib/supabase'
 import { C, S, APP_VERSION, rentPerDay } from './lib/constants'
-import { MARKETPLACE_LIST, guessMarketplace } from './lib/marketplaces'
+import { MARKETPLACE_LIST, guessMarketplace, setActiveMarketplace } from './lib/marketplaces'
 import { DEFAULT_LABELS } from './lib/labels'
 import AuthScreen from './components/AuthScreen'
 import Dashboard from './components/Dashboard'
@@ -182,6 +182,7 @@ export default function App() {
   const [labels, setLabels] = useState(DEFAULT_LABELS)
   const [insightsInit, setInsightsInit] = useState(null) // drill-down filter from Dashboard
   const [cars, setCars] = useState([])
+  const [marketplaceId, setMarketplaceId] = useState('EBAY_AU') // re-render trigger for currency
 
   // Enrich costing with the storage-facility config (rent normalised to /day) and
   // the per-category shipping box dims, so partEffectiveCost can compute storage.
@@ -214,6 +215,11 @@ export default function App() {
       if (data?.settings?.storage) setStorage(s => ({ ...s, ...data.settings.storage }))
       if (data?.settings?.shipping) setShipping(data.settings.shipping)
       if (data?.settings?.labels) setLabels(s => ({ ...s, ...data.settings.labels }))
+      // Currency/units follow the store's marketplace: set the module-level
+      // active marketplace (read by fmt etc), then bump state to re-render.
+      const mp = data?.settings?.marketplace || 'EBAY_AU'
+      setActiveMarketplace(mp)
+      setMarketplaceId(mp)
     })
     // Load cars
     sb.from('cars').select('*').eq('store_id', storeId).is('deleted_at', null).order('created_at', { ascending: false })
@@ -255,7 +261,7 @@ export default function App() {
           <button style={{ background: 'rgba(220,38,38,0.2)', border: '1px solid rgba(220,38,38,0.3)', color: 'rgba(255,255,255,0.7)', borderRadius: 6, padding: '6px 10px', cursor: 'pointer', fontSize: 12 }} onClick={signOut}>Sign Out</button>
         </div>
       </nav>
-      <main style={S.main}>
+      <main style={S.main} key={marketplaceId}>{/* re-mounts content when the active store's currency changes */}
         {tab === 'dashboard' && <Dashboard parts={parts} sales={sales} costing={costingFull} inventory={inventory} onDrill={drillToInsights} onSeeSales={() => setTab('sales')} />}
         {tab === 'sales' && <Sales sales={sales} parts={parts} costing={costingFull} />}
         {tab === 'inventory' && (

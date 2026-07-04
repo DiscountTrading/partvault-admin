@@ -1,4 +1,6 @@
-export const APP_VERSION = '3.24.1'
+export const APP_VERSION = '3.24.2'
+
+import { getActiveMarketplace } from './marketplaces'
 
 export const C = {
   bg:'#f5f4f0', panel:'#edeae3', card:'#ffffff', border:'#ddd9d0',
@@ -80,7 +82,9 @@ export const S = {
   statLbl:{ fontSize:12, color:C.muted, fontWeight:500, textTransform:'uppercase', letterSpacing:'0.5px' },
 }
 
-export const fmt = n => `$${(+n||0).toFixed(0)}`
+// Money display in the ACTIVE store's currency symbol (AU/US/CA "$", GB "£").
+// Identical output to the old hardcoded "$" for AU stores.
+export const fmt = n => `${getActiveMarketplace().currencySymbol}${(+n||0).toFixed(0)}`
 export const pct = n => `${(+n||0).toFixed(1)}%`
 export const today = () => new Date().toISOString().split('T')[0]
 export const totalCost = p => Object.values(p.costs||{}).reduce((a,v)=>a+(+v||0),0)

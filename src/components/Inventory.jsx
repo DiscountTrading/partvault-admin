@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
 import { C, S, fmt, pct, totalCost, estimateCostBasis, CATEGORY_NAMES, EBAY_AU_CATEGORIES, canonicalCategory, canonicalSubcategory, PART_CONDITIONS, STATUS_COLORS, STATUS_LABELS } from '../lib/constants'
 import { sb } from '../lib/supabase'
+import { getActiveMarketplace } from '../lib/marketplaces'
 import { MAKES, MODEL_SUGS } from '../lib/vehicles'
 import { printLabels, DEFAULT_LABELS } from '../lib/labels'
 
@@ -57,7 +58,8 @@ function descPromptCore(part, aiSettings) {
   if (aiSettings?.includePartNumber) fields.push('OEM part number')
   if (aiSettings?.includeConditionDetail) fields.push('condition detail')
   if (aiSettings?.includeInstallLink && aiSettings?.installLinkUrl) fields.push(`install guide: ${aiSettings.installLinkUrl} with mechanic disclaimer`)
-  return `You are writing an eBay listing description for a used Australian auto part.\nPart: ${part.title||'Unknown'}\nMake: ${part.make||''} Model: ${part.model||''} Year: ${part.year||''}\nCategory: ${part.category||''} > ${part.subcategory||''}\nCondition: ${part.condition||'Used – Good'}\nOEM Part#: ${part.partNumber||'Not specified'}\nNotes: ${part.notes||'None'}\nWrite a ${lengthGuide}. Include: ${fields.join(', ')}.\n${aiSettings?.customPromptNotes||''}\nDo NOT include a store footer. Plain text only.`
+  const mkLabel = { EBAY_AU: 'Australian', EBAY_US: 'US', EBAY_GB: 'UK', EBAY_CA: 'Canadian' }[getActiveMarketplace().id] || 'Australian'
+  return `You are writing an eBay listing description for a used auto part sold on the ${mkLabel} eBay marketplace.\nPart: ${part.title||'Unknown'}\nMake: ${part.make||''} Model: ${part.model||''} Year: ${part.year||''}\nCategory: ${part.category||''} > ${part.subcategory||''}\nCondition: ${part.condition||'Used – Good'}\nOEM Part#: ${part.partNumber||'Not specified'}\nNotes: ${part.notes||'None'}\nWrite a ${lengthGuide}. Include: ${fields.join(', ')}.\n${aiSettings?.customPromptNotes||''}\nDo NOT include a store footer. Plain text only.`
 }
 
 async function callDescribe(body) {

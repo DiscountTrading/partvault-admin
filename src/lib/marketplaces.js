@@ -11,6 +11,25 @@ export const MARKETPLACES = {
 export const DEFAULT_MARKETPLACE = 'EBAY_AU'
 export const MARKETPLACE_LIST = Object.values(MARKETPLACES)
 
+// Active marketplace for the CURRENT store — set by App when the active store
+// loads, read by display helpers (e.g. fmt in constants.js) so every money
+// figure shows the store's currency without threading a store prop everywhere.
+let _activeId = DEFAULT_MARKETPLACE
+export function setActiveMarketplace(id) { _activeId = MARKETPLACES[id] ? id : DEFAULT_MARKETPLACE }
+export function getActiveMarketplace() { return MARKETPLACES[_activeId] }
+
+// Weight for display: metric marketplaces show kg/g; US shows lb/oz.
+export function formatWeight(grams) {
+  const g = Number(grams) || 0
+  if (getActiveMarketplace().weightUnit === 'oz') {
+    const totalOz = g / 28.3495
+    const lb = Math.floor(totalOz / 16)
+    const oz = Math.round(totalOz % 16)
+    return lb ? `${lb} lb ${oz} oz` : `${Math.max(oz, 1)} oz`
+  }
+  return g >= 1000 ? `${(g / 1000).toFixed(g >= 10000 ? 0 : 1)} kg` : `${Math.round(g)} g`
+}
+
 // Resolve a store's marketplace config (tolerant of missing/legacy shapes).
 export function marketplaceOf(store) {
   const id = store?.settings?.marketplace || store?.marketplace || DEFAULT_MARKETPLACE

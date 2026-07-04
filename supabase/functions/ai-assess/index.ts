@@ -61,6 +61,30 @@ async function getStyleExamples(service: any, storeId: string, make?: string, ca
 const styleBlock = (ex: any[]) =>
   ex.length ? `\n\nMatch THIS seller's established style — tone, structure and level of detail. Examples of their recent listings:\n${ex.map((e: any) => `• ${e.title ? e.title + ': ' : ''}${String(e.description).slice(0, 400)}`).join('\n')}` : ''
 
+// Spelling follows the store's marketplace (default AU English).
+const spellingLine = (mp?: string) => ({
+  EBAY_US: '\nUse US English spelling and terms (tire, color, aluminum, windshield, hood, fender).',
+  EBAY_CA: '\nUse Canadian English spelling and terms (tire, colour, aluminum, windshield).',
+  EBAY_GB: '\nUse British English spelling and terms (tyre, colour, aluminium, windscreen, bonnet, wing).',
+} as Record<string, string>)[mp || ''] || ''
+// Market wording per marketplace (default AU): seller nationality + currency.
+const MARKET_WORDS: Record<string, { adj: string; market: string; currency: string }> = {
+  EBAY_US: { adj: 'American', market: 'US', currency: 'USD' },
+  EBAY_GB: { adj: 'British', market: 'UK', currency: 'GBP' },
+  EBAY_CA: { adj: 'Canadian', market: 'Canadian', currency: 'CAD' },
+  EBAY_AU: { adj: 'Australian', market: 'Australian', currency: 'AUD' },
+}
+const marketWords = (mp?: string) => MARKET_WORDS[mp || ''] || MARKET_WORDS.EBAY_AU
+// Best-effort store marketplace lookup (empty string = unknown → AU wording).
+async function storeMarketplaceId(url: string, storeId?: string): Promise<string> {
+  if (!storeId) return ''
+  try {
+    const svc = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+    const { data } = await svc.from('stores').select('settings').eq('id', storeId).single()
+    return data?.settings?.marketplace || ''
+  } catch { return '' }
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
   let body: any = null
@@ -135,12 +159,16 @@ serve(async (req) => {
     if (mode === 'describe') {
       const { prompt: rawPrompt } = body
       if (!rawPrompt) return json({ error: 'prompt required' }, 400)
-      // Learn from the store's own recent descriptions (style guide).
+      // Learn from the store's own recent descriptions (style guide) + write in
+      // the store's marketplace spelling (tyre/colour vs tire/color).
       let prompt = rawPrompt
       try {
         const svc = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-        const ex = await getStyleExamples(svc, body.storeId, body.make, body.category, body.partId)
-        prompt = rawPrompt + styleBlock(ex)
+        const [{ data: stRow }, ex] = await Promise.all([
+          svc.from('stores').select('settings').eq('id', body.storeId).single(),
+          getStyleExamples(svc, body.storeId, body.make, body.category, body.partId),
+        ])
+        prompt = rawPrompt + spellingLine(stRow?.settings?.marketplace) + styleBlock(ex)
       } catch { /* best effort */ }
       const optionCount = Math.min(Math.max(Math.round(+body.options || 1), 1), 6)
       if (optionCount > 1) {
@@ -174,10 +202,11 @@ serve(async (req) => {
         ...carB64s.map((b: string) => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b } })),
       ]
       if (!blocks.length) return json({ error: 'At least one car photo is required' }, 400)
+      const mkCar = marketWords(await storeMarketplaceId(url, body.storeId))
       const aiRes = await callAnthropic({
         model: 'claude-sonnet-4-6', max_tokens: 200,
-        system: 'You identify Australian-market vehicles from photos. Return JSON only: {"make":"","model":"","year":"","confidence":"high|medium|low"}. Use the badges, body shape, lights and any visible build plate. year is the model year or a short range if unsure. Only fill a field if reasonably confident; leave "" otherwise.',
-        messages: [{ role: 'user', content: [...blocks, { type: 'text', text: 'Identify this vehicle (Australian market).' }] }],
+        system: `You identify ${mkCar.market}-market vehicles from photos. Return JSON only: {"make":"","model":"","year":"","confidence":"high|medium|low"}. Use the badges, body shape, lights and any visible build plate. year is the model year or a short range if unsure. Only fill a field if reasonably confident; leave "" otherwise.`,
+        messages: [{ role: 'user', content: [...blocks, { type: 'text', text: `Identify this vehicle (${mkCar.market} market).` }] }],
       })
       const data = await aiRes.json()
       if (data.error) return json({ error: data.error.message || 'AI error' }, 400)
@@ -199,10 +228,13 @@ serve(async (req) => {
       const car = body.car || {}
       const nameCount = Math.min(Math.max(Math.round(+body.options || 1), 1), 6)
       const vehicleTxt = `Vehicle: ${car.make || ''} ${car.model || ''} ${car.year || ''}.`
+      // Title spelling follows the marketplace — buyers search "tyre" in AU/UK
+      // but "tire" in US/CA, so this directly affects search visibility.
+      const nameSpell = spellingLine(await storeMarketplaceId(url, body.storeId))
       if (nameCount > 1) {
         const aiRes = await callAnthropic({
           model: 'claude-haiku-4-5-20251001', max_tokens: 400,
-          system: `You name a used car part for an eBay listing. Return JSON only: {"titles":["max 80 chars", ...]}. Give ${nameCount} DISTINCT title options, best/most-likely first. CRITICAL: if the part has a side/position that cannot be certain from the photo — left vs right, driver vs passenger, front vs rear, upper vs lower — you MUST include BOTH variants among the options (your best guess first, the opposite side as another option). Otherwise vary the part type/variant/qualifier. Front-load Make Model Year(s) then the part type, then the key qualifier (side/position). No filler, no ALL CAPS.`,
+          system: `You name a used car part for an eBay listing. Return JSON only: {"titles":["max 80 chars", ...]}. Give ${nameCount} DISTINCT title options, best/most-likely first. CRITICAL: if the part has a side/position that cannot be certain from the photo — left vs right, driver vs passenger, front vs rear, upper vs lower — you MUST include BOTH variants among the options (your best guess first, the opposite side as another option). Otherwise vary the part type/variant/qualifier. Front-load Make Model Year(s) then the part type, then the key qualifier (side/position). No filler, no ALL CAPS.${nameSpell}`,
           messages: [{ role: 'user', content: [...blocks, { type: 'text', text: `${vehicleTxt} Give ${nameCount} concise eBay product name options for this part.` }] }],
         })
         const data = await aiRes.json()
@@ -214,7 +246,7 @@ serve(async (req) => {
       }
       const aiRes = await callAnthropic({
         model: 'claude-haiku-4-5-20251001', max_tokens: 120,
-        system: 'You name a used car part for an eBay listing. Return JSON only: {"title":"max 80 chars"}. Front-load Make Model Year(s) and the part type, then a key qualifier (side/position). No filler, no ALL CAPS.',
+        system: `You name a used car part for an eBay listing. Return JSON only: {"title":"max 80 chars"}. Front-load Make Model Year(s) and the part type, then a key qualifier (side/position). No filler, no ALL CAPS.${nameSpell}`,
         messages: [{ role: 'user', content: [...blocks, { type: 'text', text: `${vehicleTxt} Give a concise eBay product name for this part.` }] }],
       })
       const data = await aiRes.json()
@@ -251,6 +283,10 @@ serve(async (req) => {
     ]
     if (!partBlocks.length) return json({ error: 'At least one photo is required' }, 400)
 
+    // Store marketplace → seller nationality, currency and spelling in prompts.
+    const mpId = await storeMarketplaceId(url, storeId)
+    const mw = marketWords(mpId)
+
     // ── STAGE 1 — instant capture result (mobile trigger) ───────────────────
     // Haiku + one photo → TOP category + price only. Clears ai_pending so the
     // phone updates in ~2s. Then we fall through to the full Sonnet assessment
@@ -260,11 +296,11 @@ serve(async (req) => {
     if (trusted && partId) {
       try {
         const catList = Object.keys(CATEGORY_TREE).join(', ')
-        const lightSys = `You are an expert Australian used car parts seller. Return JSON only: {"category":"exact","listPrice":number}. Pick the single best TOP-LEVEL category from: ${catList}. listPrice = a realistic AUD used price.`
+        const lightSys = `You are an expert ${mw.adj} used car parts seller. Return JSON only: {"category":"exact","listPrice":number}. Pick the single best TOP-LEVEL category from: ${catList}. listPrice = a realistic ${mw.currency} used price.`
         const carTxt = `${car?.make || ''} ${car?.model || ''} ${car?.year || ''}`.trim()
         const aiRes = await callAnthropic({
           model: 'claude-haiku-4-5-20251001', max_tokens: 120, temperature: 0, system: lightSys,
-          messages: [{ role: 'user', content: [partBlocks[0], { type: 'text', text: `Vehicle: ${carTxt}. Top category + fair used AUD price.` }] }],
+          messages: [{ role: 'user', content: [partBlocks[0], { type: 'text', text: `Vehicle: ${carTxt}. Top category + fair used ${mw.currency} price.` }] }],
         })
         const d = await aiRes.json()
         const q = d.error ? null : parseJson(textOf(d))
@@ -315,7 +351,7 @@ serve(async (req) => {
     if (adcfg.includePartNumber) incld.push('the OEM part number if known')
     if (adcfg.includeConditionDetail) incld.push('condition detail')
     if (adcfg.includeInstallLink && adcfg.installLinkUrl) incld.push(`a line pointing to the install guide at ${adcfg.installLinkUrl}`)
-    const descGuide = `\nThe "description" field must be ${lengthGuide}, written for an eBay buyer.${incld.length ? ` Include where relevant: ${incld.join(', ')}.` : ''}${adcfg.customPromptNotes ? ` Store style notes (follow these exactly): ${adcfg.customPromptNotes}` : ''} Plain text only; do NOT add a store footer (it is appended later).`
+    const descGuide = `\nThe "description" field must be ${lengthGuide}, written for an eBay buyer.${incld.length ? ` Include where relevant: ${incld.join(', ')}.` : ''}${adcfg.customPromptNotes ? ` Store style notes (follow these exactly): ${adcfg.customPromptNotes}` : ''} Plain text only; do NOT add a store footer (it is appended later).${spellingLine(mpId)}`
 
     // AI learning: bias the auto-assessment toward the store's own recent style.
     let descLearn = ''
@@ -325,7 +361,7 @@ serve(async (req) => {
       descLearn = styleBlock(ex)
     } catch { /* best effort */ }
     const catTree = Object.entries(CATEGORY_TREE).map(([c, subs]) => `${c}: ${subs.join(', ')}`).join('\n')
-    const sys = `You are an expert Australian used car parts eBay seller. Return JSON only.\nReturn: {"title":"max 80 chars","category":"exact","subcategory":"exact","condition":"Used – Good","description":"see rules below","partNumber":"OEM or empty","listPrice":number,"weight":number,"removalMinutes":number,"notes":""}\nremovalMinutes is a rough, generic estimate of the labour MINUTES to remove this part from the vehicle (whole number; e.g. a globe ~5, a door mirror ~15, a guard ~45, an engine ~240). It's only an initial basis, not exact.\nCATEGORY: choose the single best category, then a subcategory that is EXACTLY one of the options listed under that category. If none fit, use "Other". Do not invent a subcategory. A loose globe/bulb is "Globes & Bulbs" (or the specific light it's for), NOT a "Headlight Assembly" unless it is the whole light unit. The category list (category: allowed subcategories):\n${catTree}\ntitle MUST be optimised for eBay search (Cassini): front-load the exact terms buyers type — Make Model Year(s) PartType — then key qualifiers (side/position, OEM/part number, variant, colour). Use as much of the 80 chars as possible, no filler words, no ALL CAPS. Example: "Holden Commodore VE 2006-2013 Right Front Headlight Halogen 92193575 Genuine".\nweight is the estimated packed shipping weight in GRAMS (whole number, e.g. 1500 for 1.5kg). Never return kilograms or a value below 50.${descGuide}${descLearn}`
+    const sys = `You are an expert ${mw.adj} used car parts eBay seller. Return JSON only.\nReturn: {"title":"max 80 chars","category":"exact","subcategory":"exact","condition":"Used – Good","description":"see rules below","partNumber":"OEM or empty","listPrice":number,"weight":number,"removalMinutes":number,"notes":""}\nremovalMinutes is a rough, generic estimate of the labour MINUTES to remove this part from the vehicle (whole number; e.g. a globe ~5, a door mirror ~15, a guard ~45, an engine ~240). It's only an initial basis, not exact.\nCATEGORY: choose the single best category, then a subcategory that is EXACTLY one of the options listed under that category. If none fit, use "Other". Do not invent a subcategory. A loose globe/bulb is "Globes & Bulbs" (or the specific light it's for), NOT a "Headlight Assembly" unless it is the whole light unit. The category list (category: allowed subcategories):\n${catTree}\ntitle MUST be optimised for eBay search (Cassini): front-load the exact terms buyers type — Make Model Year(s) PartType — then key qualifiers (side/position, OEM/part number, variant, colour). Use as much of the 80 chars as possible, no filler words, no ALL CAPS. Example: "Holden Commodore VE 2006-2013 Right Front Headlight Halogen 92193575 Genuine".\nweight is the estimated packed shipping weight in GRAMS (whole number, e.g. 1500 for 1.5kg). Never return kilograms or a value below 50.${descGuide}${descLearn}`
     const vehicleLine = `Donor vehicle: ${carInfo.make || ''} ${carInfo.model || ''} ${carInfo.year || ''}${carInfo.notes ? ` (notes: ${String(carInfo.notes).slice(0, 200)})` : ''}`.trim()
     const partNumberUrl = String(body.partNumberUrl || '')
     const content: any[] = [{ type: 'text', text: `PART photos (${partBlocks.length}) — identify THIS part:` }]
