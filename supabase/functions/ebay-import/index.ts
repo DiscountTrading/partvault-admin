@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.26.0'
+const EDGE_FN_VERSION         = '3.27.0'
 const CHUNK_SIZE              = 20
 // eBay's getOrders can't return orders older than this, so the live sync only ever
 // manages sales within this window. The CSV history import must stay strictly OLDER
@@ -425,6 +425,28 @@ async function handleRequest(req: Request): Promise<Response> {
 
   const body = await req.json()
   const { action, storeId, jobId } = body
+
+  // ── Global purge of deleted stores past their retention window (cron) ────────
+  // Hard-deletes storage objects then the store row (cascade). No storeId — scans
+  // all stores due for purge. Runs under the service role.
+  if (action === 'purge_deleted_stores') {
+    const { data: due } = await sb.from('stores')
+      .select('id, name').not('deleted_at', 'is', null).lte('purge_after', new Date().toISOString())
+    let purged = 0
+    for (const s of (due || [])) {
+      try {
+        // Remove this store's part photos from storage (uploaded under `${storeId}/…`).
+        try {
+          const { data: files } = await sb.storage.from('part-photos').list(s.id, { limit: 1000 })
+          if (files?.length) await sb.storage.from('part-photos').remove(files.map((f: any) => `${s.id}/${f.name}`))
+        } catch (_) { /* storage best-effort */ }
+        // Delete the store — FK cascades remove parts, listings, sales, photos, etc.
+        const { error } = await sb.from('stores').delete().eq('id', s.id)
+        if (!error) purged++
+      } catch (_) { /* continue with the rest */ }
+    }
+    return json({ ok: true, version: EDGE_FN_VERSION, due: (due || []).length, purged })
+  }
 
   // ── XML HELPERS ─────────────────────────────────────────────────────────────
 

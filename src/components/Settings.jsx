@@ -199,6 +199,12 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     { id: 'annual_upfront', label: '12-month (paid upfront, +2 months free)', price: { basic: '$228', pro: '$708', business: '$1,188' }, suffix: '/yr' },
   ]
   const buy = async (fn) => { setBillingBusy(true); try { await fn() } catch (e) { alert(e.message) } setBillingBusy(false) }
+  // Store deletion / recovery
+  const [storeName, setStoreName] = useState('')
+  const [myRole, setMyRole] = useState('')
+  const [deletedStores, setDeletedStores] = useState([])
+  const [delConfirm, setDelConfirm] = useState('')
+  const isOwner = myRole === 'owner'
 
   // Marketplace (country) — set at store creation, locked once parts exist
   // (DB trigger enforces it; the UI just explains).
@@ -313,8 +319,13 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     setSkuPad(DEFAULT_SKU_PAD)
     setMarketingImages([])
     try {
-      const { data } = await sb.from('stores').select('settings, sku_format_config, plan').eq('id', storeId).single()
+      const { data } = await sb.from('stores').select('settings, sku_format_config, plan, name').eq('id', storeId).single()
       setPlan(planState(data?.plan))
+      setStoreName(data?.name || '')
+      sb.auth.getUser().then(({ data: u }) => {
+        if (u?.user) sb.from('store_members').select('role').eq('store_id', storeId).eq('user_id', u.user.id).maybeSingle().then(({ data: m }) => setMyRole(m?.role || ''))
+      })
+      sb.rpc('get_my_deleted_stores').then(({ data: d }) => setDeletedStores(d || []))
       sb.from('ai_usage').select('full_count, light_count').eq('store_id', storeId).eq('month', new Date().toISOString().slice(0, 7)).maybeSingle()
         .then(({ data: u }) => setAiUsage(u || { full_count: 0, light_count: 0 }))
       sb.from('ai_credits').select('balance').eq('store_id', storeId).maybeSingle()
@@ -2788,6 +2799,51 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
             {/* Reconcile (advanced) */}
             {showAdvSync && <div ref={reconcileRef}><ReconcileSection /></div>}
           </div>{/* end right column */}
+        </div>
+      )}
+
+      {/* Recover a recently-deleted store (owner, within the free grace window) */}
+      {deletedStores.length > 0 && (
+        <div style={{ ...S.card, marginTop: 20, borderColor: '#fcd34d', background: '#fffbeb' }}>
+          <h3 style={{ ...S.h2, marginBottom: 8 }}>♻️ Recently deleted stores</h3>
+          {deletedStores.map(d => (
+            <div key={d.store_id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderTop: `1px solid ${C.border}` }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{d.store_name}</div>
+                <div style={{ fontSize: 11, color: C.muted }}>
+                  Deleted {new Date(d.deleted_at).toLocaleDateString()} · {d.free_restore ? 'free restore available' : 'in archive — restore needs a new 12-month plan'} · erased permanently {new Date(d.purge_after).toLocaleDateString()}
+                </div>
+              </div>
+              <button style={{ ...S.btn('secondary'), padding: '6px 14px', fontSize: 12 }}
+                onClick={async () => { try { await sb.rpc('restore_store', { p_store_id: d.store_id }); alert('Store restored.'); window.location.reload() } catch (e) { alert(e.message) } }}>
+                Restore
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Danger zone — delete this store (owner only) */}
+      {isOwner && !plan.founder && (
+        <div style={{ ...S.card, marginTop: 20, borderColor: '#fca5a5' }}>
+          <h3 style={{ ...S.h2, marginBottom: 8, color: C.red }}>Danger zone — delete this store</h3>
+          <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.5, marginBottom: 10 }}>
+            Removes this store and its parts, photos, inventory and sales history for everyone on the team, and stops billing.
+            Your data is <b>recoverable free for 30 days</b>, then archived (restore needs a new 12-month plan) and permanently erased after your paid period + 12 months.
+            <b> Your live eBay listings are NOT deleted</b> — they stay on eBay.
+          </div>
+          <input value={delConfirm} onChange={e => setDelConfirm(e.target.value)} placeholder={`Type "${storeName}" to confirm`}
+            style={{ ...S.input, maxWidth: 320, marginBottom: 10 }} />
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <button disabled={delConfirm !== storeName} style={{ ...S.btn('danger'), opacity: delConfirm === storeName ? 1 : 0.5 }}
+              onClick={async () => { if (!confirm('Delete this store? Recoverable free for 30 days.')) return; try { await sb.rpc('delete_store', { p_store_id: storeId, p_hard: false }); window.location.reload() } catch (e) { alert(e.message) } }}>
+              Delete store
+            </button>
+            <button disabled={delConfirm !== storeName} style={{ ...S.btn('secondary'), color: C.red, opacity: delConfirm === storeName ? 1 : 0.5 }}
+              onClick={async () => { if (!confirm('Permanently erase now? This CANNOT be undone (GDPR erasure).')) return; try { await sb.rpc('delete_store', { p_store_id: storeId, p_hard: true }); window.location.reload() } catch (e) { alert(e.message) } }}>
+              Delete permanently now
+            </button>
+          </div>
         </div>
       )}
     </div>
