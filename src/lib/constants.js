@@ -1,4 +1,4 @@
-export const APP_VERSION = '3.27.0'
+export const APP_VERSION = '3.27.1'
 
 import { getActiveMarketplace } from './marketplaces'
 
@@ -90,17 +90,21 @@ export const today = () => new Date().toISOString().split('T')[0]
 export const totalCost = p => Object.values(p.costs||{}).reduce((a,v)=>a+(+v||0),0)
 export const partProfit = p => (+p.list_price||0) - totalCost(p)
 
-// Default Australia Post-ish parcel rate table (grams → AUD). Editable per store
-// in Settings → Costing. Used to estimate a postage *cost* when no actual carrier
-// cost has been recorded — critical for "free shipping" sales where eBay reports
-// $0 shipping income but the postage still cost us real money.
-export const DEFAULT_POSTAGE_TIERS = [
-  { maxG: 500,   cost: 10.30 },
-  { maxG: 1000,  cost: 13.40 },
-  { maxG: 3000,  cost: 16.55 },
-  { maxG: 5000,  cost: 19.90 },
-  { maxG: 22000, cost: 29.40 },
-]
+// Default parcel rate tables by marketplace (grams → local currency). Editable
+// per store in Settings → Costing. Used to estimate a postage *cost* when no
+// actual carrier cost was recorded — critical for "free shipping" sales where
+// eBay reports $0 shipping income but the postage still cost real money.
+// AU = Australia Post, US = USPS-ish (USD), GB = Royal Mail-ish (GBP), CA (CAD).
+export const POSTAGE_TIERS_BY_MARKET = {
+  EBAY_AU: [{ maxG: 500, cost: 10.30 }, { maxG: 1000, cost: 13.40 }, { maxG: 3000, cost: 16.55 }, { maxG: 5000, cost: 19.90 }, { maxG: 22000, cost: 29.40 }],
+  EBAY_US: [{ maxG: 450, cost: 5.00 }, { maxG: 1000, cost: 9.00 }, { maxG: 3000, cost: 13.00 }, { maxG: 5000, cost: 18.00 }, { maxG: 22000, cost: 30.00 }],
+  EBAY_GB: [{ maxG: 500, cost: 3.20 }, { maxG: 1000, cost: 4.50 }, { maxG: 2000, cost: 6.50 }, { maxG: 5000, cost: 11.00 }, { maxG: 22000, cost: 18.00 }],
+  EBAY_CA: [{ maxG: 500, cost: 6.00 }, { maxG: 1000, cost: 10.00 }, { maxG: 3000, cost: 15.00 }, { maxG: 5000, cost: 20.00 }, { maxG: 22000, cost: 32.00 }],
+}
+// The active store's default tiers (used as the fallback + Settings "reset").
+export const defaultPostageTiers = () => POSTAGE_TIERS_BY_MARKET[getActiveMarketplace().id] || POSTAGE_TIERS_BY_MARKET.EBAY_AU
+// Back-compat alias (AU) for any remaining imports.
+export const DEFAULT_POSTAGE_TIERS = POSTAGE_TIERS_BY_MARKET.EBAY_AU
 export const DEFAULT_HANDLING_FEE = 2      // fixed packing/handling labour per parcel ($)
 export const DEFAULT_POSTAGE_WEIGHT_G = 1000 // assumed weight when a part has none
 
@@ -110,7 +114,7 @@ export const DEFAULT_POSTAGE_WEIGHT_G = 1000 // assumed weight when a part has n
 //  - handling: a flat per-parcel packing/handling cost (costing.handlingFee).
 // Weight is in grams (part.weight); when unknown we assume costing.postageDefaultG.
 export const estimatePostage = (p = {}, costing = {}) => {
-  const tiers = (costing.postageTiers && costing.postageTiers.length ? costing.postageTiers : DEFAULT_POSTAGE_TIERS)
+  const tiers = (costing.postageTiers && costing.postageTiers.length ? costing.postageTiers : defaultPostageTiers())
     .map(t => ({ maxG: +t.maxG || 0, cost: +t.cost || 0 }))
     .sort((a, b) => a.maxG - b.maxG)
   const handling = costing.handlingFee === '' || costing.handlingFee == null ? DEFAULT_HANDLING_FEE : +costing.handlingFee || 0

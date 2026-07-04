@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { C, S, fmt, APP_VERSION, DEFAULT_POSTAGE_TIERS, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS, rentPerDay } from '../lib/constants'
+import { C, S, fmt, APP_VERSION, DEFAULT_POSTAGE_TIERS, defaultPostageTiers, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS, rentPerDay } from '../lib/constants'
 import { printLabels, DEFAULT_LABELS } from '../lib/labels'
 import { sb } from '../lib/supabase'
 import { buildSkuPreview, SKU_TOKENS, DEFAULT_SKU_TEMPLATE, DEFAULT_SKU_PAD } from '../lib/sku'
@@ -339,6 +339,9 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         if (data.settings.aiDescription) setAiSettings(s => ({ ...s, ...data.settings.aiDescription }))
         if (data.settings.captureAssess) setCaptureAssess(s => ({ ...s, ...data.settings.captureAssess }))
         if (data.settings.costing) setCosting(s => ({ ...s, ...data.settings.costing }))
+        // No saved postage tiers → default to THIS store's marketplace rates
+        // (not AU) so cost estimates start sensible for US/UK/CA.
+        if (!data.settings.costing?.postageTiers?.length) setCosting(s => ({ ...s, postageTiers: defaultPostageTiers() }))
         if (data.settings.inventory) setInventory(s => ({ ...s, ...data.settings.inventory }))
         if (data.settings.storage) setStorage(s => ({ ...s, ...data.settings.storage }))
         if (data.settings.labels) setLabels(s => ({ ...s, ...data.settings.labels }))
@@ -1922,7 +1925,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                   <button type="button" style={{ ...S.btn('secondary'), padding: '6px 12px' }}
                     onClick={() => setCosting(s => ({ ...s, postageTiers: [...(s.postageTiers || []), { maxG: 0, cost: 0 }] }))}>+ Add tier</button>
                   <button type="button" style={{ ...S.btn('secondary'), padding: '6px 12px' }}
-                    onClick={() => setCosting(s => ({ ...s, postageTiers: DEFAULT_POSTAGE_TIERS }))}>Reset to defaults</button>
+                    onClick={() => setCosting(s => ({ ...s, postageTiers: defaultPostageTiers() }))}>Reset to defaults</button>
                 </div>
               </div>
               <div style={{ fontSize: 12, color: C.muted, marginTop: 12 }}>The heaviest tier is used for anything over the top weight. Estimated postage = matching carrier rate + handling fee.</div>
