@@ -188,8 +188,17 @@ export default function App() {
   const [plan, setPlan] = useState(() => planState(null)) // store's subscription plan (defaults open)
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false) // superadmin → System tab
 
-  // One-time platform-admin check (drives the System tab visibility).
+  // One-time platform-admin check. Never surfaced as a link/tab — the panel is
+  // reachable ONLY via a hidden URL hash AND only renders for a verified admin;
+  // the real security is server-side RLS (system_settings → platform_admins).
   useEffect(() => { sb.rpc('is_platform_admin').then(({ data }) => setIsPlatformAdmin(!!data)) }, [session])
+  const [systemOpen, setSystemOpen] = useState(false)
+  useEffect(() => {
+    const check = () => setSystemOpen(window.location.hash.toLowerCase() === '#superadmin')
+    check(); window.addEventListener('hashchange', check)
+    return () => window.removeEventListener('hashchange', check)
+  }, [])
+  const closeSystem = () => { if (window.location.hash) history.replaceState(null, '', window.location.pathname); setSystemOpen(false) }
 
   // Enrich costing with the storage-facility config (rent normalised to /day) and
   // the per-category shipping box dims, so partEffectiveCost can compute storage.
@@ -247,6 +256,10 @@ export default function App() {
   )
   if (!session) return <AuthScreen />
 
+  // Hidden superadmin panel — only via #superadmin AND only for a verified
+  // platform admin (server-checked). Non-admins with the hash just see the app.
+  if (systemOpen && isPlatformAdmin) return <SystemAdmin email={session.user?.email} onClose={closeSystem} />
+
   // Authenticated but not a member of any store yet — let them join with a code.
   if (!stores || stores.length === 0) return <JoinStore onJoined={(id) => refreshStores(id)} onSignOut={signOut} />
 
@@ -255,7 +268,7 @@ export default function App() {
       <nav style={S.nav}>
         <div style={S.logo}>⚙ PartVault Admin</div>
         <StoreSwitcher stores={stores} activeStoreId={activeStoreId} setActiveStore={setActiveStore} refreshStores={refreshStores} />
-        {(isPlatformAdmin ? [...TABS, { id: 'system', label: 'System', icon: '🛠️' }] : TABS).map(t => {
+        {TABS.map(t => {
           // Analytics tabs (Insights/Vehicles) are Pro+ — Basic sees them locked.
           const gated = (t.id === 'insights' || t.id === 'vehicles') && !plan.can('analytics')
           return (
@@ -300,7 +313,6 @@ export default function App() {
         {tab === 'vehicles' && <Vehicles parts={parts} cars={cars} sales={sales} costing={costingFull} onRefresh={refetch} />}
         {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores}
           onSettingsSaved={s => { if (s?.costing) setCosting(c => ({ ...c, ...s.costing })); if (s?.inventory) setInventory(i => ({ ...i, ...s.inventory })); if (s?.storage) setStorage(st => ({ ...st, ...s.storage })); if (s?.shipping) setShipping(s.shipping); if (s?.labels) setLabels(l => ({ ...l, ...s.labels })) }} />}
-        {tab === 'system' && isPlatformAdmin && <SystemAdmin />}
       </main>
       {toast && (
         <div style={{ position: 'fixed', bottom: 24, right: 24, background: toast.color, color: '#fff', padding: '12px 22px', borderRadius: 10, fontSize: 14, fontWeight: 600, zIndex: 1000, boxShadow: '0 8px 30px rgba(0,0,0,0.2)' }}>
