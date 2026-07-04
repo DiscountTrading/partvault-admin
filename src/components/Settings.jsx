@@ -201,6 +201,8 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   const buy = async (fn) => { setBillingBusy(true); try { await fn() } catch (e) { alert(e.message) } setBillingBusy(false) }
   // Store deletion / recovery
   const [storeName, setStoreName] = useState('')
+  const [joinCode, setJoinCode] = useState('')
+  const [nameMsg, setNameMsg] = useState('')
   const [myRole, setMyRole] = useState('')
   const [deletedStores, setDeletedStores] = useState([])
   const [delConfirm, setDelConfirm] = useState('')
@@ -319,9 +321,10 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     setSkuPad(DEFAULT_SKU_PAD)
     setMarketingImages([])
     try {
-      const { data } = await sb.from('stores').select('settings, sku_format_config, plan, name').eq('id', storeId).single()
+      const { data } = await sb.from('stores').select('settings, sku_format_config, plan, name, join_code').eq('id', storeId).single()
       setPlan(planState(data?.plan))
       setStoreName(data?.name || '')
+      setJoinCode(data?.join_code || '')
       sb.auth.getUser().then(({ data: u }) => {
         if (u?.user) sb.from('store_members').select('role').eq('store_id', storeId).eq('user_id', u.user.id).maybeSingle().then(({ data: m }) => setMyRole(m?.role || ''))
       })
@@ -2621,6 +2624,22 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                     <div style={{ fontSize: 11, color: C.muted }}>12-month plans commit to the full 12 months. Upfront adds 2 free months. You'll be taken to secure Stripe checkout.</div>
                   </div>
                 )}
+              </div>
+
+              {/* Store name — editable by an admin/owner. */}
+              <div style={{ background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 14px', marginBottom: 12 }}>
+                <label style={S.label}>🏪 Store name</label>
+                <div style={{ display: 'flex', gap: 8, maxWidth: 460 }}>
+                  <input style={{ ...S.input, flex: 1 }} value={storeName} onChange={e => setStoreName(e.target.value)} placeholder="Store name" />
+                  <button style={S.btn('secondary')} disabled={!storeName.trim()}
+                    onClick={async () => {
+                      const { error } = await sb.from('stores').update({ name: storeName.trim() }).eq('id', storeId)
+                      if (error) { setNameMsg(`✗ ${error.message}`); return }
+                      setNameMsg('Saved ✓'); setTimeout(() => setNameMsg(''), 2000); refreshStores?.()
+                    }}>Save</button>
+                  {nameMsg && <span style={{ fontSize: 12, color: nameMsg.startsWith('✗') ? C.red : C.green, fontWeight: 600, alignSelf: 'center' }}>{nameMsg}</span>}
+                </div>
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>Shown in the store switcher and on labels. This is the join code for workers: <b>{joinCode || '—'}</b> (random, keeps the store secure).</div>
               </div>
 
               {/* Marketplace (country) — chosen at store creation, locked at first part */}
