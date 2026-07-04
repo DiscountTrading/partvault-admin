@@ -80,8 +80,11 @@ begin
 end $$;
 grant execute on function public.restore_store(uuid) to authenticated;
 
--- Daily purge of stores past their purge_after (hard delete incl. storage runs in
--- the edge fn; this schedules it). Needs pg_cron + pg_net (already enabled).
+-- Daily SAFETY SCAN (report-only) of stores past their purge_after. This does
+-- NOT delete anything — it emails an alert listing stores awaiting deletion.
+-- Actual erasure only happens via a confirmed manual purge (edge action
+-- purge_deleted_stores, which requires confirm + explicit store IDs).
+-- Needs pg_cron + pg_net (already enabled).
 select cron.schedule(
   'partvault-purge-deleted',
   '30 3 * * *',
@@ -89,7 +92,7 @@ select cron.schedule(
   select net.http_post(
     url     := 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import',
     headers := jsonb_build_object('Content-Type','application/json','apikey','sb_publishable_STtCN1zWydiIFtgHR1Yn5g_n9YBH102'),
-    body    := jsonb_build_object('action','purge_deleted_stores')
+    body    := jsonb_build_object('action','purge_scan')
   );
   $cron$
 );

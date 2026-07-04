@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.27.2'
+const EDGE_FN_VERSION         = '3.27.3'
 const CHUNK_SIZE              = 20
 // eBay's getOrders can't return orders older than this, so the live sync only ever
 // manages sales within this window. The CSV history import must stay strictly OLDER
@@ -426,26 +426,58 @@ async function handleRequest(req: Request): Promise<Response> {
   const body = await req.json()
   const { action, storeId, jobId } = body
 
-  // ── Global purge of deleted stores past their retention window (cron) ────────
-  // Hard-deletes storage objects then the store row (cascade). No storeId — scans
-  // all stores due for purge. Runs under the service role.
-  if (action === 'purge_deleted_stores') {
+  // ── Purge SAFETY: report-only scan (this is what the daily cron calls) ───────
+  // Finds stores past their retention window and EMAILS an alert — it NEVER
+  // deletes. Nothing is erased without an explicit, confirmed manual purge below.
+  if (action === 'purge_scan') {
     const { data: due } = await sb.from('stores')
-      .select('id, name').not('deleted_at', 'is', null).lte('purge_after', new Date().toISOString())
-    let purged = 0
-    for (const s of (due || [])) {
+      .select('id, name, deleted_at, purge_after').not('deleted_at', 'is', null)
+      .lte('purge_after', new Date().toISOString())
+    const list = due || []
+    let emailed = false
+    const RESEND = Deno.env.get('RESEND_API_KEY')
+    const to = Deno.env.get('PURGE_ALERT_EMAIL') || 'leap00@gmail.com'
+    if (list.length && RESEND) {
+      const rows = list.map((s: any) => `• ${s.name} (deleted ${String(s.deleted_at).slice(0, 10)}, retention ended ${String(s.purge_after).slice(0, 10)})`).join('\n')
       try {
-        // Remove this store's part photos from storage (uploaded under `${storeId}/…`).
-        try {
-          const { data: files } = await sb.storage.from('part-photos').list(s.id, { limit: 1000 })
-          if (files?.length) await sb.storage.from('part-photos').remove(files.map((f: any) => `${s.id}/${f.name}`))
-        } catch (_) { /* storage best-effort */ }
-        // Delete the store — FK cascades remove parts, listings, sales, photos, etc.
-        const { error } = await sb.from('stores').delete().eq('id', s.id)
-        if (!error) purged++
-      } catch (_) { /* continue with the rest */ }
+        const r = await fetch('https://api.resend.com/emails', {
+          method: 'POST', headers: { Authorization: `Bearer ${RESEND}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            from: 'PartVault <noreply@partvault.app>', to: [to],
+            subject: `[PartVault] ${list.length} store(s) awaiting permanent deletion — action required`,
+            text: `These stores have passed their retention window and are awaiting PERMANENT deletion.\n\nNOTHING has been deleted. No data is erased until you confirm.\n\n${rows}\n\nReview and confirm in the admin before anything is removed.`,
+          }),
+        })
+        emailed = r.ok
+      } catch (_) { /* email best-effort */ }
     }
-    return json({ ok: true, version: EDGE_FN_VERSION, due: (due || []).length, purged })
+    return json({ ok: true, version: EDGE_FN_VERSION, due: list.length, emailed, needsResendKey: !RESEND && list.length > 0, stores: list.map((s: any) => ({ id: s.id, name: s.name })) })
+  }
+
+  // ── CONFIRMED manual purge — the only path that actually deletes ─────────────
+  // Requires an explicit confirm flag + the exact store IDs the human reviewed,
+  // so it can never run unattended or mass-delete. (Phone/SMS second factor to be
+  // added once Twilio is set up.)
+  if (action === 'purge_deleted_stores') {
+    if (body.confirm !== 'PERMANENTLY-DELETE' || !Array.isArray(body.storeIds) || !body.storeIds.length) {
+      return json({ error: 'Confirmed purge requires confirm:"PERMANENTLY-DELETE" and an explicit storeIds list.' }, 400)
+    }
+    // Only delete stores that are genuinely deleted AND past their window.
+    const { data: eligible } = await sb.from('stores')
+      .select('id').in('id', body.storeIds).not('deleted_at', 'is', null).lte('purge_after', new Date().toISOString())
+    const ids = (eligible || []).map((s: any) => s.id)
+    let purged = 0
+    for (const id of ids) {
+      try {
+        try {
+          const { data: files } = await sb.storage.from('part-photos').list(id, { limit: 1000 })
+          if (files?.length) await sb.storage.from('part-photos').remove(files.map((f: any) => `${id}/${f.name}`))
+        } catch (_) { /* storage best-effort */ }
+        const { error } = await sb.from('stores').delete().eq('id', id)
+        if (!error) purged++
+      } catch (_) { /* continue */ }
+    }
+    return json({ ok: true, version: EDGE_FN_VERSION, requested: body.storeIds.length, eligible: ids.length, purged })
   }
 
   // ── XML HELPERS ─────────────────────────────────────────────────────────────
