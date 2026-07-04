@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
 import { C, S, fmt, pct, totalCost, estimateCostBasis, CATEGORY_NAMES, EBAY_AU_CATEGORIES, canonicalCategory, canonicalSubcategory, PART_CONDITIONS, STATUS_COLORS, STATUS_LABELS } from '../lib/constants'
 import { sb } from '../lib/supabase'
-import { getActiveMarketplace } from '../lib/marketplaces'
+import { getActiveMarketplace, formatWeight } from '../lib/marketplaces'
 import { makesFor, MODEL_SUGS } from '../lib/vehicles'
 import { printLabels, DEFAULT_LABELS } from '../lib/labels'
 
@@ -223,9 +223,28 @@ function AddCarModal({ storeId, onSave, onCancel }) {
   )
 }
 
+// Weight input: grams stored always; US stores enter/see lb + oz (converted).
+function WeightField({ grams, onChange }) {
+  if (getActiveMarketplace().weightUnit !== 'oz') {
+    return <input style={S.input} type="number" value={grams || ''} onChange={e => onChange(e.target.value)} />
+  }
+  const totalOz = (+grams || 0) / 28.3495
+  const lb = Math.floor(totalOz / 16)
+  const oz = +(totalOz % 16).toFixed(1)
+  const setLbOz = (nlb, noz) => onChange(Math.round(((+nlb || 0) * 16 + (+noz || 0)) * 28.3495))
+  return (
+    <div style={{ display: 'flex', gap: 8 }}>
+      <input style={S.input} type="number" placeholder="lb" value={grams ? lb : ''} onChange={e => setLbOz(e.target.value, oz)} />
+      <input style={S.input} type="number" placeholder="oz" value={grams ? oz : ''} onChange={e => setLbOz(lb, e.target.value)} />
+    </div>
+  )
+}
+
 // ─── Part Form ─────────────────────────────────────────────────────────────
 function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSettings, footer, costing, labels = DEFAULT_LABELS, allParts = [] }) {
   const defCat = CATEGORY_NAMES[4]
+  const curSym = getActiveMarketplace().currencySymbol
+  const usesOz = getActiveMarketplace().weightUnit === 'oz'
   const [form, setForm] = useState(part ? { ...part, costs: { ...part.costs }, listPrice: part.list_price||part.listPrice||0, ai_assessed: part.ai_assessed??false, acquiredDate: part.acquiredDate ? String(part.acquiredDate).slice(0,10) : (part.createdAt ? String(part.createdAt).slice(0,10) : '') } : {
     title:'', category:defCat, subcategory:EBAY_AU_CATEGORIES[defCat][0], make:'', model:'', year:'', condition:PART_CONDITIONS[1],
     description:'', acquiredDate:new Date().toISOString().slice(0,10), costs:defCosts(), listPrice:'', soldPrice:'', photos:[], weight:'', status:'in_stock',
@@ -531,7 +550,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
                 <span style={{ color: preview.price>0?C.text:C.red, fontWeight:700 }}>{preview.price>0 ? fmt(preview.price) : 'No price set'}</span>
                 <span style={{ color:C.muted }}>{preview.condition}</span>
                 {preview.allowOffers && <span style={{ color:'#1d4ed8' }}>Best Offer on</span>}
-                <span style={{ color:C.muted }}>Ship: {Math.round((preview.weightG||0))}g · {preview.dims?.l}×{preview.dims?.w}×{preview.dims?.h}cm</span>
+                <span style={{ color:C.muted }}>Ship: {formatWeight(preview.weightG||0)} · {preview.dims?.l}×{preview.dims?.w}×{preview.dims?.h}cm</span>
               </div>
               <div style={{ fontSize:13, marginBottom:12 }}>
                 <span style={{ color:C.muted }}>eBay category: </span>
@@ -741,10 +760,10 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
       {/* Pricing */}
       <Section title="Pricing" hint="Buy It Now price and your internal cost breakdown.">
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
-          <Field label="List Price ($)"><input style={{ ...S.input, fontWeight:700, fontSize:16 }} type="number" value={form.listPrice||''} onChange={e => set('listPrice', e.target.value)} /></Field>
-          <Field label="Sold Price ($)"><input style={S.input} type="number" value={form.soldPrice||''} onChange={e => set('soldPrice', e.target.value)} /></Field>
-          <Field label="Shipping charged ($)"><input style={S.input} type="number" value={form.shippingCharged||''} onChange={e => set('shippingCharged', e.target.value)} /></Field>
-          <Field label="Weight (g)"><input style={S.input} type="number" value={form.weight||''} onChange={e => set('weight', e.target.value)} /></Field>
+          <Field label={`List Price (${curSym})`}><input style={{ ...S.input, fontWeight:700, fontSize:16 }} type="number" value={form.listPrice||''} onChange={e => set('listPrice', e.target.value)} /></Field>
+          <Field label={`Sold Price (${curSym})`}><input style={S.input} type="number" value={form.soldPrice||''} onChange={e => set('soldPrice', e.target.value)} /></Field>
+          <Field label={`Shipping charged (${curSym})`}><input style={S.input} type="number" value={form.shippingCharged||''} onChange={e => set('shippingCharged', e.target.value)} /></Field>
+          <Field label={usesOz ? 'Weight (lb / oz)' : 'Weight (g)'}><WeightField grams={form.weight} onChange={v => set('weight', v)} /></Field>
         </div>
         <div style={{ background:'#f9f8f5', border:`1px solid ${C.border}`, borderRadius:10, padding:'14px 16px', marginTop:6 }}>
           <div style={{ fontSize:13, fontWeight:700, color:C.text, marginBottom:12 }}>Cost breakdown (AUD)</div>
