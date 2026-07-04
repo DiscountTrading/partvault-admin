@@ -4,6 +4,7 @@ import { printLabels, DEFAULT_LABELS } from '../lib/labels'
 import { sb } from '../lib/supabase'
 import { buildSkuPreview, SKU_TOKENS, DEFAULT_SKU_TEMPLATE, DEFAULT_SKU_PAD } from '../lib/sku'
 import { MARKETPLACES, MARKETPLACE_LIST } from '../lib/marketplaces'
+import { planState } from '../lib/plan'
 import TeamAccess from './TeamAccess'
 import Activity from './Activity'
 import { compressImage } from '../lib/image'
@@ -185,6 +186,10 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       setTzSaved(true); setTimeout(() => setTzSaved(false), 2000)
     } catch (e) { console.error('Timezone save failed', e) }
   }
+  // Subscription plan + this month's AI usage (usage metered server-side).
+  const [plan, setPlan] = useState(() => planState(null))
+  const [aiUsage, setAiUsage] = useState(null)
+
   // Marketplace (country) — set at store creation, locked once parts exist
   // (DB trigger enforces it; the UI just explains).
   const [marketplace, setMarketplace] = useState('EBAY_AU')
@@ -298,7 +303,10 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     setSkuPad(DEFAULT_SKU_PAD)
     setMarketingImages([])
     try {
-      const { data } = await sb.from('stores').select('settings, sku_format_config').eq('id', storeId).single()
+      const { data } = await sb.from('stores').select('settings, sku_format_config, plan').eq('id', storeId).single()
+      setPlan(planState(data?.plan))
+      sb.from('ai_usage').select('full_count, light_count').eq('store_id', storeId).eq('month', new Date().toISOString().slice(0, 7)).maybeSingle()
+        .then(({ data: u }) => setAiUsage(u || { full_count: 0, light_count: 0 }))
       if (data?.sku_format_config) {
         if (data.sku_format_config.template) setSkuTemplate(data.sku_format_config.template)
         if (data.sku_format_config.seqPad) setSkuPad(data.sku_format_config.seqPad)
@@ -2528,6 +2536,24 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                 </div>
               )}
 
+              {/* Subscription plan + AI usage this month */}
+              <div style={{ background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 14px', marginBottom: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>💳 Plan</span>
+                  <span style={{ fontSize: 13, fontWeight: 800, color: C.accent }}>
+                    {plan.founder ? 'Founder (all features)' : plan.label}
+                    {plan.tier === 'trial' && !plan.expired && ` — ${Math.max(plan.trialDaysLeft ?? 0, 0)} days left`}
+                    {plan.expired && ' — expired'}
+                  </span>
+                </div>
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
+                  {aiUsage
+                    ? `AI this month: ${aiUsage.full_count} full assessment${aiUsage.full_count === 1 ? '' : 's'}${plan.founder ? '' : ` of ${plan.limits.aiFull}`} · ${aiUsage.light_count} quick calls (naming etc, uncapped).`
+                    : 'Loading AI usage…'}
+                  {' '}Full assessments (photos → title, description, price, specifics) are the metered unit; quick naming is free.
+                </div>
+              </div>
+
               {/* Marketplace (country) — chosen at store creation, locked at first part */}
               <div style={{ background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 14px', marginBottom: 12 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
@@ -2691,10 +2717,18 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                 and the CSV only fills the older gap). Accept any sync signal: a
                 server-recorded sync (lastSync, set by nightly/quick sync) OR this
                 browser's run markers — the main "Sync now" only sets the latter. */}
-            <EbayHistoryUpload storeId={storeId} canUpload={!!lastSync || !!lastRun.backfill || !!lastRun.import} />
+            {plan.can('history') ? (
+              <>
+                <EbayHistoryUpload storeId={storeId} canUpload={!!lastSync || !!lastRun.backfill || !!lastRun.import} />
 
-            {/* Snapshot per-category cost averages onto imported sales (locked). */}
-            <HistoricalCosts storeId={storeId} />
+                {/* Snapshot per-category cost averages onto imported sales (locked). */}
+                <HistoricalCosts storeId={storeId} />
+              </>
+            ) : (
+              <div style={{ background: '#f9f8f5', border: `1px dashed ${C.border}`, borderRadius: 10, padding: '12px 14px', marginBottom: 12, fontSize: 13, color: C.muted }}>
+                🔒 Historical sales import &amp; cost modelling are part of the <b>Pro</b> plan.
+              </div>
+            )}
 
             {/* Reconcile (advanced) */}
             {showAdvSync && <div ref={reconcileRef}><ReconcileSection /></div>}

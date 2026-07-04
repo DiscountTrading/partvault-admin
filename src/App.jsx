@@ -5,6 +5,7 @@ import { useSales } from './hooks/useSales'
 import { sb } from './lib/supabase'
 import { C, S, APP_VERSION, rentPerDay } from './lib/constants'
 import { MARKETPLACE_LIST, guessMarketplace, setActiveMarketplace } from './lib/marketplaces'
+import { planState } from './lib/plan'
 import { DEFAULT_LABELS } from './lib/labels'
 import AuthScreen from './components/AuthScreen'
 import Dashboard from './components/Dashboard'
@@ -183,6 +184,7 @@ export default function App() {
   const [insightsInit, setInsightsInit] = useState(null) // drill-down filter from Dashboard
   const [cars, setCars] = useState([])
   const [marketplaceId, setMarketplaceId] = useState('EBAY_AU') // re-render trigger for currency
+  const [plan, setPlan] = useState(() => planState(null)) // store's subscription plan (defaults open)
 
   // Enrich costing with the storage-facility config (rent normalised to /day) and
   // the per-category shipping box dims, so partEffectiveCost can compute storage.
@@ -207,7 +209,8 @@ export default function App() {
     setShipping(null)
     setCars([])
     // Load AI settings + footer
-    sb.from('stores').select('settings').eq('id', storeId).single().then(({ data }) => {
+    sb.from('stores').select('settings, plan').eq('id', storeId).single().then(({ data }) => {
+      setPlan(planState(data?.plan))
       if (data?.settings?.aiDescription) setAiSettings(s => ({ ...s, ...data.settings.aiDescription }))
       if (data?.settings?.footer) setFooter(data.settings.footer)
       if (data?.settings?.costing) setCosting(s => ({ ...s, ...data.settings.costing }))
@@ -247,11 +250,16 @@ export default function App() {
       <nav style={S.nav}>
         <div style={S.logo}>⚙ PartVault Admin</div>
         <StoreSwitcher stores={stores} activeStoreId={activeStoreId} setActiveStore={setActiveStore} refreshStores={refreshStores} />
-        {TABS.map(t => (
-          <button key={t.id} style={S.navBtn(tab === t.id)} onClick={() => setTab(t.id)}>
-            {t.icon} {t.label}
-          </button>
-        ))}
+        {TABS.map(t => {
+          // Analytics tabs (Insights/Vehicles) are Pro+ — Basic sees them locked.
+          const gated = (t.id === 'insights' || t.id === 'vehicles') && !plan.can('analytics')
+          return (
+            <button key={t.id} style={{ ...S.navBtn(tab === t.id), opacity: gated ? 0.45 : 1 }}
+              onClick={() => gated ? alert(`${t.label} is part of the Pro plan. Upgrade to unlock analytics.`) : setTab(t.id)}>
+              {t.icon} {t.label}{gated ? ' 🔒' : ''}
+            </button>
+          )
+        })}
         <div style={{ marginLeft: 'auto', padding: '0 18px', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: 'rgba(255,255,255,0.55)' }}>
           {loading ? <span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>⏳</span> : null}
           v{APP_VERSION} · {totalCount} parts
@@ -261,6 +269,16 @@ export default function App() {
           <button style={{ background: 'rgba(220,38,38,0.2)', border: '1px solid rgba(220,38,38,0.3)', color: 'rgba(255,255,255,0.7)', borderRadius: 6, padding: '6px 10px', cursor: 'pointer', fontSize: 12 }} onClick={signOut}>Sign Out</button>
         </div>
       </nav>
+      {plan.tier === 'trial' && !plan.expired && (
+        <div style={{ background: '#eff6ff', borderBottom: '1px solid #bfdbfe', padding: '8px 24px', fontSize: 13, color: '#1d4ed8', fontWeight: 600 }}>
+          ✨ Free trial — {Math.max(plan.trialDaysLeft ?? 0, 0)} day{(plan.trialDaysLeft ?? 0) === 1 ? '' : 's'} left with full access. Pick a plan before it ends to keep going without interruption.
+        </div>
+      )}
+      {plan.expired && (
+        <div style={{ background: '#fef2f2', borderBottom: '1px solid #fecaca', padding: '8px 24px', fontSize: 13, color: '#b91c1c', fontWeight: 600 }}>
+          ⏰ Your free trial has ended. Your data is safe — choose a plan to keep capturing and listing parts.
+        </div>
+      )}
       <main style={S.main} key={marketplaceId}>{/* re-mounts content when the active store's currency changes */}
         {tab === 'dashboard' && <Dashboard parts={parts} sales={sales} costing={costingFull} inventory={inventory} onDrill={drillToInsights} onSeeSales={() => setTab('sales')} />}
         {tab === 'sales' && <Sales sales={sales} parts={parts} costing={costingFull} />}

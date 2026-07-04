@@ -85,6 +85,41 @@ async function storeMarketplaceId(url: string, storeId?: string): Promise<string
   } catch { return '' }
 }
 
+// ── AI metering (plan enforcement) ──────────────────────────────────────────
+// Full (Sonnet) assessments are the platform's real variable cost, so their
+// monthly limit is enforced HERE (server-side; the client only explains).
+// Founder stores are unlimited. Fail-open on any error — never let a metering
+// hiccup block a paying user's work.
+const AI_FULL_LIMITS: Record<string, number> = { trial: 100, basic: 50, pro: 1000, business: 3000 }
+async function meterFullAI(url: string, storeId?: string): Promise<{ allowed: boolean; used: number; limit: number; tier: string }> {
+  const unlimited = { allowed: true, used: 0, limit: 0, tier: 'unknown' }
+  if (!storeId) return unlimited
+  try {
+    const svc = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+    const { data: st } = await svc.from('stores').select('plan').eq('id', storeId).single()
+    const plan = st?.plan || {}
+    if (plan.founder) { svc.rpc('increment_ai_usage', { p_store_id: storeId, p_kind: 'full' }).then(() => {}, () => {}); return { ...unlimited, tier: 'founder' } }
+    const tier = plan.tier || 'business'
+    const limit = AI_FULL_LIMITS[tier] ?? AI_FULL_LIMITS.business
+    const month = new Date().toISOString().slice(0, 7)
+    const { data: usage } = await svc.from('ai_usage').select('full_count').eq('store_id', storeId).eq('month', month).maybeSingle()
+    const used = usage?.full_count || 0
+    if (used >= limit) return { allowed: false, used, limit, tier }
+    await svc.rpc('increment_ai_usage', { p_store_id: storeId, p_kind: 'full' })
+    return { allowed: true, used: used + 1, limit, tier }
+  } catch { return unlimited }
+}
+// Light (Haiku) calls are near-free — tracked for visibility, never blocked.
+function meterLightAI(url: string, storeId?: string) {
+  if (!storeId) return
+  try {
+    const svc = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+    svc.rpc('increment_ai_usage', { p_store_id: storeId, p_kind: 'light' }).then(() => {}, () => {})
+  } catch { /* ignore */ }
+}
+const aiLimitMsg = (m: { used: number; limit: number; tier: string }) =>
+  `Monthly AI limit reached (${m.used}/${m.limit} full assessments on the ${m.tier} plan). Upgrade your plan for more, or it resets next month.`
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
   let body: any = null
@@ -159,6 +194,8 @@ serve(async (req) => {
     if (mode === 'describe') {
       const { prompt: rawPrompt } = body
       if (!rawPrompt) return json({ error: 'prompt required' }, 400)
+      const meter = await meterFullAI(url, body.storeId)
+      if (!meter.allowed) return json({ error: aiLimitMsg(meter) }, 429)
       // Learn from the store's own recent descriptions (style guide) + write in
       // the store's marketplace spelling (tyre/colour vs tire/color).
       let prompt = rawPrompt
@@ -202,6 +239,7 @@ serve(async (req) => {
         ...carB64s.map((b: string) => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b } })),
       ]
       if (!blocks.length) return json({ error: 'At least one car photo is required' }, 400)
+      meterLightAI(url, body.storeId)
       const mkCar = marketWords(await storeMarketplaceId(url, body.storeId))
       const aiRes = await callAnthropic({
         model: 'claude-sonnet-4-6', max_tokens: 200,
@@ -230,6 +268,7 @@ serve(async (req) => {
       const vehicleTxt = `Vehicle: ${car.make || ''} ${car.model || ''} ${car.year || ''}.`
       // Title spelling follows the marketplace — buyers search "tyre" in AU/UK
       // but "tire" in US/CA, so this directly affects search visibility.
+      meterLightAI(url, body.storeId)
       const nameSpell = spellingLine(await storeMarketplaceId(url, body.storeId))
       if (nameCount > 1) {
         const aiRes = await callAnthropic({
@@ -382,6 +421,15 @@ serve(async (req) => {
       if (trusted && partId) {
         try { await createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!).from('parts').update({ ai_pending: false }).eq('id', partId) } catch (_) { /* ignore */ }
       }
+    }
+    // Plan enforcement: the full Sonnet assessment is the metered unit. For the
+    // background capture flow, skip quietly (part stays editable, stage-1 already
+    // cleared ai_pending); for a user-invoked run, explain the limit.
+    const meter = await meterFullAI(url, storeId)
+    if (!meter.allowed) {
+      await clearPendingOnFail()
+      if (trusted && partId) return json({ ok: true, skipped: 'ai_limit', message: aiLimitMsg(meter) })
+      return json({ error: aiLimitMsg(meter) }, 429)
     }
     const aiRes = await callAnthropic({
       model: 'claude-sonnet-4-6', max_tokens: 1500, temperature: 0, system: sys,
