@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.27.3'
+const EDGE_FN_VERSION         = '3.28.0'
 const CHUNK_SIZE              = 20
 // eBay's getOrders can't return orders older than this, so the live sync only ever
 // manages sales within this window. The CSV history import must stay strictly OLDER
@@ -436,7 +436,9 @@ async function handleRequest(req: Request): Promise<Response> {
     const list = due || []
     let emailed = false
     const RESEND = Deno.env.get('RESEND_API_KEY')
-    const to = Deno.env.get('PURGE_ALERT_EMAIL') || 'leap00@gmail.com'
+    // Alert recipient comes from the System admin panel (system_settings), then env, then default.
+    const { data: sysRow } = await sb.from('system_settings').select('settings').eq('id', 1).maybeSingle()
+    const to = sysRow?.settings?.purgeAlertEmail || Deno.env.get('PURGE_ALERT_EMAIL') || 'leap00@gmail.com'
     if (list.length && RESEND) {
       const rows = list.map((s: any) => `• ${s.name} (deleted ${String(s.deleted_at).slice(0, 10)}, retention ended ${String(s.purge_after).slice(0, 10)})`).join('\n')
       try {
