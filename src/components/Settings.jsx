@@ -189,6 +189,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   // Subscription plan + this month's AI usage (usage metered server-side).
   const [plan, setPlan] = useState(() => planState(null))
   const [aiUsage, setAiUsage] = useState(null)
+  const [aiCredits, setAiCredits] = useState(null)
 
   // Marketplace (country) — set at store creation, locked once parts exist
   // (DB trigger enforces it; the UI just explains).
@@ -307,6 +308,8 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       setPlan(planState(data?.plan))
       sb.from('ai_usage').select('full_count, light_count').eq('store_id', storeId).eq('month', new Date().toISOString().slice(0, 7)).maybeSingle()
         .then(({ data: u }) => setAiUsage(u || { full_count: 0, light_count: 0 }))
+      sb.from('ai_credits').select('balance').eq('store_id', storeId).maybeSingle()
+        .then(({ data: c }) => setAiCredits(c?.balance ?? 0))
       if (data?.sku_format_config) {
         if (data.sku_format_config.template) setSkuTemplate(data.sku_format_config.template)
         if (data.sku_format_config.seqPad) setSkuPad(data.sku_format_config.seqPad)
@@ -2552,6 +2555,18 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                     : 'Loading AI usage…'}
                   {' '}Full assessments (photos → title, description, price, specifics) are the metered unit; quick naming is free.
                 </div>
+                {!plan.founder && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 12, color: C.text }}>
+                      🎟️ AI credits: <b>{aiCredits == null ? '…' : aiCredits}</b>
+                      <span style={{ color: C.muted }}> — used automatically once your monthly allowance runs out.</span>
+                    </span>
+                    <button style={{ ...S.btn('secondary'), padding: '5px 12px', fontSize: 12 }}
+                      onClick={() => alert('AI credit packs (e.g. $10 = 300 extra assessments) activate with billing. They\'re used automatically after your monthly allowance and never expire.')}>
+                      Buy AI credits
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Marketplace (country) — chosen at store creation, locked at first part */}

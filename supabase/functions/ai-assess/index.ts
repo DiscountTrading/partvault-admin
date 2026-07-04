@@ -91,7 +91,7 @@ async function storeMarketplaceId(url: string, storeId?: string): Promise<string
 // Founder stores are unlimited. Fail-open on any error — never let a metering
 // hiccup block a paying user's work.
 const AI_FULL_LIMITS: Record<string, number> = { trial: 100, basic: 50, pro: 1000, business: 3000 }
-async function meterFullAI(url: string, storeId?: string): Promise<{ allowed: boolean; used: number; limit: number; tier: string }> {
+async function meterFullAI(url: string, storeId?: string): Promise<{ allowed: boolean; used: number; limit: number; tier: string; viaCredit?: boolean }> {
   const unlimited = { allowed: true, used: 0, limit: 0, tier: 'unknown' }
   if (!storeId) return unlimited
   try {
@@ -104,7 +104,12 @@ async function meterFullAI(url: string, storeId?: string): Promise<{ allowed: bo
     const month = new Date().toISOString().slice(0, 7)
     const { data: usage } = await svc.from('ai_usage').select('full_count').eq('store_id', storeId).eq('month', month).maybeSingle()
     const used = usage?.full_count || 0
-    if (used >= limit) return { allowed: false, used, limit, tier }
+    if (used >= limit) {
+      // Monthly allowance exhausted — fall back to purchased credit packs.
+      const { data: consumed } = await svc.rpc('consume_ai_credit', { p_store_id: storeId })
+      if (consumed === true) { await svc.rpc('increment_ai_usage', { p_store_id: storeId, p_kind: 'full' }); return { allowed: true, used: used + 1, limit, tier, viaCredit: true } }
+      return { allowed: false, used, limit, tier }
+    }
     await svc.rpc('increment_ai_usage', { p_store_id: storeId, p_kind: 'full' })
     return { allowed: true, used: used + 1, limit, tier }
   } catch { return unlimited }
@@ -118,7 +123,7 @@ function meterLightAI(url: string, storeId?: string) {
   } catch { /* ignore */ }
 }
 const aiLimitMsg = (m: { used: number; limit: number; tier: string }) =>
-  `Monthly AI limit reached (${m.used}/${m.limit} full assessments on the ${m.tier} plan). Upgrade your plan for more, or it resets next month.`
+  `Monthly AI limit reached (${m.limit} full assessments on the ${m.tier} plan) and no AI credits left. Upgrade your plan or buy an AI credit pack, or it resets next month.`
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
