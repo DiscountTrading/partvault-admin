@@ -5,6 +5,7 @@ import { sb } from '../lib/supabase'
 import { buildSkuPreview, SKU_TOKENS, DEFAULT_SKU_TEMPLATE, DEFAULT_SKU_PAD } from '../lib/sku'
 import { MARKETPLACES, MARKETPLACE_LIST } from '../lib/marketplaces'
 import { planState } from '../lib/plan'
+import { startCheckout, openBillingPortal } from '../lib/billing'
 import TeamAccess from './TeamAccess'
 import Activity from './Activity'
 import { compressImage } from '../lib/image'
@@ -190,6 +191,14 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   const [plan, setPlan] = useState(() => planState(null))
   const [aiUsage, setAiUsage] = useState(null)
   const [aiCredits, setAiCredits] = useState(null)
+  const [showPlans, setShowPlans] = useState(false)
+  const [billingBusy, setBillingBusy] = useState(false)
+  const PLAN_CADENCES = [
+    { id: 'monthly',        label: 'Monthly (cancel anytime)', price: { basic: '$29', pro: '$79', business: '$129' }, suffix: '/mo' },
+    { id: 'annual_monthly', label: '12-month (paid monthly)',  price: { basic: '$19', pro: '$59', business: '$99' },  suffix: '/mo' },
+    { id: 'annual_upfront', label: '12-month (paid upfront, +2 months free)', price: { basic: '$228', pro: '$708', business: '$1,188' }, suffix: '/yr' },
+  ]
+  const buy = async (fn) => { setBillingBusy(true); try { await fn() } catch (e) { alert(e.message) } setBillingBusy(false) }
 
   // Marketplace (country) — set at store creation, locked once parts exist
   // (DB trigger enforces it; the UI just explains).
@@ -2561,10 +2570,41 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                       🎟️ AI credits: <b>{aiCredits == null ? '…' : aiCredits}</b>
                       <span style={{ color: C.muted }}> — used automatically once your monthly allowance runs out.</span>
                     </span>
-                    <button style={{ ...S.btn('secondary'), padding: '5px 12px', fontSize: 12 }}
-                      onClick={() => alert('AI credit packs (e.g. $10 = 300 extra assessments) activate with billing. They\'re used automatically after your monthly allowance and never expire.')}>
+                    <button disabled={billingBusy} style={{ ...S.btn('secondary'), padding: '5px 12px', fontSize: 12 }}
+                      onClick={() => buy(() => startCheckout({ storeId, pack: 'credits_300' }))}>
                       Buy AI credits
                     </button>
+                  </div>
+                )}
+                {!plan.founder && (
+                  <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+                    <button disabled={billingBusy} style={{ ...S.btn('primary'), padding: '6px 14px', fontSize: 12 }} onClick={() => setShowPlans(s => !s)}>
+                      {plan.tier === 'trial' || plan.expired ? 'Choose a plan' : 'Change plan'}
+                    </button>
+                    {plan.tier !== 'trial' && (
+                      <button disabled={billingBusy} style={{ ...S.btn('secondary'), padding: '6px 14px', fontSize: 12 }} onClick={() => buy(() => openBillingPortal(storeId))}>
+                        Manage billing
+                      </button>
+                    )}
+                  </div>
+                )}
+                {showPlans && !plan.founder && (
+                  <div style={{ marginTop: 12, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
+                    {PLAN_CADENCES.map(cad => (
+                      <div key={cad.id} style={{ marginBottom: 12 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 6 }}>{cad.label}</div>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          {['basic', 'pro', 'business'].map(tier => (
+                            <button key={tier} disabled={billingBusy}
+                              style={{ ...S.btn('secondary'), padding: '6px 12px', fontSize: 12, textTransform: 'capitalize' }}
+                              onClick={() => buy(() => startCheckout({ storeId, tier, cadence: cad.id }))}>
+                              {tier} {cad.price[tier]}{cad.suffix}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                    <div style={{ fontSize: 11, color: C.muted }}>12-month plans commit to the full 12 months. Upfront adds 2 free months. You'll be taken to secure Stripe checkout.</div>
                   </div>
                 )}
               </div>
