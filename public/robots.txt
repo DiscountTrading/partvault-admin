@@ -1,0 +1,3 @@
+# PartVault admin is a private, login-gated business tool — keep it out of search.
+User-agent: *
+Disallow: /
