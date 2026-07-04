@@ -1,3 +1,5 @@
-# PartVault admin is a private, login-gated business tool — keep it out of search.
+# Admin app is crawlable. The superadmin panel has no crawlable URL — it's a
+# URL fragment (admin.partvault.app/#superadmin) which search engines ignore,
+# and it has no link anywhere — so there's nothing to index or disallow.
 User-agent: *
-Disallow: /
+Allow: /
