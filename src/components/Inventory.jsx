@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect } from 'react'
 import { C, S, fmt, pct, totalCost, estimateCostBasis, CATEGORY_NAMES, EBAY_AU_CATEGORIES, canonicalCategory, canonicalSubcategory, PART_CONDITIONS, STATUS_COLORS, STATUS_LABELS } from '../lib/constants'
 import { sb } from '../lib/supabase'
 import { getActiveMarketplace } from '../lib/marketplaces'
-import { MAKES, MODEL_SUGS } from '../lib/vehicles'
+import { makesFor, MODEL_SUGS } from '../lib/vehicles'
 import { printLabels, DEFAULT_LABELS } from '../lib/labels'
 
 function Field({ label, children }) {
@@ -187,7 +187,7 @@ function AddCarModal({ storeId, onSave, onCancel }) {
           <Field label="Make *">
             <select style={S.select} value={form.make} onChange={e => { set('make', e.target.value); set('model', '') }}>
               <option value="">Select Make</option>
-              {MAKES.map(m => <option key={m}>{m}</option>)}
+              {makesFor().map(m => <option key={m}>{m}</option>)}
             </select>
           </Field>
           <Field label="Model">
@@ -655,7 +655,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
           <Field label="Make">
             <select style={S.select} value={form.make||''} onChange={e => { set('make', e.target.value); set('model', '') }}>
               <option value="">Select Make</option>
-              {MAKES.map(m => <option key={m}>{m}</option>)}
+              {makesFor().map(m => <option key={m}>{m}</option>)}
             </select>
           </Field>
           <Field label="Model">

@@ -1,15 +1,41 @@
-// Australian make/model reference + a title parser used to recover the donor
-// vehicle from an eBay-imported part's title (imports don't set make/model — the
-// vehicle is only in the title). Shared by Inventory (dropdowns) and Vehicles
-// (the "Parse from titles" backfill).
+// Make/model reference + a title parser used to recover the donor vehicle from
+// an eBay-imported part's title (imports don't set make/model — the vehicle is
+// only in the title). Shared by Inventory (dropdowns) and Vehicles.
+// REGION-AWARE: the make list is a superset across marketplaces; ordering and
+// the ambiguous aliases (Chevrolet/Vauxhall ↔ Holden GM rebadges) follow the
+// store's marketplace — an AU store parses "Chevy" as Holden, a US store as
+// Chevrolet. (We hit this with Australian cars; same problem in reverse.)
+import { getActiveMarketplace } from './marketplaces'
 
-export const MAKES = [
+const AU_ORDER = [
   'Toyota','Ford','Holden','Mazda','Hyundai','Kia','Mitsubishi','Nissan','Subaru','Honda',
   'Volkswagen','BMW','Mercedes-Benz','Audi','Land Rover','Isuzu','Suzuki','Lexus','Jeep','Volvo',
   'Renault','Peugeot','Citroen','Skoda','Fiat','Alfa Romeo','MINI','Porsche','Jaguar','Chrysler',
   'Dodge','MG','LDV','GWM','Haval','Chery','SsangYong','Daihatsu','Proton','Tesla','Genesis','Saab',
-  'Other',
 ]
+const US_EXTRA = ['Chevrolet','GMC','RAM','Buick','Cadillac','Lincoln','Pontiac','Mercury','Oldsmobile','Saturn','Hummer','Acura','Infiniti','Scion']
+const GB_EXTRA = ['Vauxhall','Rover','SEAT','Dacia','Bentley','Aston Martin','Lotus','Rolls-Royce']
+const US_ORDER = [
+  'Ford','Chevrolet','Toyota','Honda','RAM','GMC','Jeep','Nissan','Dodge','Hyundai','Kia','Subaru',
+  'BMW','Mercedes-Benz','Audi','Volkswagen','Cadillac','Buick','Lincoln','Chrysler','Acura','Infiniti',
+  'Lexus','Mazda','Tesla','Volvo','Pontiac','Mercury','Oldsmobile','Saturn','Hummer','Scion','Land Rover','Jaguar','MINI','Porsche','Genesis','Mitsubishi','Fiat','Alfa Romeo','Saab',
+]
+const GB_ORDER = [
+  'Ford','Vauxhall','Volkswagen','BMW','Audi','Mercedes-Benz','Toyota','Nissan','Honda','Peugeot',
+  'Renault','Citroen','MINI','Land Rover','Jaguar','Kia','Hyundai','Skoda','SEAT','Mazda','Fiat',
+  'Volvo','MG','Rover','Suzuki','Dacia','Mitsubishi','Subaru','Lexus','Porsche','Alfa Romeo','Tesla',
+  'Bentley','Aston Martin','Lotus','Rolls-Royce','Saab','Chrysler','Jeep','Dodge','Chevrolet',
+]
+// Superset — every make PartVault recognises, any region.
+export const MAKES = [...new Set([...AU_ORDER, ...US_EXTRA, ...GB_EXTRA]), 'Other']
+
+// Region-prioritised list for dropdowns/suggestions: the store's local makes
+// first, then everything else.
+export function makesFor(mp) {
+  const id = mp || getActiveMarketplace().id
+  const pri = id === 'EBAY_US' || id === 'EBAY_CA' ? US_ORDER : id === 'EBAY_GB' ? GB_ORDER : AU_ORDER
+  return [...pri, ...MAKES.filter(m => m !== 'Other' && !pri.includes(m)), 'Other']
+}
 
 export const MODEL_SUGS = {
   Toyota: ['Hilux','Camry','Corolla','RAV4','LandCruiser','LandCruiser 200','LandCruiser 79','Prado','HiAce','Kluger','Yaris','Aurion','C-HR','86','Fortuner','Tarago','Echo','Avensis','FJ Cruiser','Rukus','Supra','Granvia'],
@@ -54,23 +80,57 @@ export const MODEL_SUGS = {
   Tesla: ['Model 3','Model Y','Model S','Model X'],
   Genesis: ['G70','G80','GV70','GV80'],
   Saab: ['9-3','9-5'],
+  Chevrolet: ['Silverado','Camaro','Corvette','Malibu','Equinox','Tahoe','Suburban','Impala','Cruze','Traverse','Colorado','Blazer','Trailblazer','Sonic','Spark','Aveo','Express','S10','Bolt','Volt'],
+  GMC: ['Sierra','Yukon','Acadia','Terrain','Canyon','Savana','Envoy'],
+  RAM: ['1500','2500','3500','ProMaster'],
+  Buick: ['Enclave','Encore','LaCrosse','Regal','Verano'],
+  Cadillac: ['Escalade','CTS','ATS','XT5','SRX','DeVille','XTS'],
+  Lincoln: ['Navigator','MKX','MKZ','Town Car','Continental','Aviator'],
+  Pontiac: ['G6','G8','Grand Prix','Firebird','GTO','Vibe','Bonneville'],
+  Mercury: ['Grand Marquis','Milan','Mountaineer','Sable'],
+  Oldsmobile: ['Alero','Cutlass','Intrigue'],
+  Saturn: ['Ion','Vue','Outlook','Aura'],
+  Hummer: ['H1','H2','H3'],
+  Acura: ['MDX','RDX','TL','TSX','TLX','ILX','Integra','RSX','NSX'],
+  Infiniti: ['G35','G37','Q50','Q60','QX60','QX80','FX35','M35','EX35'],
+  Scion: ['tC','xB','xA','xD','FR-S','iQ'],
+  Vauxhall: ['Corsa','Astra','Vectra','Insignia','Zafira','Meriva','Mokka','Vivaro','Combo','Antara','Signum','Omega','Tigra','Grandland','Crossland','Adam','Agila','Cascada'],
+  Rover: ['25','45','75','200','400','600','800','Metro'],
+  SEAT: ['Ibiza','Leon','Alhambra','Ateca','Arona','Altea','Toledo','Mii'],
+  Dacia: ['Duster','Sandero','Logan','Jogger'],
+  Bentley: ['Continental','Bentayga','Flying Spur','Arnage'],
+  'Aston Martin': ['DB9','DB11','Vantage','DBX','Rapide'],
+  Lotus: ['Elise','Exige','Evora','Emira'],
+  'Rolls-Royce': ['Phantom','Ghost','Cullinan','Wraith'],
 }
 
-// Common spelling/abbreviation variants → canonical make.
-const MAKE_ALIASES = {
+// Common spelling/abbreviation variants → canonical make. The GM family is the
+// regional trap: Commodore-era GM cars are Holden in AU but Chevrolet/Vauxhall
+// elsewhere — so those aliases resolve differently per marketplace.
+const BASE_ALIASES = {
   vw: 'Volkswagen', volkswagon: 'Volkswagen', 'volks wagen': 'Volkswagen',
   mercedes: 'Mercedes-Benz', merc: 'Mercedes-Benz', benz: 'Mercedes-Benz', 'mercedes benz': 'Mercedes-Benz', 'merc benz': 'Mercedes-Benz',
   landrover: 'Land Rover', 'range rover': 'Land Rover', rangerover: 'Land Rover',
-  chevrolet: 'Holden', chev: 'Holden', chevy: 'Holden', vauxhall: 'Holden', hsv: 'Holden',
   'great wall': 'GWM', greatwall: 'GWM',
   'ssang yong': 'SsangYong',
   'alfa': 'Alfa Romeo', alfaromeo: 'Alfa Romeo',
+  'rolls royce': 'Rolls-Royce', rollsroyce: 'Rolls-Royce',
+  'aston': 'Aston Martin', astonmartin: 'Aston Martin',
+  seat: 'SEAT',
   volvo: 'Volvo',
 }
+const REGION_ALIASES = {
+  EBAY_AU: { chevrolet: 'Holden', chev: 'Holden', chevy: 'Holden', vauxhall: 'Holden', hsv: 'Holden' },
+  EBAY_US: { chev: 'Chevrolet', chevy: 'Chevrolet', hsv: 'Holden' },
+  EBAY_CA: { chev: 'Chevrolet', chevy: 'Chevrolet', hsv: 'Holden' },
+  EBAY_GB: { chev: 'Chevrolet', chevy: 'Chevrolet', hsv: 'Holden' },
+}
+const aliasesFor = (mp) => ({ ...BASE_ALIASES, ...(REGION_ALIASES[mp] || REGION_ALIASES.EBAY_AU) })
 
 // Makes whose name is a common English word — don't token-match them directly
 // (too many false positives); only reach them via a distinctive model.
-const SKIP_DIRECT = new Set(['MINI'])
+// RAM: "ram" appears in non-vehicle contexts; Rover: contained in Land/Range Rover.
+const SKIP_DIRECT = new Set(['MINI', 'RAM'])
 
 const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 // A word-boundary regex that tolerates the token's own spaces/hyphens being
@@ -83,9 +143,12 @@ const tokenRe = tok => new RegExp('\\b' + escapeRe(tok.toLowerCase())
   .replace(/(\d)([a-z])/g, '$1[-\\s]?$2') + '\\b')
 
 // Parse make / model / year out of a free-text part title. Best-effort: returns
-// blanks for anything it can't confidently match.
-export function parseVehicle(title = '') {
+// blanks for anything it can't confidently match. `mp` picks the regional alias
+// set (Chevy→Holden in AU, Chevy→Chevrolet elsewhere); defaults to the active
+// store's marketplace.
+export function parseVehicle(title = '', mp) {
   const t = (title || '').toLowerCase()
+  const MAKE_ALIASES = aliasesFor(mp || getActiveMarketplace().id)
 
   // ── make: earliest confident match wins (handles titles naming two vehicles) ──
   let make = '', makeIdx = Infinity
@@ -94,9 +157,11 @@ export function parseVehicle(title = '') {
     const idx = t.search(tokenRe(mk))
     if (idx >= 0 && idx < makeIdx) { make = mk; makeIdx = idx }
   }
+  // Aliases win ties with direct makes: for AU, "Chevrolet" must resolve to the
+  // alias target Holden even though Chevrolet is itself a make in the superset.
   for (const [alias, mk] of Object.entries(MAKE_ALIASES)) {
     const idx = t.search(tokenRe(alias))
-    if (idx >= 0 && idx < makeIdx) { make = mk; makeIdx = idx }
+    if (idx >= 0 && idx <= makeIdx) { make = mk; makeIdx = idx }
   }
 
   // ── model: prefer models of the matched make (longest first); else infer the

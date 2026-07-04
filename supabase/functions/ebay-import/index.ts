@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.24.2'
+const EDGE_FN_VERSION         = '3.24.3'
 const CHUNK_SIZE              = 20
 // eBay's getOrders can't return orders older than this, so the live sync only ever
 // manages sales within this window. The CSV history import must stay strictly OLDER
@@ -28,7 +28,9 @@ const EBAY_SCOPES = 'https://api.ebay.com/oauth/api_scope https://api.ebay.com/o
 // ── Vehicle title parser (server copy of src/lib/vehicles.js) ─────────────────
 // Recovers make/model/year from an eBay title so the sync can fill them in itself.
 // Keep in sync with the client copy if the lists change.
-const MAKES = ['Toyota','Ford','Holden','Mazda','Hyundai','Kia','Mitsubishi','Nissan','Subaru','Honda','Volkswagen','BMW','Mercedes-Benz','Audi','Land Rover','Isuzu','Suzuki','Lexus','Jeep','Volvo','Renault','Peugeot','Citroen','Skoda','Fiat','Alfa Romeo','MINI','Porsche','Jaguar','Chrysler','Dodge','MG','LDV','GWM','Haval','Chery','SsangYong','Daihatsu','Proton','Tesla','Genesis','Saab','Other']
+// Superset across marketplaces (AU + US/CA + UK makes) — safe for parsing any
+// region's titles; the regional nuance lives in the alias sets below.
+const MAKES = ['Toyota','Ford','Holden','Mazda','Hyundai','Kia','Mitsubishi','Nissan','Subaru','Honda','Volkswagen','BMW','Mercedes-Benz','Audi','Land Rover','Isuzu','Suzuki','Lexus','Jeep','Volvo','Renault','Peugeot','Citroen','Skoda','Fiat','Alfa Romeo','MINI','Porsche','Jaguar','Chrysler','Dodge','MG','LDV','GWM','Haval','Chery','SsangYong','Daihatsu','Proton','Tesla','Genesis','Saab','Chevrolet','GMC','RAM','Buick','Cadillac','Lincoln','Pontiac','Mercury','Oldsmobile','Saturn','Hummer','Acura','Infiniti','Scion','Vauxhall','Rover','SEAT','Dacia','Bentley','Aston Martin','Lotus','Rolls-Royce','Other']
 const MODEL_SUGS: Record<string, string[]> = {
   Toyota:['Hilux','Camry','Corolla','RAV4','LandCruiser','LandCruiser 200','LandCruiser 79','Prado','HiAce','Kluger','Yaris','Aurion','C-HR','86','Fortuner','Tarago','Echo','Avensis','FJ Cruiser','Rukus','Supra','Granvia'],
   Ford:['Ranger','Falcon','Territory','Focus','Fiesta','Escape','Explorer','Mustang','Transit','Mondeo','Kuga','Everest','Endura','Puma','Ecosport','Courier','Laser','Fairmont','Fairlane','Festiva'],
@@ -72,15 +74,46 @@ const MODEL_SUGS: Record<string, string[]> = {
   Tesla:['Model 3','Model Y','Model S','Model X'],
   Genesis:['G70','G80','GV70','GV80'],
   Saab:['9-3','9-5'],
+  Chevrolet:['Silverado','Camaro','Corvette','Malibu','Equinox','Tahoe','Suburban','Impala','Cruze','Traverse','Colorado','Blazer','Trailblazer','Sonic','Spark','Aveo','Express','S10','Bolt','Volt'],
+  GMC:['Sierra','Yukon','Acadia','Terrain','Canyon','Savana','Envoy'],
+  RAM:['1500','2500','3500','ProMaster'],
+  Buick:['Enclave','Encore','LaCrosse','Regal','Verano'],
+  Cadillac:['Escalade','CTS','ATS','XT5','SRX','DeVille','XTS'],
+  Lincoln:['Navigator','MKX','MKZ','Town Car','Continental','Aviator'],
+  Pontiac:['G6','G8','Grand Prix','Firebird','GTO','Vibe','Bonneville'],
+  Mercury:['Grand Marquis','Milan','Mountaineer','Sable'],
+  Oldsmobile:['Alero','Cutlass','Intrigue'],
+  Saturn:['Ion','Vue','Outlook','Aura'],
+  Hummer:['H1','H2','H3'],
+  Acura:['MDX','RDX','TL','TSX','TLX','ILX','Integra','RSX','NSX'],
+  Infiniti:['G35','G37','Q50','Q60','QX60','QX80','FX35','M35','EX35'],
+  Scion:['tC','xB','xA','xD','FR-S','iQ'],
+  Vauxhall:['Corsa','Astra','Vectra','Insignia','Zafira','Meriva','Mokka','Vivaro','Combo','Antara','Signum','Omega','Tigra','Grandland','Crossland','Adam','Agila','Cascada'],
+  Rover:['25','45','75','200','400','600','800','Metro'],
+  SEAT:['Ibiza','Leon','Alhambra','Ateca','Arona','Altea','Toledo','Mii'],
+  Dacia:['Duster','Sandero','Logan','Jogger'],
+  Bentley:['Continental','Bentayga','Flying Spur','Arnage'],
+  'Aston Martin':['DB9','DB11','Vantage','DBX','Rapide'],
+  Lotus:['Elise','Exige','Evora','Emira'],
+  'Rolls-Royce':['Phantom','Ghost','Cullinan','Wraith'],
 }
-const MAKE_ALIASES: Record<string, string> = {
+// Region-dependent aliases: the GM family (Chevrolet/Vauxhall/Holden rebadges)
+// resolves differently per marketplace — the exact "Holden problem" in reverse.
+const BASE_ALIASES: Record<string, string> = {
   vw:'Volkswagen', volkswagon:'Volkswagen', 'volks wagen':'Volkswagen',
   mercedes:'Mercedes-Benz', merc:'Mercedes-Benz', benz:'Mercedes-Benz', 'mercedes benz':'Mercedes-Benz', 'merc benz':'Mercedes-Benz',
   landrover:'Land Rover', 'range rover':'Land Rover', rangerover:'Land Rover',
-  chevrolet:'Holden', chev:'Holden', chevy:'Holden', vauxhall:'Holden', hsv:'Holden',
   'great wall':'GWM', greatwall:'GWM', 'ssang yong':'SsangYong', alfa:'Alfa Romeo', alfaromeo:'Alfa Romeo', volvo:'Volvo',
+  'rolls royce':'Rolls-Royce', rollsroyce:'Rolls-Royce', aston:'Aston Martin', astonmartin:'Aston Martin', seat:'SEAT',
 }
-const SKIP_DIRECT = new Set(['MINI'])
+const REGION_ALIASES: Record<string, Record<string, string>> = {
+  EBAY_AU: { chevrolet:'Holden', chev:'Holden', chevy:'Holden', vauxhall:'Holden', hsv:'Holden' },
+  EBAY_US: { chev:'Chevrolet', chevy:'Chevrolet', hsv:'Holden' },
+  EBAY_CA: { chev:'Chevrolet', chevy:'Chevrolet', hsv:'Holden' },
+  EBAY_GB: { chev:'Chevrolet', chevy:'Chevrolet', hsv:'Holden' },
+}
+const aliasesFor = (mp?: string) => ({ ...BASE_ALIASES, ...(REGION_ALIASES[mp || ''] || REGION_ALIASES.EBAY_AU) })
+const SKIP_DIRECT = new Set(['MINI', 'RAM'])
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const tokenRe = (tok: string) => new RegExp('\\b' + escapeRe(tok.toLowerCase())
   .replace(/[-\s]+/g, '[-\\s]?').replace(/([a-z])(\d)/g, '$1[-\\s]?$2').replace(/(\d)([a-z])/g, '$1[-\\s]?$2') + '\\b')
@@ -91,11 +124,14 @@ function parseYearRange(title = ''): string {
   const lo = Math.min(...years), hi = Math.max(...years)
   return lo === hi ? String(lo) : `${lo}-${hi}`
 }
-function parseVehicle(title = ''): { make: string; model: string; year: string } {
+function parseVehicle(title = '', mp?: string): { make: string; model: string; year: string } {
   const t = (title || '').toLowerCase()
+  const MAKE_ALIASES = aliasesFor(mp)
   let make = '', makeIdx = Infinity
   for (const mk of MAKES) { if (mk === 'Other' || SKIP_DIRECT.has(mk)) continue; const idx = t.search(tokenRe(mk)); if (idx >= 0 && idx < makeIdx) { make = mk; makeIdx = idx } }
-  for (const [alias, mk] of Object.entries(MAKE_ALIASES)) { const idx = t.search(tokenRe(alias)); if (idx >= 0 && idx < makeIdx) { make = mk; makeIdx = idx } }
+  // Aliases win ties: for AU, "Chevrolet" resolves to Holden even though
+  // Chevrolet is itself in the superset.
+  for (const [alias, mk] of Object.entries(MAKE_ALIASES)) { const idx = t.search(tokenRe(alias)); if (idx >= 0 && idx <= makeIdx) { make = mk; makeIdx = idx } }
   let model = ''
   const matchModel = (mk: string) => { const cands = (MODEL_SUGS[mk] || []).slice().sort((a, b) => b.length - a.length); for (const md of cands) if (tokenRe(md).test(t)) return md; return '' }
   if (make) model = matchModel(make)
@@ -1432,7 +1468,7 @@ async function handleRequest(req: Request): Promise<Response> {
       // a future UTC instant once the local end-of-day is converted).
       const endDate   = new Date(Math.min((body.toDate ? new Date(body.toDate) : new Date()).getTime(), Date.now()))
       const { token } = await getToken()
-      const headers = { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU', 'Accept': 'application/json' }
+      const headers = { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': (await storeMarketplace(sb, storeId)).mp, 'Accept': 'application/json' }
 
       const filter = `creationdate:[${startDate.toISOString()}..${endDate.toISOString()}]`
       let offset = 0, total = 0
@@ -1546,7 +1582,7 @@ async function handleRequest(req: Request): Promise<Response> {
       const startDate = new Date(Date.now() - days * 86400000)
       const startOffset = Math.max(0, +body.startOffset || 0)
       const { token } = await getToken()
-      const headers = { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU', 'Accept': 'application/json' }
+      const headers = { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': (await storeMarketplace(sb, storeId)).mp, 'Accept': 'application/json' }
       const filter = `creationdate:[${startDate.toISOString()}..${new Date().toISOString()}]`
 
       const startedAt = Date.now()
@@ -1779,7 +1815,7 @@ async function handleRequest(req: Request): Promise<Response> {
       const startDate = body.fromDate ? new Date(body.fromDate) : new Date(Date.now() - days * 86400000)
       const endDate   = body.toDate   ? new Date(body.toDate)   : new Date()
       const { token } = await getToken()
-      const headers = { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU', 'Accept': 'application/json' }
+      const headers = { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': (await storeMarketplace(sb, storeId)).mp, 'Accept': 'application/json' }
       const dateRange = `transactionDate:[${startDate.toISOString()}..${endDate.toISOString()}]`
 
       const startedAt = Date.now()
@@ -2007,6 +2043,7 @@ async function handleRequest(req: Request): Promise<Response> {
     // local pass per call (no eBay calls). Runs as a sync phase so every sync keeps
     // the catalogue's vehicle fields current; newest parts first.
     if (action === 'parse_titles') {
+      const mkt = await storeMarketplace(sb, storeId) // regional aliases (Chevy↔Holden)
       const { data: parts } = await sb.from('parts')
         .select('id, title, make, model, year')
         .eq('store_id', storeId).is('deleted_at', null)
@@ -2017,7 +2054,7 @@ async function handleRequest(req: Request): Promise<Response> {
       for (const p of (parts ?? [])) {
         const blankMake = !(p.make || '').trim(), blankModel = !(p.model || '').trim()
         if (!blankMake && !blankModel) continue
-        const v = parseVehicle(p.title || '')
+        const v = parseVehicle(p.title || '', mkt.mp)
         const patch: any = {}
         if (blankMake && v.make) patch.make = v.make
         if (blankModel && v.model) patch.model = v.model
@@ -2547,7 +2584,10 @@ async function handleRequest(req: Request): Promise<Response> {
       const usePn = pn.length >= 4 && !/does not apply|n\/a|unknown|unbranded/i.test(pn)
       const q = (usePn ? pn : [part.make, part.model, part.year, part.title].filter(Boolean).join(' ')).slice(0, 100)
       const token = await getAppToken()
-      const headers = { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU', 'Content-Type': 'application/json' }
+      // Price research must be LOCAL to the store's marketplace — AU comparables
+      // are meaningless for a US/UK store (different market, different currency).
+      const mktLookup = await storeMarketplace(sb, storeId)
+      const headers = { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': mktLookup.mp, 'Content-Type': 'application/json' }
 
       let browse: any = null
       try {
@@ -2604,7 +2644,8 @@ async function handleRequest(req: Request): Promise<Response> {
       if (!parts?.length) return json({ ok: true, updated: 0, message: 'No in-stock parts to check' })
 
       const token = await getAppToken()
-      const headers = { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU', 'Content-Type': 'application/json' }
+      // Market pricing must be local to the store's marketplace.
+      const headers = { 'Authorization': `Bearer ${token}`, 'X-EBAY-C-MARKETPLACE-ID': (await storeMarketplace(sb, storeId)).mp, 'Content-Type': 'application/json' }
       let updated = 0
       for (const p of parts) {
         const pn = String(p.part_number || '').trim()
@@ -2986,9 +3027,10 @@ async function handleRequest(req: Request): Promise<Response> {
       const partIds: string[] = body.partIds ?? []
       if (!partIds.length) throw new Error('No part IDs provided')
 
+      const mktDelist = await storeMarketplace(sb, storeId)
       const ebayHeaders = {
         'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Accept': 'application/json',
-        'Accept-Language': 'en-AU', 'Content-Language': 'en-AU', 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU',
+        'Accept-Language': mktDelist.lang, 'Content-Language': mktDelist.lang, 'X-EBAY-C-MARKETPLACE-ID': mktDelist.mp,
       }
       const now = new Date().toISOString()
       let delisted = 0
@@ -3046,13 +3088,14 @@ async function handleRequest(req: Request): Promise<Response> {
         throw new Error('Address line, city, postcode, and country are required')
       }
 
+      const mktLoc = await storeMarketplace(sb, storeId)
       const ebayHeaders = {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'Accept-Language': 'en-AU',
-        'Content-Language': 'en-AU',
-        'X-EBAY-C-MARKETPLACE-ID': 'EBAY_AU',
+        'Accept-Language': mktLoc.lang,
+        'Content-Language': mktLoc.lang,
+        'X-EBAY-C-MARKETPLACE-ID': mktLoc.mp,
       }
 
       const merchantLocationKey = 'PARTVAULT_MAIN'
