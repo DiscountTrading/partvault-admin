@@ -2209,35 +2209,19 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
           </Section>
 
           <Section title="📍 eBay Inventory Location">
-            <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.5 }}>
-              Required by eBay for creating draft listings. PartVault uses this address as the item location. One-time setup — click Save once and it's done.
+            <p style={{ fontSize: 12, color: C.muted, marginBottom: 10, lineHeight: 1.45 }}>
+              eBay's required item location. One-time — Save once.
+              {ebayLocationKey && <span style={{ color: C.green }}> · ✓ active</span>}
             </p>
-            {ebayLocationKey && (
-              <div style={{ padding: '8px 12px', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 6, marginBottom: 12, fontSize: 12, color: C.green }}>
-                ✓ eBay location active: <code>{ebayLocationKey}</code>
-              </div>
-            )}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+            {/* Compact: address on one row, city/state/postcode/country on the next. */}
+            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 8, marginBottom: 10 }}>
               <div style={{ gridColumn: '1 / -1' }}>
-                <label style={S.label}>Address Line 1</label>
-                <input style={S.input} value={shipAddress.addressLine1} onChange={e => setShipAddress(a => ({ ...a, addressLine1: e.target.value }))} placeholder="123 Main St" />
+                <input style={S.input} value={shipAddress.addressLine1} onChange={e => setShipAddress(a => ({ ...a, addressLine1: e.target.value }))} placeholder="Address line 1" />
               </div>
-              <div>
-                <label style={S.label}>City / Suburb</label>
-                <input style={S.input} value={shipAddress.city} onChange={e => setShipAddress(a => ({ ...a, city: e.target.value }))} />
-              </div>
-              <div>
-                <label style={S.label}>State</label>
-                <input style={S.input} value={shipAddress.stateOrProvince} onChange={e => setShipAddress(a => ({ ...a, stateOrProvince: e.target.value }))} placeholder="NSW" />
-              </div>
-              <div>
-                <label style={S.label}>Postcode</label>
-                <input style={S.input} value={shipAddress.postalCode} onChange={e => setShipAddress(a => ({ ...a, postalCode: e.target.value }))} />
-              </div>
-              <div>
-                <label style={S.label}>Country</label>
-                <input style={S.input} value={shipAddress.country} onChange={e => setShipAddress(a => ({ ...a, country: e.target.value.toUpperCase() }))} maxLength={2} placeholder="AU" />
-              </div>
+              <input style={S.input} value={shipAddress.city} onChange={e => setShipAddress(a => ({ ...a, city: e.target.value }))} placeholder="City / Suburb" />
+              <input style={S.input} value={shipAddress.stateOrProvince} onChange={e => setShipAddress(a => ({ ...a, stateOrProvince: e.target.value }))} placeholder="State" />
+              <input style={S.input} value={shipAddress.postalCode} onChange={e => setShipAddress(a => ({ ...a, postalCode: e.target.value }))} placeholder="Postcode" />
+              <input style={{ ...S.input, gridColumn: '1 / -1', maxWidth: 120 }} value={shipAddress.country} onChange={e => setShipAddress(a => ({ ...a, country: e.target.value.toUpperCase() }))} maxLength={2} placeholder="Country (AU)" />
             </div>
             <button
               style={{ ...S.btn('primary'), width: '100%', opacity: (savingLocation || !ebayConnected) ? 0.6 : 1 }}
