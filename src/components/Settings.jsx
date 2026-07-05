@@ -2699,7 +2699,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                 const lsTs = lastSync?.synced_at ? new Date(lastSync.synced_at).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null
                 const inProgress = nightly && !nightly.done
                 const nightlyTs = nightly?.updated_at ? new Date(nightly.updated_at).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null
-                const kindLbl = lastSync?.kind === 'nightly' ? ' (nightly)' : lastSync?.kind === 'manual' ? ' (manual)' : ''
+                const kindLbl = lastSync?.kind === 'nightly' ? ' (nightly)' : lastSync?.kind === 'manual' ? ' (manual)' : lastSync?.kind === 'live' ? ' (live check)' : ''
                 return (
                   <div style={{ fontSize: 11, marginBottom: 8, padding: '6px 10px', borderRadius: 6,
                     background: !lastSync ? '#f9f8f5' : ok ? '#ecfdf5' : '#fef2f2',

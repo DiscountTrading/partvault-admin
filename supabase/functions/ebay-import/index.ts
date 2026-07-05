@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.29.1'
+const EDGE_FN_VERSION         = '3.29.2'
 const CHUNK_SIZE              = 20
 // eBay's getOrders can't return orders older than this, so the live sync only ever
 // manages sales within this window. The CSV history import must stay strictly OLDER
@@ -846,6 +846,17 @@ async function handleRequest(req: Request): Promise<Response> {
         changed_at: new Date().toISOString(),
       })
     } catch (_) { /* logging is best-effort */ }
+  }
+
+  // Stamp "last sync" from the lightweight 5-min live checks too, so the Sync
+  // panel reflects them — throttled to ~20 min so audit_log doesn't bloat.
+  const touchLiveSync = async (sid: string, summary: string) => {
+    try {
+      const { data } = await sb.from('audit_log').select('changed_at')
+        .eq('store_id', sid).eq('table_name', 'sync').order('changed_at', { ascending: false }).limit(1)
+      const last = data?.[0]?.changed_at ? new Date(data[0].changed_at).getTime() : 0
+      if (Date.now() - last > 20 * 60 * 1000) await logSyncEvent(sid, summary, { kind: 'live', ok: true })
+    } catch (_) { /* best-effort */ }
   }
 
   // ── ACTIONS ─────────────────────────────────────────────────────────────────
@@ -1705,6 +1716,7 @@ async function handleRequest(req: Request): Promise<Response> {
       } while (offset < total && offset < 5000 && Date.now() - startedAt < 45000)
 
       const hasMore = offset < total
+      await touchLiveSync(storeId, `Live sales check · ${upserted} new`)
       // `created`/`updated` kept for backwards-compatible client display.
       return json({ ok: true, version: EDGE_FN_VERSION, days, ebayOrders: total, lineItems, upserted, linked, created: upserted, updated: linked, skipped: 0, failed, failedReasons, hasMore, nextOffset: offset })
     }
@@ -2092,6 +2104,7 @@ async function handleRequest(req: Request): Promise<Response> {
         failed   = c.failed ?? failed
         if (c.isComplete || c.status === 'completed') break
       }
+      await touchLiveSync(storeId, `Live listings check · ${imported} new`)
       return json({ ok: true, version: EDGE_FN_VERSION, checked: recent.length, missing: missing.length, imported, failed })
     }
 
