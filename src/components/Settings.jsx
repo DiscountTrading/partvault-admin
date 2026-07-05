@@ -2350,16 +2350,38 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
               eBay's required item location. One-time — Save once.
               {ebayLocationKey && <span style={{ color: C.green }}> · ✓ active</span>}
             </p>
-            {/* Compact: address on one row, city/state/postcode/country on the next. */}
-            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 8, marginBottom: 10 }}>
-              <div style={{ gridColumn: '1 / -1' }}>
-                <input style={S.input} value={shipAddress.addressLine1} onChange={e => setShipAddress(a => ({ ...a, addressLine1: e.target.value }))} placeholder="Address line 1" />
-              </div>
-              <input style={S.input} value={shipAddress.city} onChange={e => setShipAddress(a => ({ ...a, city: e.target.value }))} placeholder="City / Suburb" />
-              <input style={S.input} value={shipAddress.stateOrProvince} onChange={e => setShipAddress(a => ({ ...a, stateOrProvince: e.target.value }))} placeholder="State" />
-              <input style={S.input} value={shipAddress.postalCode} onChange={e => setShipAddress(a => ({ ...a, postalCode: e.target.value }))} placeholder="Postcode" />
-              <input style={{ ...S.input, gridColumn: '1 / -1', maxWidth: 120 }} value={shipAddress.country} onChange={e => setShipAddress(a => ({ ...a, country: e.target.value.toUpperCase() }))} maxLength={2} placeholder="Country (AU)" />
-            </div>
+            {/* Compact: address on one row, city/state/postcode on the next, with
+                small always-visible labels (placeholders vanish once filled). */}
+            {(() => {
+              const mini = { fontSize: 10, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.4px', display: 'block', marginBottom: 3 }
+              // Normalise full AU state names to the standard abbreviations.
+              const AU_STATES = { queensland: 'QLD', 'new south wales': 'NSW', victoria: 'VIC', tasmania: 'TAS', 'south australia': 'SA', 'western australia': 'WA', 'northern territory': 'NT', 'australian capital territory': 'ACT' }
+              const abbrevState = v => AU_STATES[String(v || '').trim().toLowerCase()] || v
+              return (
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 8, marginBottom: 10 }}>
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <label style={mini}>Address</label>
+                    <input style={S.input} value={shipAddress.addressLine1} onChange={e => setShipAddress(a => ({ ...a, addressLine1: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label style={mini}>City / Suburb</label>
+                    <input style={S.input} value={shipAddress.city} onChange={e => setShipAddress(a => ({ ...a, city: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label style={mini}>State</label>
+                    <input style={S.input} value={abbrevState(shipAddress.stateOrProvince)} onChange={e => setShipAddress(a => ({ ...a, stateOrProvince: abbrevState(e.target.value) }))} placeholder="QLD" />
+                  </div>
+                  <div>
+                    <label style={mini}>Postcode</label>
+                    <input style={S.input} value={shipAddress.postalCode} onChange={e => setShipAddress(a => ({ ...a, postalCode: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label style={mini}>Country</label>
+                    <input style={{ ...S.input, maxWidth: 90 }} value={shipAddress.country} onChange={e => setShipAddress(a => ({ ...a, country: e.target.value.toUpperCase() }))} maxLength={2} placeholder="AU" />
+                  </div>
+                </div>
+              )
+            })()}
             <button
               style={{ ...S.btn('primary'), width: '100%', opacity: (savingLocation || !ebayConnected) ? 0.6 : 1 }}
               onClick={saveShipAddressAndCreateLocation}
