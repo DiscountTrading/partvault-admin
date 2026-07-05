@@ -6,6 +6,7 @@ import { buildSkuPreview, SKU_TOKENS, DEFAULT_SKU_TEMPLATE, DEFAULT_SKU_PAD } fr
 import { MARKETPLACES, MARKETPLACE_LIST } from '../lib/marketplaces'
 import { planState } from '../lib/plan'
 import { startCheckout, openBillingPortal } from '../lib/billing'
+import SupportChat from './SupportChat'
 import TeamAccess from './TeamAccess'
 import Activity from './Activity'
 import { compressImage } from '../lib/image'
@@ -193,6 +194,8 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   const [aiCredits, setAiCredits] = useState(null)
   const [showPlans, setShowPlans] = useState(false)
   const [billingBusy, setBillingBusy] = useState(false)
+  const [previewCustomer, setPreviewCustomer] = useState(false) // founder: preview the customer billing UI
+  const showBilling = !plan.founder || previewCustomer
   const PLAN_CADENCES = [
     { id: 'monthly',        label: 'Monthly (cancel anytime)', price: { basic: '$29', pro: '$79', business: '$129' }, suffix: '/mo' },
     { id: 'annual_monthly', label: '12-month (paid monthly)',  price: { basic: '$19', pro: '$59', business: '$99' },  suffix: '/mo' },
@@ -2565,7 +2568,14 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                     : 'Loading AI usage…'}
                   {' '}Full assessments (photos → title, description, price, specifics) are the metered unit; quick naming is free.
                 </div>
-                {!plan.founder && (
+                {plan.founder && (
+                  <div style={{ marginTop: 8 }}>
+                    <button style={{ ...S.btn('secondary'), padding: '4px 10px', fontSize: 11 }} onClick={() => setPreviewCustomer(p => !p)}>
+                      {previewCustomer ? '✓ Previewing customer view — exit' : '👁 Preview customer billing view'}
+                    </button>
+                  </div>
+                )}
+                {showBilling && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
                     <span style={{ fontSize: 12, color: C.text }}>
                       🎟️ AI credits: <b>{aiCredits == null ? '…' : aiCredits}</b>
@@ -2577,7 +2587,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                     </button>
                   </div>
                 )}
-                {!plan.founder && (
+                {showBilling && (
                   <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
                     <button disabled={billingBusy} style={{ ...S.btn('primary'), padding: '6px 14px', fontSize: 12 }} onClick={() => setShowPlans(s => !s)}>
                       {plan.tier === 'trial' || plan.expired ? 'Choose a plan' : 'Change plan'}
@@ -2589,7 +2599,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                     )}
                   </div>
                 )}
-                {showPlans && !plan.founder && (
+                {showPlans && showBilling && (
                   <div style={{ marginTop: 12, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
                     {PLAN_CADENCES.map(cad => (
                       <div key={cad.id} style={{ marginBottom: 12 }}>
@@ -2807,6 +2817,12 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
           </div>{/* end right column */}
         </div>
       )}
+
+      {/* Help & support — in-house messaging */}
+      <div style={{ ...S.card, marginTop: 20 }}>
+        <h3 style={{ ...S.h2, marginBottom: 12 }}>🆘 Help &amp; support</h3>
+        <SupportChat storeId={storeId} />
+      </div>
 
       {/* Recover a recently-deleted store (owner, within the free grace window) */}
       {deletedStores.length > 0 && (

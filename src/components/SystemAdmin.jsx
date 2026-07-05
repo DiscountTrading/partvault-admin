@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { C, S } from '../lib/constants'
+import SupportChat from './SupportChat'
 
 // System-wide (platform) settings form. Used ONLY by the standalone ops console
 // (src/ops.jsx). Takes its Supabase client so it runs on the isolated ops
@@ -60,6 +61,11 @@ export default function SystemAdmin({ client, onSignOut }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <button style={S.btn('primary')} onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save system settings'}</button>
               {msg && <span style={{ fontSize: 13, color: msg.startsWith('✗') ? C.red : C.green, fontWeight: 600 }}>{msg}</span>}
+            </div>
+
+            <div style={{ ...S.card, marginTop: 24 }}>
+              <h2 style={S.h2}>📨 Support inbox</h2>
+              <SupportChat staff client={client} />
             </div>
           </>
         )}
