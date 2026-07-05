@@ -1407,6 +1407,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     { id: 'shipping', label: '📦 Shipping' },
     { id: 'team', label: '👥 User Access' },
     { id: 'activity', label: '📋 Activity' },
+    { id: 'help', label: '🆘 Help' },
   ]
 
   const importProgress = importJob ? (() => {
@@ -1759,6 +1760,137 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
             </div>
             <button style={{ ...S.btn('danger'), padding: '10px 24px' }} onClick={onSignOut}>Sign Out</button>
           </Section>
+
+          {/* Store-level config (moved from the eBay tab): plan, name, marketplace, timezone */}
+              {/* Subscription plan + AI usage this month */}
+              <div style={{ background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 14px', marginBottom: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>💳 Plan</span>
+                  <span style={{ fontSize: 13, fontWeight: 800, color: C.accent }}>
+                    {plan.founder ? 'Founder (all features)' : plan.label}
+                    {plan.tier === 'trial' && !plan.expired && ` — ${Math.max(plan.trialDaysLeft ?? 0, 0)} days left`}
+                    {plan.expired && ' — expired'}
+                  </span>
+                </div>
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
+                  {aiUsage
+                    ? `AI this month: ${aiUsage.full_count} full assessment${aiUsage.full_count === 1 ? '' : 's'}${plan.founder ? '' : ` of ${plan.limits.aiFull}`} · ${aiUsage.light_count} quick calls (naming etc, uncapped).`
+                    : 'Loading AI usage…'}
+                  {' '}Full assessments (photos → title, description, price, specifics) are the metered unit; quick naming is free.
+                </div>
+                {plan.founder && (
+                  <div style={{ marginTop: 8 }}>
+                    <button style={{ ...S.btn('secondary'), padding: '4px 10px', fontSize: 11 }} onClick={() => setPreviewCustomer(p => !p)}>
+                      {previewCustomer ? '✓ Previewing customer view — exit' : '👁 Preview customer billing view'}
+                    </button>
+                  </div>
+                )}
+                {showBilling && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 12, color: C.text }}>
+                      🎟️ AI credits: <b>{aiCredits == null ? '…' : aiCredits}</b>
+                      <span style={{ color: C.muted }}> — used automatically once your monthly allowance runs out.</span>
+                    </span>
+                    <button disabled={billingBusy} style={{ ...S.btn('secondary'), padding: '5px 12px', fontSize: 12 }}
+                      onClick={() => buy(() => startCheckout({ storeId, pack: 'credits_300' }))}>
+                      Buy AI credits
+                    </button>
+                  </div>
+                )}
+                {showBilling && (
+                  <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+                    <button disabled={billingBusy} style={{ ...S.btn('primary'), padding: '6px 14px', fontSize: 12 }} onClick={() => setShowPlans(s => !s)}>
+                      {plan.tier === 'trial' || plan.expired ? 'Choose a plan' : 'Change plan'}
+                    </button>
+                    {plan.tier !== 'trial' && (
+                      <button disabled={billingBusy} style={{ ...S.btn('secondary'), padding: '6px 14px', fontSize: 12 }} onClick={() => buy(() => openBillingPortal(storeId))}>
+                        Manage billing
+                      </button>
+                    )}
+                  </div>
+                )}
+                {showPlans && showBilling && (
+                  <div style={{ marginTop: 12, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
+                    {PLAN_CADENCES.map(cad => (
+                      <div key={cad.id} style={{ marginBottom: 12 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 6 }}>{cad.label}</div>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          {['basic', 'pro', 'business'].map(tier => (
+                            <button key={tier} disabled={billingBusy}
+                              style={{ ...S.btn('secondary'), padding: '6px 12px', fontSize: 12, textTransform: 'capitalize' }}
+                              onClick={() => buy(() => startCheckout({ storeId, tier, cadence: cad.id }))}>
+                              {tier} {cad.price[tier]}{cad.suffix}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                    <div style={{ fontSize: 11, color: C.muted }}>12-month plans commit to the full 12 months. Upfront adds 2 free months. You'll be taken to secure Stripe checkout.</div>
+                  </div>
+                )}
+              </div>
+
+              {/* Store name — editable by an admin/owner. */}
+              <div style={{ background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 14px', marginBottom: 12 }}>
+                <label style={S.label}>🏪 Store name</label>
+                <div style={{ display: 'flex', gap: 8, maxWidth: 460 }}>
+                  <input style={{ ...S.input, flex: 1 }} value={storeName} onChange={e => setStoreName(e.target.value)} placeholder="Store name" />
+                  <button style={S.btn('secondary')} disabled={!storeName.trim()}
+                    onClick={async () => {
+                      const { error } = await sb.from('stores').update({ name: storeName.trim() }).eq('id', storeId)
+                      if (error) { setNameMsg(`✗ ${error.message}`); return }
+                      setNameMsg('Saved ✓'); setTimeout(() => setNameMsg(''), 2000); refreshStores?.()
+                    }}>Save</button>
+                  {nameMsg && <span style={{ fontSize: 12, color: nameMsg.startsWith('✗') ? C.red : C.green, fontWeight: 600, alignSelf: 'center' }}>{nameMsg}</span>}
+                </div>
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>Shown in the store switcher and on labels. This is the join code for workers: <b>{joinCode || '—'}</b> (random, keeps the store secure).</div>
+              </div>
+
+              {/* Marketplace (country) — chosen at store creation, locked at first part */}
+              <div style={{ background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 14px', marginBottom: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>🌏 Marketplace</span>
+                  {mpLocked ? (
+                    <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
+                      {MARKETPLACES[marketplace]?.flag} {MARKETPLACES[marketplace]?.label || marketplace} — eBay ({MARKETPLACES[marketplace]?.currency})
+                      <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: C.muted, background: '#eee', borderRadius: 10, padding: '2px 8px' }}>🔒 locked</span>
+                    </span>
+                  ) : (
+                    <select value={marketplace} onChange={e => saveMarketplace(e.target.value)}
+                      style={{ border: `1px solid ${C.border}`, borderRadius: 6, padding: '4px 8px', fontSize: 12, background: '#fff' }}>
+                      {MARKETPLACE_LIST.map(m => <option key={m.id} value={m.id}>{m.flag} {m.label} — eBay ({m.currency})</option>)}
+                    </select>
+                  )}
+                  {mpSaved && <span style={{ fontSize: 12, color: C.green }}>✓ saved</span>}
+                </div>
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
+                  {mpLocked
+                    ? 'Locked because this store has parts — their prices and categories are committed to this country. Selling in another country? Create a new store for it.'
+                    : 'Which eBay site this store lists on (sets currency and categories). Locks permanently once the first part is created.'}
+                </div>
+              </div>
+
+              {/* Store timezone — drives nightly sync timing + default sales window */}
+              <div style={{ background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 14px', marginBottom: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>🕓 Store timezone</span>
+                  <select value={timezone} onChange={e => saveTimezone(e.target.value)}
+                    style={{ border: `1px solid ${C.border}`, borderRadius: 6, padding: '4px 8px', fontSize: 12, background: '#fff', maxWidth: 240 }}>
+                    {!tzList.includes(timezone) && <option value={timezone}>{timezone}</option>}
+                    {tzList.map(z => <option key={z} value={z}>{z}</option>)}
+                  </select>
+                  {tzSaved && <span style={{ fontSize: 12, color: C.green }}>✓ saved</span>}
+                </div>
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
+                  {(() => {
+                    let local = ''
+                    try { local = new Date().toLocaleString('en-AU', { timeZone: timezone, hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' }) } catch { /* invalid tz */ }
+                    return `Nightly sync runs at midnight here${local ? ` · local time now ${local}` : ''}. Auto-detected from your browser — edit if it's wrong (e.g. on a VPN).`
+                  })()}
+                </div>
+              </div>
+
+
           <Section title="AI">
             <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.5 }}>
               AI assessment and title parsing are provided by PartVault — there's no key to configure. Requests run server-side so your credentials are never exposed in the browser.
@@ -2513,134 +2645,6 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                 </div>
               )}
 
-              {/* Subscription plan + AI usage this month */}
-              <div style={{ background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 14px', marginBottom: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>💳 Plan</span>
-                  <span style={{ fontSize: 13, fontWeight: 800, color: C.accent }}>
-                    {plan.founder ? 'Founder (all features)' : plan.label}
-                    {plan.tier === 'trial' && !plan.expired && ` — ${Math.max(plan.trialDaysLeft ?? 0, 0)} days left`}
-                    {plan.expired && ' — expired'}
-                  </span>
-                </div>
-                <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
-                  {aiUsage
-                    ? `AI this month: ${aiUsage.full_count} full assessment${aiUsage.full_count === 1 ? '' : 's'}${plan.founder ? '' : ` of ${plan.limits.aiFull}`} · ${aiUsage.light_count} quick calls (naming etc, uncapped).`
-                    : 'Loading AI usage…'}
-                  {' '}Full assessments (photos → title, description, price, specifics) are the metered unit; quick naming is free.
-                </div>
-                {plan.founder && (
-                  <div style={{ marginTop: 8 }}>
-                    <button style={{ ...S.btn('secondary'), padding: '4px 10px', fontSize: 11 }} onClick={() => setPreviewCustomer(p => !p)}>
-                      {previewCustomer ? '✓ Previewing customer view — exit' : '👁 Preview customer billing view'}
-                    </button>
-                  </div>
-                )}
-                {showBilling && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: 12, color: C.text }}>
-                      🎟️ AI credits: <b>{aiCredits == null ? '…' : aiCredits}</b>
-                      <span style={{ color: C.muted }}> — used automatically once your monthly allowance runs out.</span>
-                    </span>
-                    <button disabled={billingBusy} style={{ ...S.btn('secondary'), padding: '5px 12px', fontSize: 12 }}
-                      onClick={() => buy(() => startCheckout({ storeId, pack: 'credits_300' }))}>
-                      Buy AI credits
-                    </button>
-                  </div>
-                )}
-                {showBilling && (
-                  <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
-                    <button disabled={billingBusy} style={{ ...S.btn('primary'), padding: '6px 14px', fontSize: 12 }} onClick={() => setShowPlans(s => !s)}>
-                      {plan.tier === 'trial' || plan.expired ? 'Choose a plan' : 'Change plan'}
-                    </button>
-                    {plan.tier !== 'trial' && (
-                      <button disabled={billingBusy} style={{ ...S.btn('secondary'), padding: '6px 14px', fontSize: 12 }} onClick={() => buy(() => openBillingPortal(storeId))}>
-                        Manage billing
-                      </button>
-                    )}
-                  </div>
-                )}
-                {showPlans && showBilling && (
-                  <div style={{ marginTop: 12, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
-                    {PLAN_CADENCES.map(cad => (
-                      <div key={cad.id} style={{ marginBottom: 12 }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 6 }}>{cad.label}</div>
-                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                          {['basic', 'pro', 'business'].map(tier => (
-                            <button key={tier} disabled={billingBusy}
-                              style={{ ...S.btn('secondary'), padding: '6px 12px', fontSize: 12, textTransform: 'capitalize' }}
-                              onClick={() => buy(() => startCheckout({ storeId, tier, cadence: cad.id }))}>
-                              {tier} {cad.price[tier]}{cad.suffix}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                    <div style={{ fontSize: 11, color: C.muted }}>12-month plans commit to the full 12 months. Upfront adds 2 free months. You'll be taken to secure Stripe checkout.</div>
-                  </div>
-                )}
-              </div>
-
-              {/* Store name — editable by an admin/owner. */}
-              <div style={{ background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 14px', marginBottom: 12 }}>
-                <label style={S.label}>🏪 Store name</label>
-                <div style={{ display: 'flex', gap: 8, maxWidth: 460 }}>
-                  <input style={{ ...S.input, flex: 1 }} value={storeName} onChange={e => setStoreName(e.target.value)} placeholder="Store name" />
-                  <button style={S.btn('secondary')} disabled={!storeName.trim()}
-                    onClick={async () => {
-                      const { error } = await sb.from('stores').update({ name: storeName.trim() }).eq('id', storeId)
-                      if (error) { setNameMsg(`✗ ${error.message}`); return }
-                      setNameMsg('Saved ✓'); setTimeout(() => setNameMsg(''), 2000); refreshStores?.()
-                    }}>Save</button>
-                  {nameMsg && <span style={{ fontSize: 12, color: nameMsg.startsWith('✗') ? C.red : C.green, fontWeight: 600, alignSelf: 'center' }}>{nameMsg}</span>}
-                </div>
-                <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>Shown in the store switcher and on labels. This is the join code for workers: <b>{joinCode || '—'}</b> (random, keeps the store secure).</div>
-              </div>
-
-              {/* Marketplace (country) — chosen at store creation, locked at first part */}
-              <div style={{ background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 14px', marginBottom: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>🌏 Marketplace</span>
-                  {mpLocked ? (
-                    <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
-                      {MARKETPLACES[marketplace]?.flag} {MARKETPLACES[marketplace]?.label || marketplace} — eBay ({MARKETPLACES[marketplace]?.currency})
-                      <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: C.muted, background: '#eee', borderRadius: 10, padding: '2px 8px' }}>🔒 locked</span>
-                    </span>
-                  ) : (
-                    <select value={marketplace} onChange={e => saveMarketplace(e.target.value)}
-                      style={{ border: `1px solid ${C.border}`, borderRadius: 6, padding: '4px 8px', fontSize: 12, background: '#fff' }}>
-                      {MARKETPLACE_LIST.map(m => <option key={m.id} value={m.id}>{m.flag} {m.label} — eBay ({m.currency})</option>)}
-                    </select>
-                  )}
-                  {mpSaved && <span style={{ fontSize: 12, color: C.green }}>✓ saved</span>}
-                </div>
-                <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
-                  {mpLocked
-                    ? 'Locked because this store has parts — their prices and categories are committed to this country. Selling in another country? Create a new store for it.'
-                    : 'Which eBay site this store lists on (sets currency and categories). Locks permanently once the first part is created.'}
-                </div>
-              </div>
-
-              {/* Store timezone — drives nightly sync timing + default sales window */}
-              <div style={{ background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 14px', marginBottom: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>🕓 Store timezone</span>
-                  <select value={timezone} onChange={e => saveTimezone(e.target.value)}
-                    style={{ border: `1px solid ${C.border}`, borderRadius: 6, padding: '4px 8px', fontSize: 12, background: '#fff', maxWidth: 240 }}>
-                    {!tzList.includes(timezone) && <option value={timezone}>{timezone}</option>}
-                    {tzList.map(z => <option key={z} value={z}>{z}</option>)}
-                  </select>
-                  {tzSaved && <span style={{ fontSize: 12, color: C.green }}>✓ saved</span>}
-                </div>
-                <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
-                  {(() => {
-                    let local = ''
-                    try { local = new Date().toLocaleString('en-AU', { timeZone: timezone, hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' }) } catch { /* invalid tz */ }
-                    return `Nightly sync runs at midnight here${local ? ` · local time now ${local}` : ''}. Auto-detected from your browser — edit if it's wrong (e.g. on a VPN).`
-                  })()}
-                </div>
-              </div>
-
               <div style={{ marginBottom: syncPhase ? 6 : 12 }}>
                 <button style={{ ...S.btn('primary'), width: '100%', opacity: (syncingAll || !ebayConnected) ? 0.6 : 1 }} onClick={runSync} disabled={syncingAll || importing || backfilling || reconciling || !ebayConnected}>
                   {syncingAll ? '⏳ Syncing…' : '🔄 Sync now'}
@@ -2750,41 +2754,37 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
               {!ebayConnected && <div style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>Connect eBay above to enable.</div>}
             </Section>
 
-            {/* Historical sales backfill from an uploaded eBay Orders report.
-                Gated until a sync has run (so the API pulls the last ~90 days first
-                and the CSV only fills the older gap). Accept any sync signal: a
-                server-recorded sync (lastSync, set by nightly/quick sync) OR this
-                browser's run markers — the main "Sync now" only sets the latter. */}
-            {plan.can('history') ? (
+            {/* One-time setup tools live behind the ⚙ toggle — CSV history import,
+                historical cost model + real-fee backfill, and reconcile. */}
+            {showAdvSync && (plan.can('history') ? (
               <>
                 <EbayHistoryUpload storeId={storeId} canUpload={!!lastSync || !!lastRun.backfill || !!lastRun.import} />
-
-                {/* Snapshot per-category cost averages onto imported sales (locked). */}
                 <HistoricalCosts storeId={storeId} />
               </>
             ) : (
               <div style={{ background: '#f9f8f5', border: `1px dashed ${C.border}`, borderRadius: 10, padding: '12px 14px', marginBottom: 12, fontSize: 13, color: C.muted }}>
                 🔒 Historical sales import &amp; cost modelling are part of the <b>Pro</b> plan.
               </div>
-            )}
-
-            {/* Reconcile (advanced) */}
+            ))}
             {showAdvSync && <div ref={reconcileRef}><ReconcileSection /></div>}
           </div>{/* end right column */}
         </div>
       )}
 
-      {/* Help & support — AI assistant + in-house messaging */}
-      <div style={{ ...S.card, marginTop: 20 }}>
-        <h3 style={{ ...S.h2, marginBottom: 12 }}>🤖 Ask the assistant</h3>
-        <HelpAssistant storeId={storeId} />
-        <div style={{ borderTop: `1px solid ${C.border}`, margin: '18px 0' }} />
-        <h3 style={{ ...S.h2, marginBottom: 12 }}>🆘 Message us</h3>
-        <SupportChat storeId={storeId} />
-      </div>
+      {/* HELP TAB — AI assistant + in-house messaging (own tab, never buried) */}
+      {tab === 'help' && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignItems: 'start' }}>
+          <Section title="🤖 Ask the assistant">
+            <HelpAssistant storeId={storeId} />
+          </Section>
+          <Section title="🆘 Message us">
+            <SupportChat storeId={storeId} />
+          </Section>
+        </div>
+      )}
 
       {/* Recover a recently-deleted store (owner, within the free grace window) */}
-      {deletedStores.length > 0 && (
+      {tab === 'account' && deletedStores.length > 0 && (
         <div style={{ ...S.card, marginTop: 20, borderColor: '#fcd34d', background: '#fffbeb' }}>
           <h3 style={{ ...S.h2, marginBottom: 8 }}>♻️ Recently deleted stores</h3>
           {deletedStores.map(d => (
@@ -2804,8 +2804,8 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         </div>
       )}
 
-      {/* Danger zone — delete this store (owner only) */}
-      {isOwner && !plan.founder && (
+      {/* Danger zone — delete this store (owner only, Account tab) */}
+      {tab === 'account' && isOwner && !plan.founder && (
         <div style={{ ...S.card, marginTop: 20, borderColor: '#fca5a5' }}>
           <h3 style={{ ...S.h2, marginBottom: 8, color: C.red }}>Danger zone — delete this store</h3>
           <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.5, marginBottom: 10 }}>
