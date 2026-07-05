@@ -2132,9 +2132,10 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         </>
       )}
 
-      {/* EBAY SYNC TAB */}
+      {/* EBAY SYNC TAB — Sync gets the wide main area; connection + address sit in
+          a compact left sidebar so it all fits without wasting the left half. */}
       {tab === 'ebay' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignItems: 'start' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 340px) 1fr', gap: 16, alignItems: 'start' }}>
           <div>
           {/* Connection */}
           <Section title="🔗 eBay Connection">
@@ -2242,49 +2243,8 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
             )}
           </Section>
 
-          {/* Parse with AI */}
-          <Section title="🤖 Parse with AI">
-            <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
-              Extracts make, model and year from listing titles using Claude Haiku. Processes all unparsed listings in one run. AI is provided by PartVault — no key needed.
-            </p>
-
-            {parsing && parseProgress && (
-              <div style={{ marginBottom: 12, padding: 12, background: '#f8fafb', borderRadius: 8, border: `1px solid ${C.border}` }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>
-                    {parseProgress.total === 0 ? 'Loading…' : `Processing ${parseProgress.processed} of ${parseProgress.total}`}
-                  </div>
-                  <div style={{ fontSize: 12, color: C.muted }}>
-                    {parseProgress.total > 0 && `${Math.round((parseProgress.processed / parseProgress.total) * 100)}%`}
-                    {parseProgress.failed > 0 && <span style={{ color: C.red, marginLeft: 8 }}>{parseProgress.failed} failed</span>}
-                  </div>
-                </div>
-                <div style={{ height: 6, background: C.border, borderRadius: 3, overflow: 'hidden' }}>
-                  <div style={{
-                    height: '100%',
-                    width: parseProgress.total > 0 ? `${(parseProgress.processed / parseProgress.total) * 100}%` : '0%',
-                    background: C.accent,
-                    transition: 'width .3s ease',
-                  }} />
-                </div>
-                {parseProgress.current && (
-                  <div style={{ fontSize: 11, color: C.muted, marginTop: 8, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {parseProgress.current}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {parsing ? (
-              <button style={{ ...S.btn('danger'), width: '100%' }} onClick={cancelParse}>
-                ✕ Cancel
-              </button>
-            ) : (
-              <button style={{ ...S.btn('primary'), width: '100%' }} onClick={parseMakeModelYear}>
-                🔍 Parse Make / Model / Year
-              </button>
-            )}
-          </Section>
+          {/* Parse make/model/year now runs automatically as a phase of every sync
+              — the standalone button was removed. */}
 
           </div>{/* end left column */}
 
