@@ -7,6 +7,7 @@ import { MARKETPLACES, MARKETPLACE_LIST } from '../lib/marketplaces'
 import { planState } from '../lib/plan'
 import { startCheckout, openBillingPortal } from '../lib/billing'
 import SupportChat from './SupportChat'
+import HelpAssistant from './HelpAssistant'
 import TeamAccess from './TeamAccess'
 import Activity from './Activity'
 import { compressImage } from '../lib/image'
@@ -2818,9 +2819,12 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         </div>
       )}
 
-      {/* Help & support — in-house messaging */}
+      {/* Help & support — AI assistant + in-house messaging */}
       <div style={{ ...S.card, marginTop: 20 }}>
-        <h3 style={{ ...S.h2, marginBottom: 12 }}>🆘 Help &amp; support</h3>
+        <h3 style={{ ...S.h2, marginBottom: 12 }}>🤖 Ask the assistant</h3>
+        <HelpAssistant storeId={storeId} />
+        <div style={{ borderTop: `1px solid ${C.border}`, margin: '18px 0' }} />
+        <h3 style={{ ...S.h2, marginBottom: 12 }}>🆘 Message us</h3>
         <SupportChat storeId={storeId} />
       </div>
 

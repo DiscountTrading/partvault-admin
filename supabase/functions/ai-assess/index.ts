@@ -145,6 +145,30 @@ serve(async (req) => {
     // admin. Which light items run is a per-store setting (default category+price).
     const capCfg = { category: true, price: true }
 
+    // Mode: help assistant — answers "how do I…" questions from PartVault help
+    // knowledge (fast Haiku). Hands off to "Message us" when unsure.
+    if (mode === 'help') {
+      const q = String(body.question || '').slice(0, 2000)
+      if (!q) return json({ error: 'question required' }, 400)
+      meterLightAI(url, body.storeId)
+      const history = (Array.isArray(body.history) ? body.history : []).slice(-6)
+        .map((h: any) => ({ role: h.role === 'assistant' ? 'assistant' : 'user', content: String(h.content || '').slice(0, 2000) }))
+      const sys = `You are the PartVault help assistant. PartVault is a car-parts inventory + eBay reselling platform: a mobile field app (app.partvault.app) to photograph donor cars and capture parts fast, and an admin app (admin.partvault.app) to review, price and publish parts to eBay. Key facts you can rely on:
+- The mobile app is cars-first: create a donor car, then add its parts. Imported eBay history creates PARTS, not cars, so the mobile Cars list only shows cars added in the app; the admin Vehicles tab additionally infers "generated" cars from imported parts.
+- After capture, AI auto-assesses each part (title, description, category, price, part number, weight); admin has ✨ Generate / ✨ Options for descriptions.
+- eBay: connect a store's eBay account in admin Settings; sync is one button; listings publish live from admin.
+- Plans: 14-day free trial, then Basic/Pro/Business (monthly, 12-month, or paid-upfront). AI has a monthly limit per plan plus top-up credit packs.
+- Each store is tied to ONE eBay marketplace (AU/US/UK/CA), chosen at creation and locked once the first part is added; a different country = a new store.
+Answer concisely and practically (1–4 sentences). If you're unsure or it needs a human, say so and tell them to use "Message us" below. Never invent features.`
+      const aiRes = await callAnthropic({
+        model: 'claude-haiku-4-5-20251001', max_tokens: 500, system: sys,
+        messages: [...history, { role: 'user', content: q }],
+      })
+      const data = await aiRes.json()
+      if (data.error) return json({ error: data.error.message || 'AI error' }, 400)
+      return json({ ok: true, answer: textOf(data) })
+    }
+
     if (trusted && body.partId) {
       // Auto-assess flow: pull everything we need from the part row server-side
       // so there's no dependency on the phone staying open or connected.
