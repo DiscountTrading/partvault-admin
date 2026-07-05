@@ -2694,11 +2694,6 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                   {syncPhase}
                 </div>
               )}
-              <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-                <span>Import: {fmtLastRun(lastRun.import)}</span>
-                <span>Sold orders: {fmtLastRun(lastRun.backfill)}</span>
-                <span>Reconcile: {fmtLastRun(lastRun.reconcile)}</span>
-              </div>
               {(() => {
                 const ok = lastSync ? lastSync.ok !== false : true
                 const lsTs = lastSync?.synced_at ? new Date(lastSync.synced_at).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null
