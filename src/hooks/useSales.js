@@ -25,6 +25,9 @@ const mapRow = r => ({
   source: r.source || 'api',          // 'api' (live sync) or 'csv_orders_report' (history import)
   costs: r.costs || null,             // snapshotted per-category cost for imported history
   feeDetail: r.fee_detail || null,    // per-type eBay fee split { FEE_TYPE: amount }
+  fulfillmentStatus: r.fulfillment_status || null, // NOT_STARTED | IN_PROGRESS | FULFILLED
+  buyer: r.buyer || null,
+  shipTo: r.ship_to || null,          // { name, addressLine1/2, city, state, postcode, country, phone }
 })
 
 export function useSales(storeId) {

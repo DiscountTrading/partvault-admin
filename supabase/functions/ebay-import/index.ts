@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.30.0'
+const EDGE_FN_VERSION         = '3.31.0'
 const CHUNK_SIZE              = 20
 // eBay's getOrders can't return orders older than this, so the live sync only ever
 // manages sales within this window. The CSV history import must stay strictly OLDER
@@ -1669,6 +1669,20 @@ async function handleRequest(req: Request): Promise<Response> {
           const ship = +o.pricingSummary?.deliveryCost?.value || 0
           const shipPer = lis.length ? Math.round((ship / lis.length) * 100) / 100 : 0
           const orderId: string = o.orderId
+          // Dispatch info: shipping state + buyer + ship-to (drives the To-send queue).
+          const fulfillment: string | null = o.orderFulfillmentStatus || null
+          const buyer: string | null = o.buyer?.username || null
+          const shipToRaw = o.fulfillmentStartInstructions?.[0]?.shippingStep?.shipTo
+          const shipTo = shipToRaw ? {
+            name: shipToRaw.fullName || '',
+            addressLine1: shipToRaw.contactAddress?.addressLine1 || '',
+            addressLine2: shipToRaw.contactAddress?.addressLine2 || '',
+            city: shipToRaw.contactAddress?.city || '',
+            state: shipToRaw.contactAddress?.stateOrProvince || '',
+            postcode: shipToRaw.contactAddress?.postalCode || '',
+            country: shipToRaw.contactAddress?.countryCode || '',
+            phone: shipToRaw.primaryPhone?.phoneNumber || '',
+          } : null
           for (const li of lis) {
             lineItems++
             try {
@@ -1690,13 +1704,21 @@ async function handleRequest(req: Request): Promise<Response> {
               }
 
               // Upsert the authoritative sale row (collision-proof on the unique key).
-              const { error: upErr } = await sb.from('ebay_sales').upsert({
+              const baseRow: Record<string, unknown> = {
                 store_id: storeId, order_id: orderId, line_item_id: lineItemId,
                 legacy_item_id: legacyId || null, sku: sku || null, title: li.title || 'eBay sale',
                 quantity: qty, sold_price: price, shipping: shipPer,
                 sold_at: soldDate, cancelled: isCancelled, part_id: partId,
                 updated_at: new Date().toISOString(),
-              }, { onConflict: 'store_id,order_id,line_item_id' })
+              }
+              let { error: upErr } = await sb.from('ebay_sales').upsert(
+                { ...baseRow, fulfillment_status: fulfillment, buyer, ship_to: shipTo },
+                { onConflict: 'store_id,order_id,line_item_id' })
+              // Dispatch columns are additive — if their migration hasn't run yet,
+              // fall back so the live sales sync never breaks.
+              if (upErr && /column|schema/i.test(upErr.message || '')) {
+                ({ error: upErr } = await sb.from('ebay_sales').upsert(baseRow, { onConflict: 'store_id,order_id,line_item_id' }))
+              }
               if (upErr) throw upErr
               upserted++
 

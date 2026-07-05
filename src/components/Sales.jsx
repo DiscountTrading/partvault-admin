@@ -1,5 +1,31 @@
 import { useState, useMemo } from 'react'
 import { C, S, fmt, partEffectiveCost, estimateCostBasis, storageCostFor, storageConfigured, FEE_COST_KEYS } from '../lib/constants'
+import { printLabels } from '../lib/labels'
+import { getActiveMarketplace } from '../lib/marketplaces'
+
+// Simple printable packing slip for one sale (opens the browser print dialog).
+// Postage labels themselves are bought on eBay (no public label-purchase API in
+// AU) — the "eBay ↗" button deep-links to the order for that.
+function printPackingSlip(sale, part) {
+  const st = sale.shipTo || {}
+  const w = window.open('', '_blank', 'width=650,height=800')
+  if (!w) return
+  w.document.write(`<!doctype html><html><head><title>Packing slip ${sale.orderId}</title>
+    <style>body{font-family:Arial,sans-serif;padding:28px;color:#111}h1{font-size:18px;margin:0 0 2px}
+    .muted{color:#666;font-size:12px}.box{border:1px solid #ccc;border-radius:8px;padding:14px;margin-top:14px}
+    table{width:100%;border-collapse:collapse;margin-top:6px;font-size:13px}td,th{padding:6px 8px;text-align:left;border-bottom:1px solid #eee}
+    .addr{font-size:15px;line-height:1.5}</style></head><body>
+    <h1>Packing slip</h1>
+    <div class="muted">Order ${sale.orderId} · sold ${sale.soldAt ? new Date(sale.soldAt).toLocaleDateString() : ''}${sale.buyer ? ` · buyer: ${sale.buyer}` : ''}</div>
+    <div class="box"><div class="muted">SHIP TO</div><div class="addr">
+      ${[st.name, st.addressLine1, st.addressLine2, [st.city, st.state, st.postcode].filter(Boolean).join(' '), st.country].filter(Boolean).map(x => `${x}<br/>`).join('') || '(address not on file — see the eBay order)'}
+    </div></div>
+    <div class="box"><table><tr><th>Item</th><th>SKU</th><th>Qty</th></tr>
+      <tr><td>${(part?.title || sale.title || '').replace(/</g, '&lt;')}</td><td>${part?.sku || sale.sku || '—'}</td><td>${sale.quantity ?? 1}</td></tr>
+    </table></div>
+    <script>window.onload=()=>window.print()</script></body></html>`)
+  w.document.close()
+}
 
 const PERIODS = [[30, '30d'], [90, '90d'], [365, '12mo'], [0, 'All']]
 const RENDER_CAP = 400
@@ -146,6 +172,56 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
     <div>
       <h2 style={{ ...S.h1, marginBottom: 4 }}>Recent Sales</h2>
       <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>Every eBay sale, newest first — what each item made after fees. Item &amp; SKU come from your inventory record (matched by eBay item number); sales with no inventory match are tagged <strong>eBay only</strong>.</div>
+
+      {/* 📦 To send — sales not yet marked shipped on eBay (refreshed by the 5-min
+          live check, so posting on eBay clears them within minutes). */}
+      {(() => {
+        const cutoff = Date.now() - 30 * 86400000
+        const toSend = sales.filter(s =>
+          s.fulfillmentStatus && s.fulfillmentStatus !== 'FULFILLED' &&
+          !s.cancelled && !s.refunded &&
+          s.soldAt && new Date(s.soldAt).getTime() > cutoff
+        ).sort((a, b) => new Date(a.soldAt) - new Date(b.soldAt)) // oldest first — ship those first
+        if (!toSend.length) return null
+        const ebayDomain = getActiveMarketplace().ebayDomain
+        return (
+          <div style={{ background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 12, padding: '12px 16px', marginBottom: 16 }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: C.text, marginBottom: 8 }}>
+              📦 To send — {toSend.length} order{toSend.length === 1 ? '' : 's'} awaiting shipment
+            </div>
+            {toSend.map(s => {
+              const p = s.partId ? partById.get(s.partId) : null
+              const thumb = p?.photos?.[0]?.url
+              const days = Math.floor((Date.now() - new Date(s.soldAt).getTime()) / 86400000)
+              return (
+                <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderTop: '1px solid #fde68a' }}>
+                  {thumb
+                    ? <img src={thumb} alt="" style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 8, flexShrink: 0 }} />
+                    : <div style={{ width: 44, height: 44, borderRadius: 8, background: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>📦</div>}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p?.title || s.title}</div>
+                    <div style={{ fontSize: 11, color: C.muted }}>
+                      {p?.sku || s.sku || 'no SKU'} · {fmt(s.soldPrice)}{s.shipping > 0 ? ` + ${fmt(s.shipping)} post` : ''} · sold {fmtDate(s.soldAt)}
+                      {days >= 2 && <span style={{ color: C.red, fontWeight: 700 }}> · {days} days ago</span>}
+                      {s.buyer ? ` · ${s.buyer}` : ''}{s.shipTo?.city ? ` · ${s.shipTo.city}${s.shipTo.state ? ' ' + s.shipTo.state : ''}` : ''}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                    <button title="Print a packing slip with the ship-to address" onClick={() => printPackingSlip(s, p)}
+                      style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 11 }}>🖨 Slip</button>
+                    {p && <button title="Reprint this part's SKU sticker" onClick={() => printLabels([p])}
+                      style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 11 }}>🏷 SKU</button>}
+                    <a href={`https://www.${ebayDomain}/mesh/ord/details?orderid=${encodeURIComponent(s.orderId)}`} target="_blank" rel="noreferrer"
+                      title="Open the order on eBay to buy the postage label"
+                      style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 11, textDecoration: 'none', display: 'inline-block' }}>eBay ↗</a>
+                  </div>
+                </div>
+              )
+            })}
+            <div style={{ fontSize: 10.5, color: C.muted, marginTop: 8 }}>Postage labels are purchased on eBay (eBay ↗). Once you mark the order posted there, it drops off this list within a few minutes.</div>
+          </div>
+        )
+      })()}
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
         {PERIODS.map(([d, lbl]) => (
