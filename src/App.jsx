@@ -11,6 +11,8 @@ import AuthScreen from './components/AuthScreen'
 import Dashboard from './components/Dashboard'
 import Inventory from './components/Inventory'
 import Settings from './components/Settings'
+import Help from './components/Help'
+import FloatingHelp from './components/FloatingHelp'
 import JoinStore from './components/JoinStore'
 import Insights from './components/Insights'
 import Vehicles from './components/Vehicles'
@@ -25,6 +27,7 @@ const TABS = [
   { id: 'insights', label: 'Insights', icon: '📈' },
   { id: 'vehicles', label: 'Vehicles', icon: '🚗' },
   { id: 'settings', label: 'Settings', icon: '⚙️' },
+  { id: 'help', label: 'Help', icon: '🆘' },
 ]
 
 const DEFAULT_AI_SETTINGS = {
@@ -295,7 +298,10 @@ export default function App() {
         {tab === 'vehicles' && <Vehicles parts={parts} cars={cars} sales={sales} costing={costingFull} onRefresh={refetch} />}
         {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores}
           onSettingsSaved={s => { if (s?.costing) setCosting(c => ({ ...c, ...s.costing })); if (s?.inventory) setInventory(i => ({ ...i, ...s.inventory })); if (s?.storage) setStorage(st => ({ ...st, ...s.storage })); if (s?.shipping) setShipping(s.shipping); if (s?.labels) setLabels(l => ({ ...l, ...s.labels })) }} />}
+        {tab === 'help' && <Help storeId={storeId} />}
       </main>
+      {/* Floating context-aware help on every page (hidden on the Help tab itself) */}
+      {tab !== 'help' && <FloatingHelp storeId={storeId} context={TABS.find(t => t.id === tab)?.label || tab} onOpenHelp={() => setTab('help')} />}
       {toast && (
         <div style={{ position: 'fixed', bottom: 24, right: 24, background: toast.color, color: '#fff', padding: '12px 22px', borderRadius: 10, fontSize: 14, fontWeight: 600, zIndex: 1000, boxShadow: '0 8px 30px rgba(0,0,0,0.2)' }}>
           {toast.msg}

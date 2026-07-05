@@ -6,8 +6,6 @@ import { buildSkuPreview, SKU_TOKENS, DEFAULT_SKU_TEMPLATE, DEFAULT_SKU_PAD } fr
 import { MARKETPLACES, MARKETPLACE_LIST } from '../lib/marketplaces'
 import { planState } from '../lib/plan'
 import { startCheckout, openBillingPortal } from '../lib/billing'
-import SupportChat from './SupportChat'
-import HelpAssistant from './HelpAssistant'
 import TeamAccess from './TeamAccess'
 import Activity from './Activity'
 import { compressImage } from '../lib/image'
@@ -1407,7 +1405,6 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     { id: 'shipping', label: '📦 Shipping' },
     { id: 'team', label: '👥 User Access' },
     { id: 'activity', label: '📋 Activity' },
-    { id: 'help', label: '🆘 Help' },
   ]
 
   const importProgress = importJob ? (() => {
@@ -2790,18 +2787,6 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
             ))}
             {showAdvSync && <div ref={reconcileRef}><ReconcileSection /></div>}
           </div>{/* end right column */}
-        </div>
-      )}
-
-      {/* HELP TAB — AI assistant + in-house messaging (own tab, never buried) */}
-      {tab === 'help' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignItems: 'start' }}>
-          <Section title="🤖 Ask the assistant">
-            <HelpAssistant storeId={storeId} />
-          </Section>
-          <Section title="🆘 Message us">
-            <SupportChat storeId={storeId} />
-          </Section>
         </div>
       )}
 

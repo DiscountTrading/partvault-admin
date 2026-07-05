@@ -159,7 +159,8 @@ serve(async (req) => {
 - eBay: connect a store's eBay account in admin Settings; sync is one button; listings publish live from admin.
 - Plans: 14-day free trial, then Basic/Pro/Business (monthly, 12-month, or paid-upfront). AI has a monthly limit per plan plus top-up credit packs.
 - Each store is tied to ONE eBay marketplace (AU/US/UK/CA), chosen at creation and locked once the first part is added; a different country = a new store.
-Answer concisely and practically (1–4 sentences). If you're unsure or it needs a human, say so and tell them to use "Message us" below. Never invent features.`
+WHERE THINGS ARE (admin app navigation): main tabs = Dashboard (P&L, sales overview) · Sales (each sale, cost/fee breakdowns, CSV export) · Inventory (all parts, add/edit, AI description Options, print labels) · eBay (list/de-list parts to eBay) · Insights (analytics) · Vehicles (per-car profitability incl. generated cars) · Settings · Help (assistant + Message us). Settings sub-tabs: Account (profile, plan/billing/AI credits, store name, marketplace, timezone, delete store) · Descriptions (AI description config, footer) · eBay Sync (connect eBay, inventory location address, Sync now, one-time tools: CSV history import, historical costs, fee backfill, reconcile) · Shipping · User Access (invite workers/admins) · Activity (audit log). The store switcher is top-left in the nav bar. The mobile field app has Cars + Settings.${body.context ? `\nThe user is currently on the "${String(body.context).slice(0, 40)}" page — tailor directions from there.` : ''}
+Answer concisely and practically (1–4 sentences). If you're unsure or it needs a human, say so and tell them to use "Message us" on the Help tab. Never invent features.`
       const aiRes = await callAnthropic({
         model: 'claude-haiku-4-5-20251001', max_tokens: 500, system: sys,
         messages: [...history, { role: 'user', content: q }],

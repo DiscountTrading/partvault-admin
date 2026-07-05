@@ -5,8 +5,9 @@ import { sb } from '../lib/supabase'
 const FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ai-assess'
 
 // AI help assistant — quick answers to how-to questions from PartVault help
-// knowledge. Hands off to "Message us" when it can't help.
-export default function HelpAssistant({ storeId }) {
+// knowledge. Hands off to "Message us" when it can't help. `context` tells the
+// AI which page the user is on (for the floating helper); `compact` trims chrome.
+export default function HelpAssistant({ storeId, context, compact = false }) {
   const [msgs, setMsgs] = useState([])
   const [q, setQ] = useState('')
   const [busy, setBusy] = useState(false)
@@ -22,7 +23,7 @@ export default function HelpAssistant({ storeId }) {
       const res = await fetch(FN, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-        body: JSON.stringify({ mode: 'help', question, storeId, history }),
+        body: JSON.stringify({ mode: 'help', question, storeId, history, context }),
       })
       const d = await res.json()
       setMsgs(m => [...m, { role: 'assistant', content: d.answer || "Sorry, I couldn't answer that — try Message us below." }])
@@ -34,7 +35,7 @@ export default function HelpAssistant({ storeId }) {
 
   return (
     <div>
-      <div style={{ fontSize: 13, color: C.muted, marginBottom: 8 }}>Ask a quick question and the assistant will answer from PartVault's help. For anything it can't solve, use <b>Message us</b> below.</div>
+      {!compact && <div style={{ fontSize: 13, color: C.muted, marginBottom: 8 }}>Ask a quick question and the assistant will answer from PartVault's help. For anything it can't solve, use <b>Message us</b>.</div>}
       {msgs.length > 0 && (
         <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, maxHeight: 300, overflowY: 'auto', marginBottom: 10 }}>
           {msgs.map((m, i) => (
