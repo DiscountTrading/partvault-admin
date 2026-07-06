@@ -169,6 +169,55 @@ function DeltaBadge({ delta }) {
   return <span style={{ fontSize: 13, fontWeight: 700, color: col, background: col + '15', border: `1px solid ${col}33`, borderRadius: 6, padding: '2px 8px', whiteSpace: 'nowrap' }}>{up ? '▲' : '▼'} {Math.abs(delta).toFixed(0)}%</span>
 }
 
+// Small SVG donut chart (no dependency). slices: [{ label, value, color }].
+function PieChart({ slices, size = 116 }) {
+  const nonzero = slices.filter(s => s.value > 0)
+  const total = nonzero.reduce((a, s) => a + s.value, 0)
+  const r = size / 2, cx = r, cy = r, inner = r * 0.6
+  if (total <= 0) return <svg width={size} height={size}><circle cx={cx} cy={cy} r={r} fill="#eee" /><circle cx={cx} cy={cy} r={inner} fill="#fff" /></svg>
+  // A single 100% slice can't be drawn as an arc (degenerate) — render a full ring.
+  if (nonzero.length === 1) return (
+    <svg width={size} height={size}><circle cx={cx} cy={cy} r={r} fill={nonzero[0].color} /><circle cx={cx} cy={cy} r={inner} fill="#fff" /></svg>
+  )
+  const cumBefore = i => nonzero.slice(0, i).reduce((a, s) => a + s.value, 0)
+  const p = (rad, a) => `${cx + rad * Math.cos(a)} ${cy + rad * Math.sin(a)}`
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      {nonzero.map((s, i) => {
+        const frac = s.value / total
+        const a0 = -Math.PI / 2 + (cumBefore(i) / total) * 2 * Math.PI
+        const a1 = a0 + frac * 2 * Math.PI
+        const large = frac > 0.5 ? 1 : 0
+        const d = `M ${p(r, a0)} A ${r} ${r} 0 ${large} 1 ${p(r, a1)} L ${p(inner, a1)} A ${inner} ${inner} 0 ${large} 0 ${p(inner, a0)} Z`
+        return <path key={i} d={d} fill={s.color} />
+      })}
+    </svg>
+  )
+}
+
+// A donut + its legend (label · value · %), side by side.
+function PieWithLegend({ title, slices }) {
+  const total = slices.reduce((a, s) => a + s.value, 0)
+  return (
+    <div style={{ flex: '1 1 220px', minWidth: 200 }}>
+      <div style={{ fontSize: 12, color: C.muted, fontWeight: 600, marginBottom: 8 }}>{title}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+        <PieChart slices={slices} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+          {slices.map((s, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, color: C.text }}>
+              <span style={{ width: 10, height: 10, borderRadius: 3, background: s.color, flexShrink: 0 }} />
+              <span style={{ minWidth: 96 }}>{s.label}</span>
+              <span style={{ fontWeight: 700 }}>{s.value}</span>
+              <span style={{ color: C.muted }}>{total > 0 ? `${Math.round((s.value / total) * 100)}%` : '0%'}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // Vertical bar chart with a zero baseline so negative buckets (a loss-making
 // period on the Profit metric) render below the line in red.
 function BarChart({ bars, money }) {
@@ -211,6 +260,10 @@ function BarChart({ bars, money }) {
 // (turnover speed + profit after the ad fee). Spend on promoted listings that
 // never sold needs the eBay Marketing API (not yet connected) — flagged below.
 function PromotedPanel({ promo, periodLabel }) {
+  // One-time explanatory note — dismissed for good once "Got it" is clicked.
+  const [noteHidden, setNoteHidden] = useState(() => { try { return localStorage.getItem('pv_promo_note') === 'hidden' } catch { return false } })
+  const dismissNote = () => { try { localStorage.setItem('pv_promo_note', 'hidden') } catch { /* ignore */ } setNoteHidden(true) }
+
   const tile = (label, value, sub, color) => (
     <div style={{ flex: '1 1 130px', minWidth: 120 }}>
       <div style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>{label}</div>
@@ -220,35 +273,52 @@ function PromotedPanel({ promo, periodLabel }) {
   )
   const dtsFaster = promo.proDts != null && promo.orgDts != null ? promo.orgDts - promo.proDts : null
   const profitDiff = promo.proProfit != null && promo.orgProfit != null ? promo.proProfit - promo.orgProfit : null
-  let verdict = null
-  if (promo.promoted > 0 && (dtsFaster != null || profitDiff != null)) {
-    const parts = []
-    if (dtsFaster != null) parts.push(`sell ${Math.abs(Math.round(dtsFaster))} day${Math.abs(Math.round(dtsFaster)) === 1 ? '' : 's'} ${dtsFaster >= 0 ? 'faster' : 'slower'}`)
-    if (profitDiff != null) parts.push(`net ${signedMoney(profitDiff)} ${profitDiff >= 0 ? 'more' : 'less'} per order`)
-    const good = (dtsFaster == null || dtsFaster >= 0) && (profitDiff == null || profitDiff >= 0)
-    verdict = { text: `Promoted items ${parts.join(' and ')} than organic.`, good }
-  }
+
   return (
     <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12, padding: '14px 18px', marginBottom: 16 }}>
-      <div style={{ fontSize: 14, fontWeight: 800, color: C.text, marginBottom: 12 }}>📣 Promoted listings <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· {periodLabel}</span></div>
-      {promo.promoted === 0 ? (
-        <div style={{ fontSize: 13, color: C.muted }}>No promoted-listing sales in this period. Promotion figures appear once a promoted item sells and eBay bills the ad fee.</div>
+      <div style={{ fontSize: 14, fontWeight: 800, color: C.text, marginBottom: 14 }}>📣 Promoted vs organic <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· {periodLabel}</span></div>
+      {promo.orders === 0 ? (
+        <div style={{ fontSize: 13, color: C.muted }}>No sales in this period.</div>
       ) : (
         <>
-          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12 }}>
-            {tile('Promoted sales', `${promo.promoted}`, `of ${promo.orders} orders (${Math.round((promo.promoted / promo.orders) * 100)}%)`)}
-            {tile('Ad spend', signedMoney(promo.adSpend), promo.adPct != null ? `${promo.adPct.toFixed(1)}% of promoted sales` : null, C.red)}
-            {tile('Avg days to sell', promo.proDts != null ? `${Math.round(promo.proDts)}d` : '—', promo.orgDts != null ? `organic ${Math.round(promo.orgDts)}d` : 'promoted', dtsFaster != null ? (dtsFaster >= 0 ? C.green : C.red) : null)}
-            {tile('Avg profit / order', promo.proProfit != null ? signedMoney(promo.proProfit) : '—', promo.orgProfit != null ? `organic ${signedMoney(promo.orgProfit)}` : 'promoted', profitDiff != null ? (profitDiff >= 0 ? C.green : C.red) : null)}
+          <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', marginBottom: 16 }}>
+            <PieWithLegend title="Share of sales" slices={[
+              { label: 'Promoted', value: promo.promoted, color: C.accent },
+              { label: 'Organic', value: promo.organic, color: '#93b4e8' },
+            ]} />
+            {promo.promoted > 0 && <PieWithLegend title="Promoted by ad rate (% of sale)" slices={[
+              { label: 'Low ≤3%', value: promo.tiers.low, color: '#4b9e6a' },
+              { label: 'Med 3–8%', value: promo.tiers.med, color: '#d99a2b' },
+              { label: 'High >8%', value: promo.tiers.high, color: '#e8590c' },
+            ]} />}
           </div>
-          {verdict && (
-            <div style={{ fontSize: 13, fontWeight: 600, color: verdict.good ? C.green : C.red, background: (verdict.good ? C.green : C.red) + '12', border: `1px solid ${(verdict.good ? C.green : C.red)}33`, borderRadius: 8, padding: '8px 12px' }}>
-              {verdict.good ? '✓ ' : '⚠ '}{verdict.text}
+
+          {promo.promoted > 0 ? (
+            <>
+              <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12 }}>
+                {tile('Ad spend', signedMoney(promo.adSpend), promo.adPct != null ? `${promo.adPct.toFixed(1)}% of promoted sales` : null)}
+                {tile('Avg days to sell', promo.proDts != null ? `${Math.round(promo.proDts)}d` : '—', promo.orgDts != null ? `organic ${Math.round(promo.orgDts)}d` : 'promoted', dtsFaster != null ? (dtsFaster >= 0 ? C.green : C.red) : null)}
+                {tile('Avg profit / order', promo.proProfit != null ? signedMoney(promo.proProfit) : '—', promo.orgProfit != null ? `organic ${signedMoney(promo.orgProfit)}` : 'promoted', profitDiff != null ? (profitDiff >= 0 ? C.green : C.red) : null)}
+              </div>
+              {(dtsFaster != null || profitDiff != null) && (
+                <div style={{ fontSize: 13, color: C.muted }}>
+                  Vs organic, promoted items{' '}
+                  {dtsFaster != null && <span style={{ color: dtsFaster >= 0 ? C.green : C.text, fontWeight: 600 }}>sell {Math.abs(Math.round(dtsFaster))} day{Math.abs(Math.round(dtsFaster)) === 1 ? '' : 's'} {dtsFaster >= 0 ? 'faster' : 'slower'}</span>}
+                  {dtsFaster != null && profitDiff != null && ' and '}
+                  {profitDiff != null && <span style={{ color: profitDiff >= 0 ? C.green : C.text, fontWeight: 600 }}>net {signedMoney(profitDiff)} {profitDiff >= 0 ? 'more' : 'less'} per order</span>}.
+                </div>
+              )}
+            </>
+          ) : (
+            <div style={{ fontSize: 13, color: C.muted }}>No promoted-listing sales in this period — nothing to compare against organic yet.</div>
+          )}
+
+          {!noteHidden && (
+            <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', fontSize: 11, color: C.muted, marginTop: 14, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, padding: '9px 11px' }}>
+              <span style={{ flex: 1, lineHeight: 1.5 }}>Ad fee is only billed on promoted items that <em>sold</em>, so this compares sold promoted vs sold organic. Spend on promoted listings that didn't sell needs the eBay Marketing API (coming soon). Days-to-sell counts matched inventory items only.</span>
+              <button onClick={dismissNote} style={{ ...S.btn('secondary'), padding: '4px 10px', fontSize: 11, whiteSpace: 'nowrap' }}>Got it</button>
             </div>
           )}
-          <div style={{ fontSize: 10.5, color: C.muted, marginTop: 10 }}>
-            Ad fee is only charged on promoted items that sold, so this compares sold promoted vs sold organic. Spend on promoted listings that didn't sell needs the eBay Marketing API (coming soon). Days-to-sell counts matched inventory items only.
-          </div>
         </>
       )}
     </div>
@@ -272,12 +342,16 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
   const derivedAll = useMemo(() => sales.filter(s => !s.cancelled).map(s => {
     const d = deriveSale(s, partById, costing)
     const p = d.p
+    const adFee = adFeeOf(s)
+    const gross = (+s.soldPrice || 0) + (+s.shipping || 0)
     return {
       t: s.soldAt ? new Date(s.soldAt).getTime() : null,
       net: d.net,
       profit: d.profit,
-      adFee: adFeeOf(s),
-      promoted: adFeeOf(s) > 0.005,
+      gross,
+      adFee,
+      promoted: adFee > 0.005,
+      adRate: adFee > 0.005 && gross > 0 ? (adFee / gross) * 100 : null, // ad fee as % of sale
       dts: p ? daysBetween(p.listedDate || p.acquiredDate || p.createdAt, s.soldAt) : null,
     }
   }).filter(x => x.t), [sales, partById, costing])
@@ -341,11 +415,15 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
     const avg = (arr, f) => { const v = arr.map(f).filter(n => n != null); return v.length ? v.reduce((a, n) => a + n, 0) / v.length : null }
     const adSpend = sum(pro, x => x.adFee)
     const proRev = sum(pro, x => x.net + x.adFee)
+    // Split promoted sales by ad rate (ad fee as % of sale): Low ≤3%, Med 3–8%, High >8%.
+    const tiers = { low: 0, med: 0, high: 0 }
+    for (const x of pro) { const r = x.adRate ?? 0; if (r <= 3) tiers.low++; else if (r <= 8) tiers.med++; else tiers.high++ }
     return {
       orders: inWin.length, promoted: pro.length, organic: org.length,
       adSpend, adPct: proRev > 0 ? (adSpend / proRev) * 100 : null,
       proProfit: avg(pro, x => x.profit), orgProfit: avg(org, x => x.profit),
       proDts: avg(pro, x => x.dts), orgDts: avg(org, x => x.dts),
+      tiers,
     }
   }, [derivedAll, period, now])
 
@@ -405,7 +483,9 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
             <span style={{ fontSize: 12, color: C.muted }}>{compare.delta == null ? 'no prior period to compare' : `vs ${showMetric(compare.prev, chart.money)} at the same point last ${grainNoun[grain]}`}</span>
           </div>
         </div>
-        <BarChart bars={chart.bars} money={chart.money} />
+        <div style={{ maxWidth: 560 }}>
+          <BarChart bars={chart.bars} money={chart.money} />
+        </div>
       </div>
 
       <PromotedPanel promo={promo} periodLabel={periodLabel} />
