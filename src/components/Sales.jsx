@@ -106,16 +106,210 @@ function deriveSale(s, partById, costing) {
   return { p, fee, net, cost, breakdown, feeBreakdown, profit: cost != null ? net - cost : null }
 }
 
+// ---- Trend graphs ---------------------------------------------------------
+// All client-side from the sales the tab already loads. Buckets are calendar
+// periods (day/week/month/year); the newest bucket is in-progress and the
+// "vs previous" figure compares it to the SAME elapsed point in the prior
+// period (month-to-date vs same-day-last-month), so the comparison is fair
+// rather than a partial period against a full one.
+const DAY = 86400000
+const startOfDayMs = t => { const x = new Date(t); x.setHours(0, 0, 0, 0); return x.getTime() }
+const startOfWeekMs = t => { const x = new Date(t); x.setHours(0, 0, 0, 0); const dow = (x.getDay() + 6) % 7; x.setDate(x.getDate() - dow); return x.getTime() } // Monday start
+const GRAINS = [
+  { id: 'day', label: 'Day', n: 30 },
+  { id: 'week', label: 'Week', n: 13 },
+  { id: 'month', label: 'Month', n: 12 },
+  { id: 'year', label: 'Year', n: 5 },
+]
+// Start (ms) of the bucket `i` steps back from the bucket containing `now`.
+const bucketStartMs = (grain, now, i) => {
+  const d = new Date(now)
+  if (grain === 'day') return startOfDayMs(d.getTime() - i * DAY)
+  if (grain === 'week') return startOfWeekMs(d.getTime() - i * 7 * DAY)
+  if (grain === 'month') return new Date(d.getFullYear(), d.getMonth() - i, 1).getTime()
+  return new Date(d.getFullYear() - i, 0, 1).getTime()
+}
+const bucketKeyMs = (grain, t) => {
+  const d = new Date(t)
+  if (grain === 'day') return startOfDayMs(t)
+  if (grain === 'week') return startOfWeekMs(t)
+  if (grain === 'month') return new Date(d.getFullYear(), d.getMonth(), 1).getTime()
+  return new Date(d.getFullYear(), 0, 1).getTime()
+}
+const bucketLabel = (grain, ms) => {
+  const d = new Date(ms)
+  if (grain === 'year') return String(d.getFullYear())
+  if (grain === 'month') return d.toLocaleDateString('en-AU', { month: 'short', year: '2-digit' })
+  return d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })
+}
+const grainNoun = { day: 'day', week: 'week', month: 'month', year: 'year' }
+const METRICS = [
+  { id: 'net', label: 'Net sales', money: true },
+  { id: 'profit', label: 'Profit', money: true },
+  { id: 'orders', label: 'Orders', money: false },
+]
+const metricVal = (id, x) => id === 'orders' ? 1 : id === 'profit' ? (x.profit == null ? 0 : x.profit) : x.net
+const signedMoney = v => (v < 0 ? '−' : '') + fmt(Math.abs(v))
+const showMetric = (v, money) => money ? signedMoney(v) : String(Math.round(v))
+
+const AD_FEE_KEYS = ['PROMOTION', 'AD_FEE', 'AD_FEE_PROMOTED_LISTINGS', 'PROMOTED_LISTINGS_FEE']
+const adFeeOf = s => {
+  if (!s.feeDetail) return 0
+  let a = 0
+  for (const [k, v] of Object.entries(s.feeDetail)) if (AD_FEE_KEYS.includes(k)) a += Math.abs(+v || 0)
+  return a
+}
+const daysBetween = (from, to) => { if (!from || !to) return null; const d = Math.floor((new Date(to).getTime() - new Date(from).getTime()) / DAY); return d >= 0 ? d : null }
+
+const pillStyle = (active) => ({ padding: '6px 13px', borderRadius: 18, border: `1.5px solid ${active ? C.accent : C.border}`, background: active ? C.accent : '#fff', color: active ? '#fff' : C.muted, fontSize: 12.5, fontWeight: 600, cursor: 'pointer' })
+
+function DeltaBadge({ delta }) {
+  const up = delta >= 0
+  const col = up ? C.green : C.red
+  return <span style={{ fontSize: 13, fontWeight: 700, color: col, background: col + '15', border: `1px solid ${col}33`, borderRadius: 6, padding: '2px 8px', whiteSpace: 'nowrap' }}>{up ? '▲' : '▼'} {Math.abs(delta).toFixed(0)}%</span>
+}
+
+// Vertical bar chart with a zero baseline so negative buckets (a loss-making
+// period on the Profit metric) render below the line in red.
+function BarChart({ bars, money }) {
+  const vals = bars.map(b => b.value)
+  const maxPos = Math.max(0, ...vals)
+  const minNeg = Math.min(0, ...vals)
+  const span = (maxPos - minNeg) || 1
+  const H = 140
+  const topPad = (maxPos / span) * H // pixels from top down to the zero line
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'stretch', gap: 3, height: H, borderBottom: minNeg < 0 ? 'none' : `1px solid ${C.border}` }}>
+        {bars.map((b, i) => {
+          const posH = b.value >= 0 ? (b.value / span) * H : 0
+          const negH = b.value < 0 ? (Math.abs(b.value) / span) * H : 0
+          const col = b.value < 0 ? C.red : b.current ? C.accent : '#93b4e8'
+          return (
+            <div key={i} title={`${b.label}: ${showMetric(b.value, money)}`}
+              style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+              <div style={{ height: Math.max(0, topPad - posH) }} />
+              {posH > 0 && <div style={{ height: posH, background: col, borderRadius: '3px 3px 0 0', minHeight: 2 }} />}
+              {negH > 0 && <div style={{ height: negH, background: col, borderRadius: '0 0 3px 3px', minHeight: 2 }} />}
+            </div>
+          )
+        })}
+      </div>
+      <div style={{ display: 'flex', gap: 3, marginTop: 5 }}>
+        {bars.map((b, i) => (
+          <div key={i} style={{ flex: 1, minWidth: 0, textAlign: 'center', fontSize: 9.5, color: b.current ? C.text : C.muted, fontWeight: b.current ? 700 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'clip' }}>
+            {b.showLabel ? b.label : ''}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// Promoted-listing effectiveness. eBay charges the Promoted Listings ad fee only
+// when a promoted item sells, so we can compare promoted vs organic on what sold
+// (turnover speed + profit after the ad fee). Spend on promoted listings that
+// never sold needs the eBay Marketing API (not yet connected) — flagged below.
+function PromotedPanel({ promo, periodLabel }) {
+  const tile = (label, value, sub, color) => (
+    <div style={{ flex: '1 1 130px', minWidth: 120 }}>
+      <div style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>{label}</div>
+      <div style={{ fontSize: 19, fontWeight: 800, color: color || C.text, marginTop: 2 }}>{value}</div>
+      {sub && <div style={{ fontSize: 10.5, color: C.muted, marginTop: 1 }}>{sub}</div>}
+    </div>
+  )
+  const dtsFaster = promo.proDts != null && promo.orgDts != null ? promo.orgDts - promo.proDts : null
+  const profitDiff = promo.proProfit != null && promo.orgProfit != null ? promo.proProfit - promo.orgProfit : null
+  let verdict = null
+  if (promo.promoted > 0 && (dtsFaster != null || profitDiff != null)) {
+    const parts = []
+    if (dtsFaster != null) parts.push(`sell ${Math.abs(Math.round(dtsFaster))} day${Math.abs(Math.round(dtsFaster)) === 1 ? '' : 's'} ${dtsFaster >= 0 ? 'faster' : 'slower'}`)
+    if (profitDiff != null) parts.push(`net ${signedMoney(profitDiff)} ${profitDiff >= 0 ? 'more' : 'less'} per order`)
+    const good = (dtsFaster == null || dtsFaster >= 0) && (profitDiff == null || profitDiff >= 0)
+    verdict = { text: `Promoted items ${parts.join(' and ')} than organic.`, good }
+  }
+  return (
+    <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12, padding: '14px 18px', marginBottom: 16 }}>
+      <div style={{ fontSize: 14, fontWeight: 800, color: C.text, marginBottom: 12 }}>📣 Promoted listings <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}>· {periodLabel}</span></div>
+      {promo.promoted === 0 ? (
+        <div style={{ fontSize: 13, color: C.muted }}>No promoted-listing sales in this period. Promotion figures appear once a promoted item sells and eBay bills the ad fee.</div>
+      ) : (
+        <>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12 }}>
+            {tile('Promoted sales', `${promo.promoted}`, `of ${promo.orders} orders (${Math.round((promo.promoted / promo.orders) * 100)}%)`)}
+            {tile('Ad spend', signedMoney(promo.adSpend), promo.adPct != null ? `${promo.adPct.toFixed(1)}% of promoted sales` : null, C.red)}
+            {tile('Avg days to sell', promo.proDts != null ? `${Math.round(promo.proDts)}d` : '—', promo.orgDts != null ? `organic ${Math.round(promo.orgDts)}d` : 'promoted', dtsFaster != null ? (dtsFaster >= 0 ? C.green : C.red) : null)}
+            {tile('Avg profit / order', promo.proProfit != null ? signedMoney(promo.proProfit) : '—', promo.orgProfit != null ? `organic ${signedMoney(promo.orgProfit)}` : 'promoted', profitDiff != null ? (profitDiff >= 0 ? C.green : C.red) : null)}
+          </div>
+          {verdict && (
+            <div style={{ fontSize: 13, fontWeight: 600, color: verdict.good ? C.green : C.red, background: (verdict.good ? C.green : C.red) + '12', border: `1px solid ${(verdict.good ? C.green : C.red)}33`, borderRadius: 8, padding: '8px 12px' }}>
+              {verdict.good ? '✓ ' : '⚠ '}{verdict.text}
+            </div>
+          )}
+          <div style={{ fontSize: 10.5, color: C.muted, marginTop: 10 }}>
+            Ad fee is only charged on promoted items that sold, so this compares sold promoted vs sold organic. Spend on promoted listings that didn't sell needs the eBay Marketing API (coming soon). Days-to-sell counts matched inventory items only.
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 export default function Sales({ sales = [], parts = [], costing = {} }) {
   const [period, setPeriod] = useState(90)
   const [query, setQuery] = useState('')
   const [detail, setDetail] = useState(null) // sale whose cost breakdown is open
   const [limit, setLimit] = useState(RENDER_CAP)
+  const [now] = useState(() => Date.now()) // one clock read per mount — keeps render pure
 
   const partById = useMemo(() => new Map(parts.filter(p => !p.deletedAt).map(p => [p.id, p])), [parts])
 
+  // Performance graphs (top of tab) — derive money + turnover per sale once, then
+  // slice it by calendar bucket. Independent of the table's period/search filters.
+  const [grain, setGrain] = useState('month')
+  const [metric, setMetric] = useState('net')
+
+  const derivedAll = useMemo(() => sales.filter(s => !s.cancelled).map(s => {
+    const d = deriveSale(s, partById, costing)
+    const p = d.p
+    return {
+      t: s.soldAt ? new Date(s.soldAt).getTime() : null,
+      net: d.net,
+      profit: d.profit,
+      adFee: adFeeOf(s),
+      promoted: adFeeOf(s) > 0.005,
+      dts: p ? daysBetween(p.listedDate || p.acquiredDate || p.createdAt, s.soldAt) : null,
+    }
+  }).filter(x => x.t), [sales, partById, costing])
+
+  const chart = useMemo(() => {
+    const g = GRAINS.find(x => x.id === grain)
+    const keys = []
+    for (let i = g.n - 1; i >= 0; i--) keys.push(bucketStartMs(grain, now, i))
+    const sums = new Map(keys.map(k => [k, 0]))
+    for (const x of derivedAll) { const k = bucketKeyMs(grain, x.t); if (sums.has(k)) sums.set(k, sums.get(k) + metricVal(metric, x)) }
+    const m = METRICS.find(x => x.id === metric)
+    const step = Math.max(1, Math.ceil(keys.length / 6))
+    const bars = keys.map((k, i) => ({ label: bucketLabel(grain, k), value: sums.get(k), current: i === keys.length - 1, showLabel: i % step === 0 || i === keys.length - 1 }))
+    return { bars, money: m.money }
+  }, [derivedAll, grain, metric, now])
+
+  // Current bucket-to-date vs the same elapsed point in the previous bucket.
+  const compare = useMemo(() => {
+    const curStart = bucketStartMs(grain, now, 0)
+    const prevStart = bucketStartMs(grain, now, 1)
+    const prevEnd = prevStart + (now - curStart)
+    let cur = 0, prev = 0
+    for (const x of derivedAll) {
+      const v = metricVal(metric, x)
+      if (x.t >= curStart && x.t <= now) cur += v
+      else if (x.t >= prevStart && x.t <= prevEnd) prev += v
+    }
+    return { cur, prev, delta: prev !== 0 ? ((cur - prev) / Math.abs(prev)) * 100 : null }
+  }, [derivedAll, grain, metric, now])
+
   const rows = useMemo(() => {
-    const cutoff = period ? Date.now() - period * 86400000 : 0
+    const cutoff = period ? now - period * 86400000 : 0
     const q = query.trim().toLowerCase()
     return sales
       .filter(s => !s.cancelled && (!period || (s.soldAt && new Date(s.soldAt).getTime() >= cutoff)))
@@ -125,7 +319,7 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
         const p = s.partId && partById.get(s.partId)
         return `${p ? `${p.title} ${p.sku}` : ''} ${s.title} ${s.sku}`.toLowerCase().includes(q)
       })
-  }, [sales, period, query, partById])
+  }, [sales, period, query, partById, now])
 
   const totals = useMemo(() => rows.reduce((a, s) => {
     const d = deriveSale(s, partById, costing)
@@ -136,6 +330,24 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
     if (d.cost != null) { a.cogs += d.cost; a.matched++ }
     return a
   }, { gross: 0, refunds: 0, fees: 0, net: 0, cogs: 0, matched: 0 }), [rows, partById, costing])
+
+  // Promoted vs organic, scoped to the selected period (not the search box).
+  const promo = useMemo(() => {
+    const cutoff = period ? now - period * DAY : 0
+    const inWin = derivedAll.filter(x => !period || x.t >= cutoff)
+    const pro = inWin.filter(x => x.promoted)
+    const org = inWin.filter(x => !x.promoted)
+    const sum = (arr, f) => arr.reduce((a, x) => a + (f(x) || 0), 0)
+    const avg = (arr, f) => { const v = arr.map(f).filter(n => n != null); return v.length ? v.reduce((a, n) => a + n, 0) / v.length : null }
+    const adSpend = sum(pro, x => x.adFee)
+    const proRev = sum(pro, x => x.net + x.adFee)
+    return {
+      orders: inWin.length, promoted: pro.length, organic: org.length,
+      adSpend, adPct: proRev > 0 ? (adSpend / proRev) * 100 : null,
+      proProfit: avg(pro, x => x.profit), orgProfit: avg(org, x => x.profit),
+      proDts: avg(pro, x => x.dts), orgDts: avg(org, x => x.dts),
+    }
+  }, [derivedAll, period, now])
 
   const shown = rows.slice(0, limit)
 
@@ -165,6 +377,7 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
     document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(a.href)
   }
 
+  const periodLabel = period ? (PERIODS.find(p => p[0] === period)?.[1] || `${period}d`) : 'all time'
   const th = { textAlign: 'left', padding: '9px 12px', color: C.muted, fontWeight: 700, fontSize: 11, whiteSpace: 'nowrap' }
   const td = (align = 'left') => ({ textAlign: align, padding: '9px 12px', color: C.text, whiteSpace: 'nowrap' })
 
@@ -173,10 +386,34 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
       <h2 style={{ ...S.h1, marginBottom: 4 }}>Recent Sales</h2>
       <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>Every eBay sale, newest first — what each item made after fees. Item &amp; SKU come from your inventory record (matched by eBay item number); sales with no inventory match are tagged <strong>eBay only</strong>.</div>
 
+      {/* Performance overview — trend + comparison against the previous period. */}
+      <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12, padding: '16px 18px', marginBottom: 16 }}>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {GRAINS.map(g => <button key={g.id} onClick={() => setGrain(g.id)} style={pillStyle(grain === g.id)}>{g.label}</button>)}
+          </div>
+          <div style={{ flex: 1 }} />
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {METRICS.map(m => <button key={m.id} onClick={() => setMetric(m.id)} style={pillStyle(metric === m.id)}>{m.label}</button>)}
+          </div>
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.3 }}>This {grainNoun[grain]} so far</div>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 28, fontWeight: 800, color: C.text }}>{showMetric(compare.cur, chart.money)}</span>
+            {compare.delta != null && <DeltaBadge delta={compare.delta} />}
+            <span style={{ fontSize: 12, color: C.muted }}>{compare.delta == null ? 'no prior period to compare' : `vs ${showMetric(compare.prev, chart.money)} at the same point last ${grainNoun[grain]}`}</span>
+          </div>
+        </div>
+        <BarChart bars={chart.bars} money={chart.money} />
+      </div>
+
+      <PromotedPanel promo={promo} periodLabel={periodLabel} />
+
       {/* 📦 To send — sales not yet marked shipped on eBay (refreshed by the 5-min
           live check, so posting on eBay clears them within minutes). */}
       {(() => {
-        const cutoff = Date.now() - 30 * 86400000
+        const cutoff = now - 30 * 86400000
         const toSend = sales.filter(s =>
           s.fulfillmentStatus && s.fulfillmentStatus !== 'FULFILLED' &&
           !s.cancelled && !s.refunded &&
@@ -192,7 +429,7 @@ export default function Sales({ sales = [], parts = [], costing = {} }) {
             {toSend.map(s => {
               const p = s.partId ? partById.get(s.partId) : null
               const thumb = p?.photos?.[0]?.url
-              const days = Math.floor((Date.now() - new Date(s.soldAt).getTime()) / 86400000)
+              const days = Math.floor((now - new Date(s.soldAt).getTime()) / 86400000)
               return (
                 <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderTop: '1px solid #fde68a' }}>
                   {thumb
