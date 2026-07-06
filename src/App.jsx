@@ -14,8 +14,7 @@ import Settings from './components/Settings'
 import Help from './components/Help'
 import FloatingHelp from './components/FloatingHelp'
 import JoinStore from './components/JoinStore'
-import Insights from './components/Insights'
-import Vehicles from './components/Vehicles'
+import Analytics from './components/Analytics'
 import Sales from './components/Sales'
 import Ebay from './components/Ebay'
 
@@ -24,8 +23,7 @@ const TABS = [
   { id: 'sales', label: 'Sales', icon: '🧾' },
   { id: 'inventory', label: 'Inventory', icon: '📦' },
   { id: 'ebay', label: 'eBay', icon: '🛒' },
-  { id: 'insights', label: 'Insights', icon: '📈' },
-  { id: 'vehicles', label: 'Vehicles', icon: '🚗' },
+  { id: 'analytics', label: 'Analytics', icon: '📈' },
   { id: 'settings', label: 'Settings', icon: '⚙️' },
   { id: 'help', label: 'Help', icon: '🆘' },
 ]
@@ -198,7 +196,7 @@ export default function App() {
   }), [costing, shipping, storage])
 
   // Jump to Insights pre-filtered (e.g. clicking an aged-stock bracket).
-  const drillToInsights = (init) => { setInsightsInit({ ...init, _ts: Date.now() }); setTab('insights') }
+  const drillToInsights = (init) => { setInsightsInit({ ...init, _ts: Date.now() }); setTab('analytics') }
 
   // Name this window so the field app's "Open Admin" link returns to this tab
   useEffect(() => { window.name = 'partvault-admin' }, [])
@@ -254,8 +252,8 @@ export default function App() {
         <div style={S.logo}>⚙ PartVault Admin</div>
         <StoreSwitcher stores={stores} activeStoreId={activeStoreId} setActiveStore={setActiveStore} refreshStores={refreshStores} />
         {TABS.map(t => {
-          // Analytics tabs (Insights/Vehicles) are Pro+ — Basic sees them locked.
-          const gated = (t.id === 'insights' || t.id === 'vehicles') && !plan.can('analytics')
+          // The Analytics tab is Pro+ — Basic sees it locked.
+          const gated = t.id === 'analytics' && !plan.can('analytics')
           return (
             <button key={t.id} style={{ ...S.navBtn(tab === t.id), opacity: gated ? 0.45 : 1 }}
               onClick={() => gated ? alert(`${t.label} is part of the Pro plan. Upgrade to unlock analytics.`) : setTab(t.id)}>
@@ -294,8 +292,7 @@ export default function App() {
           />
         )}
         {tab === 'ebay' && <Ebay storeId={storeId} onChanged={smartRefetch} />}
-        {tab === 'insights' && <Insights storeId={storeId} initial={insightsInit} />}
-        {tab === 'vehicles' && <Vehicles parts={parts} cars={cars} sales={sales} costing={costingFull} onRefresh={refetch} />}
+        {tab === 'analytics' && <Analytics storeId={storeId} initial={insightsInit} parts={parts} cars={cars} sales={sales} costing={costingFull} />}
         {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores}
           onSettingsSaved={s => { if (s?.costing) setCosting(c => ({ ...c, ...s.costing })); if (s?.inventory) setInventory(i => ({ ...i, ...s.inventory })); if (s?.storage) setStorage(st => ({ ...st, ...s.storage })); if (s?.shipping) setShipping(s.shipping); if (s?.labels) setLabels(l => ({ ...l, ...s.labels })) }} />}
         {tab === 'help' && <Help storeId={storeId} />}

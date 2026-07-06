@@ -83,8 +83,8 @@ const withScores = (rows) => {
   })
 }
 
-export default function Vehicles({ parts = [], cars = [], sales = [], costing = {} }) {
-  const [level, setLevel] = useState('models') // 'models' | 'cars'
+// `level` ('models' | 'cars') is driven by the Analytics pivot in the parent.
+export default function Vehicles({ parts = [], cars = [], sales = [], costing = {}, level = 'models' }) {
   const [carSort, setCarSort] = useState({ key: 'score', dir: 'desc' })
   const [modelSort, setModelSort] = useState({ key: 'score', dir: 'desc' })
   const [query, setQuery] = useState('')
@@ -357,11 +357,6 @@ export default function Vehicles({ parts = [], cars = [], sales = [], costing = 
 
   return (
     <div>
-      <h2 style={{ ...S.h1, marginBottom: 4 }}>Vehicle Analytics</h2>
-      <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>
-        Which donor cars and models actually make money — so you know what to buy next.
-      </div>
-
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
         <Card label="Revenue (all sales)" value={money(summary.revenue)} color={C.accent} />
         <Card label="Est. profit" value={money(summary.estProfit)} sub={summary.revenue > 0 ? `${Math.round((summary.estProfit / summary.revenue) * 100)}% margin` : null} color={summary.estProfit >= 0 ? C.green : C.red} />
@@ -379,13 +374,7 @@ export default function Vehicles({ parts = [], cars = [], sales = [], costing = 
       )}
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
-        {[['models', '🚗 By model'], ['cars', '🔧 By car']].map(([id, label]) => (
-          <button key={id} onClick={() => setLevel(id)}
-            style={{ padding: '7px 14px', borderRadius: 20, border: `1.5px solid ${level === id ? C.accent : C.border}`, background: level === id ? C.accent : '#fff', color: level === id ? '#fff' : C.muted, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-            {label}
-          </button>
-        ))}
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 12, color: C.muted, flexWrap: 'wrap', marginLeft: 4 }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 12, color: C.muted, flexWrap: 'wrap' }}>
           <span>Include:</span>
           {[['partvault', 'PartVault'], ['ebay', 'eBay API'], ['history', 'Imported history']].map(([k, label]) => (
             <label key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}

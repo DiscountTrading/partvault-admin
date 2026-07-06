@@ -276,9 +276,6 @@ export default function Insights({ storeId, initial }) {
 
   return (
     <div>
-      <h2 style={{ ...S.h1, marginBottom: 4 }}>Stock Insights</h2>
-      <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>What's making money, what's moving, and what's clogging the shelves.</div>
-
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
         <Card label="Stock on hand" value={money(summary.stockValue)} sub={`${summary.unsoldCount} unsold parts`} />
         <Card label="Avg margin (unsold)" value={summary.avgMargin == null ? '—' : `${summary.avgMargin}%`} />
