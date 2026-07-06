@@ -932,6 +932,8 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
   const [showAddCar, setShowAddCar] = useState(false)
   const [page, setPage] = useState(0)
   const PAGE = 100
+  const [carPage, setCarPage] = useState(0)
+  const [carPageSize, setCarPageSize] = useState(25)
 
   const makes = useMemo(() => [...new Set(parts.filter(p=>p.make).map(p=>p.make))].sort(), [parts])
   const models = useMemo(() => { const src=filterMake?parts.filter(p=>p.make===filterMake):parts; return [...new Set(src.filter(p=>p.model).map(p=>p.model))].sort() }, [parts, filterMake])
@@ -960,10 +962,17 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
     return Object.values(g).sort((a,b)=>(a.make+a.model).localeCompare(b.make+b.model))
   }, [filtered])
 
+  // Cars view is paged so Expand/scroll never has to build every part table at
+  // once. Only the current page's cars can be opened, keeping the DOM bounded
+  // no matter how large the yard is.
+  const carPages = Math.max(1, Math.ceil(carGroups.length/carPageSize))
+  useEffect(() => { if (carPage > carPages-1) setCarPage(0) }, [carPages, carPage])
+  const pagedCars = useMemo(() => carGroups.slice(carPage*carPageSize,(carPage+1)*carPageSize), [carGroups,carPage,carPageSize])
+
   const paged = useMemo(() => filtered.slice(page*PAGE,(page+1)*PAGE), [filtered,page])
   const pages = Math.ceil(filtered.length/PAGE)
   const totals = filtered.reduce((acc,p) => { const c=totalCost(p),lp=+p.list_price||0; return{cost:acc.cost+c,list:acc.list+lp,profit:acc.profit+(lp-c),count:acc.count+1} }, {cost:0,list:0,profit:0,count:0})
-  const clearFilters = () => { setSearch('');setFilterMake('');setFilterModel('');setFilterYear('');setFilterCat('');setFilterStatus('');setFilterCond('');setPage(0) }
+  const clearFilters = () => { setSearch('');setFilterMake('');setFilterModel('');setFilterYear('');setFilterCat('');setFilterStatus('');setFilterCond('');setPage(0);setCarPage(0) }
   const handleDeleteCar = async group => { await onDeleteCar(group.carId||null, group.parts.map(p=>p.id)); setDeleteCarTarget(null) }
 
   const inputSm = { ...S.input, height:30, padding:'0 8px', fontSize:12 }
@@ -1103,13 +1112,17 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
 
       {viewMode==='car' && (
         <div>
-          <div style={{ display:'flex', gap:8, marginBottom:10, alignItems:'center' }}>
+          <div style={{ display:'flex', gap:8, marginBottom:10, alignItems:'center', flexWrap:'wrap' }}>
             <span style={{ fontSize:13, color:C.muted }}>{carGroups.length} car{carGroups.length!==1?'s':''}</span>
-            <button onClick={() => setExpandedCars(new Set(carGroups.map(g=>g.make+'|'+g.model+'|'+g.year+'|'+(g.carId||''))))} style={{ ...S.btn('secondary'), padding:'3px 10px', fontSize:11 }}>Expand All</button>
-            <button onClick={() => setExpandedCars(new Set())} style={{ ...S.btn('secondary'), padding:'3px 10px', fontSize:11 }}>Collapse All</button>
+            {expandedCars.size>0 && <button onClick={() => setExpandedCars(new Set())} style={{ ...S.btn('secondary'), padding:'3px 10px', fontSize:11 }}>Collapse open ({expandedCars.size})</button>}
+            <span style={{ flex:1 }} />
+            <span style={{ fontSize:12, color:C.muted }}>Per page</span>
+            <select value={carPageSize} onChange={e=>{ setCarPageSize(+e.target.value); setCarPage(0) }} style={{ ...selSm, width:70 }}>
+              {[20,25,50,100].map(n=><option key={n} value={n}>{n}</option>)}
+            </select>
           </div>
           {bulkAIGroup && <BulkAIPanel group={bulkAIGroup} aiSettings={aiSettings} footer={footer} storeId={storeId} onComplete={() => setBulkAIGroup(null)} />}
-          {carGroups.map(g => {
+          {pagedCars.map(g => {
             const key=g.make+'|'+g.model+'|'+g.year+'|'+(g.carId||'')
             const isOpen=expandedCars.has(key)
             const gList=g.parts.reduce((a,p)=>a+(+p.list_price||0),0)
@@ -1120,7 +1133,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
             const gSold=g.parts.filter(p=>p.status==='sold').length
             const aiPending=g.parts.filter(p=>!p.ai_assessed).length
             return (
-              <div key={key} style={{ ...S.card, marginBottom:8, padding:0, overflow:'hidden' }}>
+              <div key={key} style={{ ...S.card, marginBottom:8, padding:0, overflow:'hidden', contentVisibility:'auto', containIntrinsicSize:'auto 64px' }}>
                 <div onClick={() => setExpandedCars(s=>{const n=new Set(s);n.has(key)?n.delete(key):n.add(key);return n})} style={{ display:'flex', alignItems:'center', padding:'12px 16px', cursor:'pointer', background:'#f9f8f5', gap:12, flexWrap:'wrap' }}>
                   <span style={{ fontSize:18 }}>{isOpen?'▼':'▶'}</span>
                   <div style={{ flex:1, minWidth:200 }}>
@@ -1179,6 +1192,13 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
               </div>
             )
           })}
+          {carPages>1&&(
+            <div style={{ display:'flex', gap:8, alignItems:'center', justifyContent:'center', marginTop:12 }}>
+              <button disabled={carPage===0} onClick={()=>{ setExpandedCars(new Set()); setCarPage(p=>p-1); window.scrollTo(0,0) }} style={{ ...S.btn('secondary'), padding:'4px 12px', fontSize:12 }}>← Prev</button>
+              <span style={{ fontSize:13, color:C.muted }}>Page {carPage+1} of {carPages} ({carGroups.length} cars)</span>
+              <button disabled={carPage>=carPages-1} onClick={()=>{ setExpandedCars(new Set()); setCarPage(p=>p+1); window.scrollTo(0,0) }} style={{ ...S.btn('secondary'), padding:'4px 12px', fontSize:12 }}>Next →</button>
+            </div>
+          )}
           {!carGroups.length&&<div style={{ textAlign:'center', color:C.muted, padding:60, fontSize:15 }}>No cars match your filters.</div>}
         </div>
       )}
