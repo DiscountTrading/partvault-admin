@@ -46,22 +46,32 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url || steps.deployment-retry.outputs.page_url }}
+      url: ${{ steps.d1.outputs.page_url || steps.d2.outputs.page_url || steps.d3.outputs.page_url }}
     steps:
       # GitHub Pages intermittently returns "Deployment failed, try again later"
-      # even when the build + artifact are fine. Attempt once, and if that
-      # transient error hits, wait and retry with the same official action so a
-      # blip doesn't fail the run or leave a stale deploy.
-      - name: Deploy to GitHub Pages
-        id: deployment
+      # even when the build + artifact are fine, and the blip can outlast a single
+      # short retry. Try up to 3 times with 30s then 60s backoff; only the final
+      # attempt is allowed to fail the run, so a genuine outage still surfaces.
+      - name: Deploy to GitHub Pages (attempt 1)
+        id: d1
         continue-on-error: true
         uses: actions/deploy-pages@v4
 
-      - name: Wait before retry
-        if: steps.deployment.outcome == 'failure'
-        run: sleep 20
+      - name: Wait before retry (30s)
+        if: steps.d1.outcome == 'failure'
+        run: sleep 30
 
-      - name: Deploy to GitHub Pages (retry)
-        id: deployment-retry
-        if: steps.deployment.outcome == 'failure'
+      - name: Deploy to GitHub Pages (attempt 2)
+        id: d2
+        if: steps.d1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+
+      - name: Wait before final retry (60s)
+        if: steps.d1.outcome == 'failure' && steps.d2.outcome == 'failure'
+        run: sleep 60
+
+      - name: Deploy to GitHub Pages (final attempt)
+        id: d3
+        if: steps.d1.outcome == 'failure' && steps.d2.outcome == 'failure'
         uses: actions/deploy-pages@v4
