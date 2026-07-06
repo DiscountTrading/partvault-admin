@@ -3,13 +3,16 @@ name: Build and Deploy
 on:
   push:
     branches: [main]
-  workflow_dispatch:  # allows manual trigger from Actions tab
+  workflow_dispatch:  # allows manual trigger / re-run from the Actions tab
 
 permissions:
   contents: read
   pages: write
   id-token: write
 
+# Serialize deployments so two pushes never race the single Pages environment
+# (the usual trigger for "Deployment failed, try again later"). cancel-in-progress
+# is false so queued runs still deploy rather than being dropped.
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -43,8 +46,22 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deployment.outputs.page_url || steps.deployment-retry.outputs.page_url }}
     steps:
+      # GitHub Pages intermittently returns "Deployment failed, try again later"
+      # even when the build + artifact are fine. Attempt once, and if that
+      # transient error hits, wait and retry with the same official action so a
+      # blip doesn't fail the run or leave a stale deploy.
       - name: Deploy to GitHub Pages
         id: deployment
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+
+      - name: Wait before retry
+        if: steps.deployment.outcome == 'failure'
+        run: sleep 20
+
+      - name: Deploy to GitHub Pages (retry)
+        id: deployment-retry
+        if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v4
