@@ -143,6 +143,8 @@ const bucketLabel = (grain, ms) => {
   return d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })
 }
 const grainNoun = { day: 'day', week: 'week', month: 'month', year: 'year' }
+// Human label for the window a grain covers, e.g. month → "last 12 months".
+const grainWindowLabel = id => { const g = GRAINS.find(x => x.id === id); return `last ${g.n} ${id}${g.n === 1 ? '' : 's'}` }
 const METRICS = [
   { id: 'net', label: 'Net sales', money: true },
   { id: 'profit', label: 'Profit', money: true },
@@ -485,9 +487,13 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
   }, { gross: 0, refunds: 0, fees: 0, net: 0, cogs: 0, matched: 0 }), [rows, partById, costing])
 
   // Promoted vs organic, scoped to the selected period (not the search box).
+  // Scoped to the SAME window the trend chart covers (driven by the Day/Week/
+  // Month/Year toggle), so changing that toggle moves the chart and the pies
+  // together rather than the pies quietly tracking the table's period filter.
   const promo = useMemo(() => {
-    const cutoff = period ? now - period * DAY : 0
-    const inWin = derivedAll.filter(x => !period || x.t >= cutoff)
+    const g = GRAINS.find(x => x.id === grain)
+    const cutoff = bucketStartMs(grain, now, g.n - 1)
+    const inWin = derivedAll.filter(x => x.t >= cutoff)
     const pro = inWin.filter(x => x.promoted)
     const org = inWin.filter(x => !x.promoted)
     const sum = (arr, f) => arr.reduce((a, x) => a + (f(x) || 0), 0)
@@ -504,7 +510,7 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
       proDts: avg(pro, x => x.dts), orgDts: avg(org, x => x.dts),
       tiers,
     }
-  }, [derivedAll, period, now])
+  }, [derivedAll, grain, now])
 
   const shown = rows.slice(0, limit)
 
@@ -534,7 +540,6 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
     document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(a.href)
   }
 
-  const periodLabel = period ? (PERIODS.find(p => p[0] === period)?.[1] || `${period}d`) : 'all time'
   const th = { textAlign: 'left', padding: '9px 12px', color: C.muted, fontWeight: 700, fontSize: 11, whiteSpace: 'nowrap' }
   const td = (align = 'left') => ({ textAlign: align, padding: '9px 12px', color: C.text, whiteSpace: 'nowrap' })
 
@@ -567,7 +572,7 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
         </div>
       </div>
 
-      <PromotedPanel promo={promo} periodLabel={periodLabel} />
+      <PromotedPanel promo={promo} periodLabel={grainWindowLabel(grain)} />
 
       <FulfilmentQueue sales={sales} partById={partById} wf={wf} setStage={setStage} now={now} />
 
