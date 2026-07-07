@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useAuth } from './hooks/useAuth'
 import { useParts } from './hooks/useParts'
 import { useSales } from './hooks/useSales'
+import { useSaleWorkflow } from './hooks/useSaleWorkflow'
 import { sb } from './lib/supabase'
 import { C, S, APP_VERSION, rentPerDay } from './lib/constants'
 import { MARKETPLACE_LIST, guessMarketplace, setActiveMarketplace } from './lib/marketplaces'
@@ -166,6 +167,7 @@ export default function App() {
   const { session, profile, storeId, stores, activeStoreId, setActiveStore, refreshStores, authReady, signOut } = useAuth()
   const { parts, loading, syncStatus, totalCount, addPart, editPart, softDelete, softDeleteCar, refetch } = useParts(storeId)
   const { sales } = useSales(storeId)
+  const { wf, setStage } = useSaleWorkflow(storeId)
   const [tab, setTab] = useState('dashboard')
   const [toast, setToast] = useState(null)
   const lastFetchRef = useRef(Date.now())
@@ -282,7 +284,7 @@ export default function App() {
       )}
       <main style={S.main} key={marketplaceId}>{/* re-mounts content when the active store's currency changes */}
         {tab === 'dashboard' && <Dashboard parts={parts} sales={sales} costing={costingFull} inventory={inventory} onDrill={drillToInsights} onSeeSales={() => setTab('sales')} />}
-        {tab === 'sales' && <Sales sales={sales} parts={parts} costing={costingFull} />}
+        {tab === 'sales' && <Sales sales={sales} parts={parts} costing={costingFull} wf={wf} setStage={setStage} />}
         {tab === 'inventory' && (
           <Inventory
             parts={parts} cars={cars} storeId={storeId}
