@@ -344,8 +344,9 @@ function StagePill({ label, done, locked, onClick, tip }) {
 // feedback follow-up. Posted comes from eBay (fulfillment_status); the rest are
 // our own toggles persisted in sale_workflow, shared live with the mobile
 // "Collect" pick-list.
+const FULFIL_DAYS = 30
 function FulfilmentQueue({ sales, partById, wf, setStage, now }) {
-  const cutoff = now - 30 * 86400000
+  const cutoff = now - FULFIL_DAYS * 86400000
   const orders = sales
     .filter(s => !s.cancelled && !s.refunded && s.soldAt && new Date(s.soldAt).getTime() > cutoff)
     .map(s => ({ s, w: wf[s.id] || {} }))
@@ -361,7 +362,7 @@ function FulfilmentQueue({ sales, partById, wf, setStage, now }) {
     <div style={{ background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 12, padding: '12px 16px', marginBottom: 16 }}>
       <div style={{ fontSize: 14, fontWeight: 800, color: C.text, marginBottom: 10 }}>
         📦 Fulfilment — {orders.length} order{orders.length === 1 ? '' : 's'} in progress
-        <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}> · {collectedCount} collected</span>
+        <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}> · sold in the last {FULFIL_DAYS} days · {collectedCount} collected</span>
       </div>
       {orders.map(({ s, w }) => {
         const p = s.partId ? partById.get(s.partId) : null
@@ -401,7 +402,7 @@ function FulfilmentQueue({ sales, partById, wf, setStage, now }) {
           </div>
         )
       })}
-      <div style={{ fontSize: 10.5, color: C.muted, marginTop: 10 }}>Postage labels are bought on eBay (eBay ↗). <strong>Posted</strong> ticks automatically once you mark the order shipped there. Mark <strong>Delivered</strong> to clear an order from this queue.</div>
+      <div style={{ fontSize: 10.5, color: C.muted, marginTop: 10 }}>Shows orders sold in the last {FULFIL_DAYS} days that aren't marked Delivered. Postage labels are bought on eBay (eBay ↗). <strong>Posted</strong> ticks automatically once you mark the order shipped there. Mark <strong>Delivered</strong> to clear an order from this queue.</div>
     </div>
   )
 }
