@@ -198,15 +198,48 @@ const bucketKeyMs = (grain, t) => {
   if (grain === 'month') return new Date(d.getFullYear(), d.getMonth(), 1).getTime()
   return new Date(d.getFullYear(), 0, 1).getTime()
 }
-const bucketLabel = (grain, ms) => {
-  const d = new Date(ms)
-  if (grain === 'year') return String(d.getFullYear())
-  if (grain === 'month') return d.toLocaleDateString('en-AU', { month: 'short', year: '2-digit' })
-  return d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })
-}
 const grainNoun = { day: 'day', week: 'week', month: 'month', year: 'year' }
 // Human label for the window a grain covers, e.g. month → "last 12 months".
 const grainWindowLabel = id => { const g = GRAINS.find(x => x.id === id); return `last ${g.n} ${id}${g.n === 1 ? '' : 's'}` }
+
+// Auto-pick a sensible bucket grain for a custom from–to range from its span.
+const pickGrain = (fromMs, toMs) => {
+  const days = (toMs - fromMs) / DAY
+  if (days <= 45) return 'day'
+  if (days <= 182) return 'week'
+  if (days <= 1095) return 'month'
+  return 'year'
+}
+// Every bucket-start key of `grain` from fromMs..toMs inclusive (for custom ranges).
+const bucketsInRange = (grain, fromMs, toMs) => {
+  const keys = []
+  let k = bucketKeyMs(grain, fromMs)
+  const end = bucketKeyMs(grain, toMs)
+  let guard = 0
+  while (k <= end && guard++ < 2000) {
+    keys.push(k)
+    const d = new Date(k)
+    if (grain === 'day') k = startOfDayMs(k + DAY + DAY / 2)
+    else if (grain === 'week') k = startOfWeekMs(k + 7 * DAY + DAY / 2)
+    else if (grain === 'month') k = new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime()
+    else k = new Date(d.getFullYear() + 1, 0, 1).getTime()
+  }
+  return keys
+}
+// Two-row axis labels: primary = fine tick nearest the bars, secondary = coarse
+// group shown once when it changes. e.g. week → "13" (Monday date) over "Apr".
+const primaryLabel = (grain, ms) => {
+  const d = new Date(ms)
+  if (grain === 'day' || grain === 'week') return String(d.getDate())
+  if (grain === 'month') return d.toLocaleDateString('en-AU', { month: 'short' })
+  return String(d.getFullYear())
+}
+const secondaryLabel = (grain, ms) => {
+  const d = new Date(ms)
+  if (grain === 'day' || grain === 'week') return d.toLocaleDateString('en-AU', { month: 'short' })
+  if (grain === 'month') return String(d.getFullYear())
+  return ''
+}
 const METRICS = [
   { id: 'net', label: 'Net sales', money: true },
   { id: 'profit', label: 'Profit', money: true },
@@ -282,38 +315,100 @@ function PieWithLegend({ title, slices }) {
   )
 }
 
-// Vertical bar chart with a zero baseline so negative buckets (a loss-making
-// period on the Profit metric) render below the line in red.
+const BAR_PROMO = C.accent      // promoted segment
+const BAR_ORG = '#93b4e8'       // organic segment
+// Vertical bar chart. Each bar is split into a promoted (bottom) + organic (top)
+// segment; the total sits on top and a tooltip appears ABOVE the hovered bar
+// (not under the cursor). A zero baseline lets loss buckets (negative Profit)
+// render below the line in red. Two-row axis: fine tick over a coarse group.
 function BarChart({ bars, money }) {
+  const [hover, setHover] = useState(null)
   const vals = bars.map(b => b.value)
   const maxPos = Math.max(0, ...vals)
   const minNeg = Math.min(0, ...vals)
   const span = (maxPos - minNeg) || 1
-  const H = 140
+  const H = 150
   const topPad = (maxPos / span) * H // pixels from top down to the zero line
+  const dense = bars.length > 16
+  const step = dense ? Math.ceil(bars.length / 12) : 1
+  const showBarNums = bars.length <= 14   // value-on-top + in-segment counts only when there's room
+  const fmtV = v => showMetric(v, money)
+  const seg = v => Math.max(0, (v / span) * H)
+
   return (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'stretch', gap: 3, height: H, borderBottom: minNeg < 0 ? 'none' : `1px solid ${C.border}` }}>
+    <div style={{ position: 'relative', paddingTop: 18 }}>
+      {/* Tooltip above the hovered bar */}
+      {hover != null && bars[hover] && (() => {
+        const b = bars[hover]
+        const leftPct = ((hover + 0.5) / bars.length) * 100
+        const row = (dot, label, val, cnt) => (
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14 }}>
+            <span><span style={{ color: dot }}>■</span> {label}</span>
+            <span>{fmtV(val)}{money ? ` · ${cnt}` : ''}</span>
+          </div>
+        )
+        return (
+          <div style={{ position: 'absolute', bottom: H + 6, left: `${leftPct}%`, transform: 'translateX(-50%)', background: '#1c1c1e', color: '#fff', borderRadius: 8, padding: '8px 11px', fontSize: 11.5, lineHeight: 1.6, whiteSpace: 'nowrap', zIndex: 5, pointerEvents: 'none', boxShadow: '0 6px 18px rgba(0,0,0,0.28)' }}>
+            <div style={{ fontWeight: 700, marginBottom: 3 }}>{b.secondary ? `${b.primary} ${b.secondary}` : b.primary}</div>
+            {row(BAR_PROMO, 'Promoted', b.promoted, b.promotedCount)}
+            {row(BAR_ORG, 'Organic', b.organic, b.organicCount)}
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, borderTop: '1px solid rgba(255,255,255,0.22)', marginTop: 3, paddingTop: 3, fontWeight: 700 }}>
+              <span>Total</span><span>{fmtV(b.value)}{money ? ` · ${b.promotedCount + b.organicCount}` : ''}</span>
+            </div>
+            <div style={{ position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)', borderLeft: '6px solid transparent', borderRight: '6px solid transparent', borderTop: '6px solid #1c1c1e' }} />
+          </div>
+        )
+      })()}
+
+      <div style={{ display: 'flex', alignItems: 'stretch', gap: 3, height: H, borderBottom: minNeg < 0 ? 'none' : `1px solid ${C.border}`, overflow: 'visible' }}>
         {bars.map((b, i) => {
-          const posH = b.value >= 0 ? (b.value / span) * H : 0
-          const negH = b.value < 0 ? (Math.abs(b.value) / span) * H : 0
-          const col = b.value < 0 ? C.red : b.current ? C.accent : '#93b4e8'
+          const total = b.value
+          const isNeg = total < 0
+          // Clean stack only when both segments are non-negative (Net & Orders always
+          // are; Profit usually is). Otherwise fall back to a single net bar.
+          const stack = total >= 0 && b.promoted >= 0 && b.organic >= 0
+          const posH = isNeg ? 0 : (total / span) * H
+          const negH = isNeg ? (Math.abs(total) / span) * H : 0
+          const orgH = stack ? seg(b.organic) : 0
+          const promoH = stack ? seg(b.promoted) : 0
+          const active = hover === i
           return (
-            <div key={i} title={`${b.label}: ${showMetric(b.value, money)}`}
-              style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-              <div style={{ height: Math.max(0, topPad - posH) }} />
-              {posH > 0 && <div style={{ height: posH, background: col, borderRadius: '3px 3px 0 0', minHeight: 2 }} />}
-              {negH > 0 && <div style={{ height: negH, background: col, borderRadius: '0 0 3px 3px', minHeight: 2 }} />}
+            <div key={i} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(h => h === i ? null : h)}
+              style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', cursor: 'default' }}>
+              <div style={{ height: Math.max(0, topPad - posH), display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: 1 }}>
+                {showBarNums && total !== 0 && !isNeg && <span style={{ fontSize: 9, fontWeight: 700, color: C.text, opacity: active ? 1 : 0.85 }}>{fmtV(total)}</span>}
+              </div>
+              {!isNeg && total > 0 && (stack ? (
+                <>
+                  {orgH > 0 && <div style={{ height: orgH, background: BAR_ORG, borderRadius: '3px 3px 0 0', minHeight: 1, outline: active ? '1px solid rgba(0,0,0,0.15)' : 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{showBarNums && orgH >= 13 && <span style={{ fontSize: 8.5, fontWeight: 700, color: '#33526f' }}>{b.organicCount}</span>}</div>}
+                  {promoH > 0 && <div style={{ height: promoH, background: BAR_PROMO, borderRadius: orgH > 0 ? '0 0 3px 3px' : '3px', minHeight: 1, outline: active ? '1px solid rgba(0,0,0,0.15)' : 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{showBarNums && promoH >= 13 && <span style={{ fontSize: 8.5, fontWeight: 700, color: '#fff' }}>{b.promotedCount}</span>}</div>}
+                </>
+              ) : (
+                <div style={{ height: posH, background: BAR_ORG, borderRadius: '3px 3px 0 0', minHeight: 2 }} />
+              ))}
+              {negH > 0 && <div style={{ height: negH, background: C.red, borderRadius: '0 0 3px 3px', minHeight: 2 }} />}
             </div>
           )
         })}
       </div>
+
+      {/* Two-row axis: primary tick over the coarse group (shown once when it changes) */}
       <div style={{ display: 'flex', gap: 3, marginTop: 5 }}>
         {bars.map((b, i) => (
-          <div key={i} style={{ flex: 1, minWidth: 0, textAlign: 'center', fontSize: 9.5, color: b.current ? C.text : C.muted, fontWeight: b.current ? 700 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'clip' }}>
-            {b.showLabel ? b.label : ''}
+          <div key={i} style={{ flex: 1, minWidth: 0, textAlign: 'center', fontSize: 9.5, color: b.current ? C.text : C.muted, fontWeight: b.current ? 700 : 500, whiteSpace: 'nowrap', overflow: 'hidden' }}>
+            {(i % step === 0 || i === bars.length - 1) ? b.primary : ''}
           </div>
         ))}
+      </div>
+      <div style={{ display: 'flex', gap: 3, marginTop: 1, height: 12 }}>
+        {bars.map((b, i) => {
+          const showSec = b.secondary && (i === 0 || bars[i - 1]?.secondary !== b.secondary)
+          return (
+            <div key={i} style={{ flex: 1, minWidth: 0, position: 'relative' }}>
+              {showSec && <span style={{ position: 'absolute', left: 0, top: 0, fontSize: 9.5, color: C.muted, fontWeight: 700, whiteSpace: 'nowrap' }}>{b.secondary}</span>}
+            </div>
+          )
+        })}
       </div>
     </div>
   )
@@ -448,6 +543,14 @@ function FulfilmentQueue({ sales, partById, wf, setStage, now }) {
   const ebayDomain = getActiveMarketplace().ebayDomain
   const stamp = (saleId, key, cur) => setStage(saleId, { [key]: cur ? null : new Date().toISOString() })
   const orderUrl = s => `https://www.${ebayDomain}/mesh/ord/details?orderid=${encodeURIComponent(s.orderId)}`
+  // Feedback is a DELIBERATE mark you set only once you've actually left feedback
+  // on eBay — decoupled from the "leave feedback" link (opening the link no longer
+  // ticks it) and guarded by a confirm before clearing, so it can't flip by accident.
+  // eBay's API exposes no feedback status, so this stays user-asserted.
+  const markFeedback = (saleId, cur) => {
+    if (cur && !window.confirm('Clear the “feedback left” mark for this order?')) return
+    stamp(saleId, 'feedback_at', cur)
+  }
 
   return (
     <div style={{ background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 12, padding: '12px 16px', marginBottom: 16 }}>
@@ -486,7 +589,10 @@ function FulfilmentQueue({ sales, partById, wf, setStage, now }) {
                 ? <img src={thumb} alt="" style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 8, flexShrink: 0 }} />
                 : <div style={{ width: 44, height: 44, borderRadius: 8, background: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>📦</div>}
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p?.title || s.title}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p?.title || s.title}</span>
+                  {p?.location && <span title="Storage location" style={{ flexShrink: 0, background: '#fef3c7', border: '1px solid #fcd34d', color: '#92400e', fontSize: 11, fontWeight: 700, borderRadius: 6, padding: '1px 7px' }}>📍 {p.location}</span>}
+                </div>
                 <div style={{ fontSize: 11, color: C.muted }}>
                   {p?.sku || s.sku || 'no SKU'} · {fmt(s.soldPrice)}{s.shipping > 0 ? ` + ${fmt(s.shipping)} post` : ''} · sold {fmtDate(s.soldAt)}
                   {!posted && !delivered && days >= 2 && <span style={{ color: C.red, fontWeight: 700 }}> · {days} days, not posted</span>}
@@ -503,10 +609,12 @@ function FulfilmentQueue({ sales, partById, wf, setStage, now }) {
               <button title="Print a packing slip with the ship-to address" onClick={() => printPackingSlip(s, p)} style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 11 }}>🖨 Slip</button>
               {p && <button title="Reprint this part's SKU sticker" onClick={() => printLabels([p])} style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 11 }}>🏷 SKU</button>}
               <a href={orderUrl(s)} target="_blank" rel="noreferrer" title="Open the order on eBay to buy the postage label" style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 11, textDecoration: 'none', display: 'inline-block' }}>eBay ↗</a>
-              <button title="Open the order on eBay to ask for feedback, and mark it requested here"
-                onClick={() => { window.open(orderUrl(s), '_blank', 'noreferrer'); stamp(s.id, 'feedback_at', w.feedback_at) }}
-                style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 11, color: w.feedback_at ? C.green : C.text, borderColor: w.feedback_at ? C.green : undefined }}>
-                {w.feedback_at ? '★ Feedback ✓' : '★ Feedback'}
+              <a href={orderUrl(s)} target="_blank" rel="noreferrer" title="Open the order on eBay to leave feedback for the buyer — this does NOT tick the box"
+                style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 11, textDecoration: 'none', display: 'inline-block' }}>★ Leave feedback ↗</a>
+              <button title={w.feedback_at ? 'Marked as feedback left — click to undo (asks first)' : "Tick this only once you've actually left feedback on eBay"}
+                onClick={() => markFeedback(s.id, w.feedback_at)}
+                style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 11, color: w.feedback_at ? C.green : C.muted, borderColor: w.feedback_at ? C.green : undefined, fontWeight: w.feedback_at ? 700 : 600 }}>
+                {w.feedback_at ? '✓ Feedback left' : '○ Mark feedback left'}
               </button>
             </div>
           </div>
@@ -528,8 +636,11 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
 
   // Performance graphs (top of tab) — derive money + turnover per sale once, then
   // slice it by calendar bucket. Independent of the table's period/search filters.
+  // `grain` is Day/Week/Month/Year or 'custom' (a free from–to range).
   const [grain, setGrain] = useState('month')
   const [metric, setMetric] = useState('net')
+  const [customFrom, setCustomFrom] = useState('')
+  const [customTo, setCustomTo] = useState('')
 
   const derivedAll = useMemo(() => sales.filter(s => !s.cancelled).map(s => {
     const d = deriveSale(s, partById, costing)
@@ -548,20 +659,60 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
     }
   }).filter(x => x.t), [sales, partById, costing])
 
-  const chart = useMemo(() => {
+  // The active time window + the bucket grain to draw it at. Standard grains span
+  // their last-N buckets ending now; 'custom' spans the chosen from–to dates and
+  // auto-picks a bucket size to fit. The chart, headline and promoted panel all
+  // read this, so every one of them moves together when the window changes.
+  const range = useMemo(() => {
+    if (grain === 'custom') {
+      const fromMs = customFrom ? startOfDayMs(new Date(`${customFrom}T00:00:00`).getTime()) : startOfDayMs(now - 29 * DAY)
+      const toRaw = customTo ? startOfDayMs(new Date(`${customTo}T00:00:00`).getTime()) + DAY - 1 : now
+      const toMs = Math.max(fromMs, Math.min(toRaw, now))
+      return { fromMs, toMs, eg: pickGrain(fromMs, toMs), custom: true }
+    }
     const g = GRAINS.find(x => x.id === grain)
-    const keys = []
-    for (let i = g.n - 1; i >= 0; i--) keys.push(bucketStartMs(grain, now, i))
-    const sums = new Map(keys.map(k => [k, 0]))
-    for (const x of derivedAll) { const k = bucketKeyMs(grain, x.t); if (sums.has(k)) sums.set(k, sums.get(k) + metricVal(metric, x)) }
-    const m = METRICS.find(x => x.id === metric)
-    const step = Math.max(1, Math.ceil(keys.length / 6))
-    const bars = keys.map((k, i) => ({ label: bucketLabel(grain, k), value: sums.get(k), current: i === keys.length - 1, showLabel: i % step === 0 || i === keys.length - 1 }))
-    return { bars, money: m.money }
-  }, [derivedAll, grain, metric, now])
+    return { fromMs: bucketStartMs(grain, now, g.n - 1), toMs: now, eg: grain, custom: false }
+  }, [grain, customFrom, customTo, now])
 
-  // Current bucket-to-date vs the same elapsed point in the previous bucket.
+  const chart = useMemo(() => {
+    const eg = range.eg
+    const keys = range.custom
+      ? bucketsInRange(eg, range.fromMs, range.toMs)
+      : (() => { const g = GRAINS.find(x => x.id === grain); const ks = []; for (let i = g.n - 1; i >= 0; i--) ks.push(bucketStartMs(grain, now, i)); return ks })()
+    const pv = new Map(keys.map(k => [k, 0])), ov = new Map(keys.map(k => [k, 0]))
+    const pc = new Map(keys.map(k => [k, 0])), oc = new Map(keys.map(k => [k, 0]))
+    for (const x of derivedAll) {
+      if (x.t < range.fromMs || x.t > range.toMs) continue
+      const k = bucketKeyMs(eg, x.t)
+      if (!pv.has(k)) continue
+      const v = metricVal(metric, x)
+      if (x.promoted) { pv.set(k, pv.get(k) + v); pc.set(k, pc.get(k) + 1) }
+      else { ov.set(k, ov.get(k) + v); oc.set(k, oc.get(k) + 1) }
+    }
+    const m = METRICS.find(x => x.id === metric)
+    const bars = keys.map((k, i) => ({
+      primary: primaryLabel(eg, k), secondary: secondaryLabel(eg, k),
+      promoted: pv.get(k), organic: ov.get(k), value: pv.get(k) + ov.get(k),
+      promotedCount: pc.get(k), organicCount: oc.get(k),
+      current: !range.custom && i === keys.length - 1,
+    }))
+    return { bars, money: m.money }
+  }, [derivedAll, grain, metric, now, range])
+
+  // Headline: the window's total vs the equivalent earlier window. For standard
+  // grains that's the current bucket-to-date vs the same elapsed point last bucket;
+  // for custom it's the range vs the immediately-preceding range of equal length.
   const compare = useMemo(() => {
+    if (range.custom) {
+      const len = (range.toMs - range.fromMs) || DAY
+      let cur = 0, prev = 0
+      for (const x of derivedAll) {
+        const v = metricVal(metric, x)
+        if (x.t >= range.fromMs && x.t <= range.toMs) cur += v
+        else if (x.t >= range.fromMs - len && x.t < range.fromMs) prev += v
+      }
+      return { cur, prev, delta: prev !== 0 ? ((cur - prev) / Math.abs(prev)) * 100 : null }
+    }
     const curStart = bucketStartMs(grain, now, 0)
     const prevStart = bucketStartMs(grain, now, 1)
     const prevEnd = prevStart + (now - curStart)
@@ -572,7 +723,7 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
       else if (x.t >= prevStart && x.t <= prevEnd) prev += v
     }
     return { cur, prev, delta: prev !== 0 ? ((cur - prev) / Math.abs(prev)) * 100 : null }
-  }, [derivedAll, grain, metric, now])
+  }, [derivedAll, grain, metric, now, range])
 
   const rows = useMemo(() => {
     const cutoff = period ? now - period * 86400000 : 0
@@ -597,14 +748,12 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
     return a
   }, { gross: 0, refunds: 0, fees: 0, net: 0, cogs: 0, matched: 0 }), [rows, partById, costing])
 
-  // Promoted vs organic, scoped to the selected period (not the search box).
-  // Scoped to the SAME window the trend chart covers (driven by the Day/Week/
-  // Month/Year toggle), so changing that toggle moves the chart and the pies
-  // together rather than the pies quietly tracking the table's period filter.
+  // Promoted vs organic, scoped to the SAME window the trend chart covers (the
+  // Day/Week/Month/Year toggle or the custom from–to range) — so changing the
+  // window moves the chart, the pies AND the days-to-sell / profit comparison
+  // together. (Independent of the table's period pills and the search box.)
   const promo = useMemo(() => {
-    const g = GRAINS.find(x => x.id === grain)
-    const cutoff = bucketStartMs(grain, now, g.n - 1)
-    const inWin = derivedAll.filter(x => x.t >= cutoff)
+    const inWin = derivedAll.filter(x => x.t >= range.fromMs && x.t <= range.toMs)
     const pro = inWin.filter(x => x.promoted)
     const org = inWin.filter(x => !x.promoted)
     const sum = (arr, f) => arr.reduce((a, x) => a + (f(x) || 0), 0)
@@ -621,7 +770,7 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
       proDts: avg(pro, x => x.dts), orgDts: avg(org, x => x.dts),
       tiers,
     }
-  }, [derivedAll, grain, now])
+  }, [derivedAll, range])
 
   const shown = rows.slice(0, limit)
 
@@ -664,26 +813,48 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {GRAINS.map(g => <button key={g.id} onClick={() => setGrain(g.id)} style={pillStyle(grain === g.id)}>{g.label}</button>)}
+            <button onClick={() => {
+              if (!customFrom) setCustomFrom(new Date(now - 29 * DAY).toISOString().slice(0, 10))
+              if (!customTo) setCustomTo(new Date(now).toISOString().slice(0, 10))
+              setGrain('custom')
+            }} style={pillStyle(grain === 'custom')}>Custom</button>
           </div>
           <div style={{ flex: 1 }} />
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {METRICS.map(m => <button key={m.id} onClick={() => setMetric(m.id)} style={pillStyle(metric === m.id)}>{m.label}</button>)}
           </div>
         </div>
+        {grain === 'custom' && (
+          <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
+            <label style={{ fontSize: 12, color: C.muted, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+              From <input type="date" value={customFrom} max={customTo || undefined} onChange={e => setCustomFrom(e.target.value)}
+                style={{ border: `1.5px solid ${C.border}`, borderRadius: 8, padding: '6px 9px', fontSize: 13, color: C.text }} />
+            </label>
+            <label style={{ fontSize: 12, color: C.muted, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+              To <input type="date" value={customTo} min={customFrom || undefined} max={new Date(now).toISOString().slice(0, 10)} onChange={e => setCustomTo(e.target.value)}
+                style={{ border: `1.5px solid ${C.border}`, borderRadius: 8, padding: '6px 9px', fontSize: 13, color: C.text }} />
+            </label>
+            <span style={{ fontSize: 11.5, color: C.muted }}>bucketed by {grainNoun[range.eg]}</span>
+          </div>
+        )}
         <div style={{ marginBottom: 14 }}>
-          <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.3 }}>This {grainNoun[grain]} so far</div>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.3 }}>{range.custom ? 'Selected range' : `This ${grainNoun[grain]} so far`}</div>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 28, fontWeight: 800, color: C.text }}>{showMetric(compare.cur, chart.money)}</span>
             {compare.delta != null && <DeltaBadge delta={compare.delta} />}
-            <span style={{ fontSize: 12, color: C.muted }}>{compare.delta == null ? 'no prior period to compare' : `vs ${showMetric(compare.prev, chart.money)} at the same point last ${grainNoun[grain]}`}</span>
+            <span style={{ fontSize: 12, color: C.muted }}>{compare.delta == null ? (range.custom ? 'no earlier data to compare' : 'no prior period to compare') : `vs ${showMetric(compare.prev, chart.money)} ${range.custom ? 'in the preceding period' : `at the same point last ${grainNoun[grain]}`}`}</span>
           </div>
+        </div>
+        <div style={{ display: 'flex', gap: 14, justifyContent: 'flex-end', marginBottom: 6, fontSize: 11, color: C.muted }}>
+          <span><span style={{ color: BAR_PROMO }}>■</span> Promoted</span>
+          <span><span style={{ color: BAR_ORG }}>■</span> Organic</span>
         </div>
         <div style={{ maxWidth: 560 }}>
           <BarChart bars={chart.bars} money={chart.money} />
         </div>
       </div>
 
-      <PromotedPanel promo={promo} periodLabel={grainWindowLabel(grain)} />
+      <PromotedPanel promo={promo} periodLabel={range.custom ? `${fmtDate(range.fromMs)} – ${fmtDate(range.toMs)}` : grainWindowLabel(grain)} />
 
       <FulfilmentQueue sales={sales} partById={partById} wf={wf} setStage={setStage} now={now} />
 

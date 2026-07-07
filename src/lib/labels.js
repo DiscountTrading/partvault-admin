@@ -63,7 +63,9 @@ export async function printLabels(parts, cfg = DEFAULT_LABELS) {
     <script>window.onload=function(){setTimeout(function(){window.print();},150);};<\/script>
   </body></html>`
 
-  const w = window.open('', '_blank')
+  // Open in a floating pop-up window (not a new tab) so printing a sticker doesn't
+  // navigate away from the current page — matches the packing-slip behaviour.
+  const w = window.open('', '_blank', 'width=520,height=640')
   if (!w) { alert('Pop-up blocked — allow pop-ups for this site to print labels.'); return }
   w.document.write(html)
   w.document.close()

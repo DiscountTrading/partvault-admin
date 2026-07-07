@@ -248,7 +248,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
   const [form, setForm] = useState(part ? { ...part, costs: { ...part.costs }, listPrice: part.list_price||part.listPrice||0, ai_assessed: part.ai_assessed??false, acquiredDate: part.acquiredDate ? String(part.acquiredDate).slice(0,10) : (part.createdAt ? String(part.createdAt).slice(0,10) : '') } : {
     title:'', category:defCat, subcategory:EBAY_AU_CATEGORIES[defCat][0], make:'', model:'', year:'', condition:PART_CONDITIONS[1],
     description:'', acquiredDate:new Date().toISOString().slice(0,10), costs:defCosts(), listPrice:'', soldPrice:'', photos:[], weight:'', status:'in_stock',
-    partNumber:'', notes:'', ai_assessed:false, car_id:null,
+    partNumber:'', notes:'', location:'', ai_assessed:false, car_id:null,
   })
   const [generating, setGenerating] = useState(false)
   const [descOptions, setDescOptions] = useState([])   // ranked description choices
@@ -843,8 +843,9 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
       <Section title="Record keeping">
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
           <Field label="Acquired Date"><input style={S.input} type="date" value={form.acquiredDate||''} onChange={e => set('acquiredDate', e.target.value)} /></Field>
-          <Field label="Notes"><input style={S.input} value={form.notes||''} onChange={e => set('notes', e.target.value)} /></Field>
+          <Field label="Storage location"><input style={S.input} value={form.location||''} onChange={e => set('location', e.target.value)} placeholder="Shelf / bin / rack…" /></Field>
         </div>
+        <Field label="Notes"><input style={S.input} value={form.notes||''} onChange={e => set('notes', e.target.value)} /></Field>
       </Section>
 
       {/* eBay-style sticky action bar */}
