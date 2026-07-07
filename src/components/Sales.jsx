@@ -347,30 +347,54 @@ function StagePill({ label, done, locked, onClick, tip }) {
 const FULFIL_DAYS = 30
 function FulfilmentQueue({ sales, partById, wf, setStage, now }) {
   const cutoff = now - FULFIL_DAYS * 86400000
-  const orders = sales
-    .filter(s => !s.cancelled && !s.refunded && s.soldAt && new Date(s.soldAt).getTime() > cutoff)
-    .map(s => ({ s, w: wf[s.id] || {} }))
-    .filter(({ w }) => !w.delivered_at)
-    .sort((a, b) => new Date(a.s.soldAt) - new Date(b.s.soldAt)) // oldest first — do those first
-  if (!orders.length) return null
+  // Every order in the fulfilment window (sold recently), oldest first. Kept LIVE
+  // so new sales appear and every stage click (incl. Delivered) shows in place and
+  // is reversible — nothing vanishes mid-edit.
+  const inWindow = useMemo(() =>
+    sales.filter(s => !s.cancelled && !s.refunded && s.soldAt && new Date(s.soldAt).getTime() > cutoff)
+      .sort((a, b) => new Date(a.soldAt) - new Date(b.soldAt)),
+    [sales, cutoff])
+
+  // Delivered orders only leave the queue when the user hits Refresh — so a
+  // mis-click can be undone first. Refresh sweeps the currently-delivered ones out.
+  const [cleared, setCleared] = useState(() => new Set())
+  const rows = inWindow.filter(s => !cleared.has(s.id))
+  if (!rows.length) return null
+
+  const deliveredShown = rows.filter(s => wf[s.id]?.delivered_at).length
+  const collectedCount = rows.filter(s => wf[s.id]?.collected_at).length
+  const refresh = () => setCleared(prev => {
+    const next = new Set(prev)
+    for (const s of inWindow) if (wf[s.id]?.delivered_at) next.add(s.id)
+    return next
+  })
+
   const ebayDomain = getActiveMarketplace().ebayDomain
   const stamp = (saleId, key, cur) => setStage(saleId, { [key]: cur ? null : new Date().toISOString() })
   const orderUrl = s => `https://www.${ebayDomain}/mesh/ord/details?orderid=${encodeURIComponent(s.orderId)}`
-  const collectedCount = orders.filter(o => o.w.collected_at).length
 
   return (
     <div style={{ background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 12, padding: '12px 16px', marginBottom: 16 }}>
-      <div style={{ fontSize: 14, fontWeight: 800, color: C.text, marginBottom: 10 }}>
-        📦 Fulfilment — {orders.length} order{orders.length === 1 ? '' : 's'} in progress
-        <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}> · sold in the last {FULFIL_DAYS} days · {collectedCount} collected</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <div style={{ fontSize: 14, fontWeight: 800, color: C.text, flex: 1, minWidth: 0 }}>
+          📦 Fulfilment — {rows.length} order{rows.length === 1 ? '' : 's'}
+          <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}> · sold in the last {FULFIL_DAYS} days · {collectedCount} collected</span>
+        </div>
+        <button onClick={refresh} disabled={!deliveredShown}
+          title={deliveredShown ? 'Clear the delivered orders from this list' : 'Nothing marked delivered to clear'}
+          style={{ ...S.btn('secondary'), padding: '6px 12px', fontSize: 12, flexShrink: 0, opacity: deliveredShown ? 1 : 0.5 }}>
+          ↻ Refresh{deliveredShown ? ` (${deliveredShown} done)` : ''}
+        </button>
       </div>
-      {orders.map(({ s, w }) => {
+      {rows.map(s => {
+        const w = wf[s.id] || {}
         const p = s.partId ? partById.get(s.partId) : null
         const thumb = p?.photos?.[0]?.url
         const posted = s.fulfillmentStatus === 'FULFILLED'
+        const delivered = !!w.delivered_at
         const days = Math.floor((now - new Date(s.soldAt).getTime()) / 86400000)
         return (
-          <div key={s.id} style={{ padding: '10px 0', borderTop: '1px solid #fde68a' }}>
+          <div key={s.id} style={{ padding: '10px 0', borderTop: '1px solid #fde68a', opacity: delivered ? 0.55 : 1 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               {thumb
                 ? <img src={thumb} alt="" style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 8, flexShrink: 0 }} />
@@ -379,16 +403,16 @@ function FulfilmentQueue({ sales, partById, wf, setStage, now }) {
                 <div style={{ fontSize: 13, fontWeight: 600, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p?.title || s.title}</div>
                 <div style={{ fontSize: 11, color: C.muted }}>
                   {p?.sku || s.sku || 'no SKU'} · {fmt(s.soldPrice)}{s.shipping > 0 ? ` + ${fmt(s.shipping)} post` : ''} · sold {fmtDate(s.soldAt)}
-                  {!posted && days >= 2 && <span style={{ color: C.red, fontWeight: 700 }}> · {days} days, not posted</span>}
+                  {!posted && !delivered && days >= 2 && <span style={{ color: C.red, fontWeight: 700 }}> · {days} days, not posted</span>}
                   {s.buyer ? ` · ${s.buyer}` : ''}{s.shipTo?.city ? ` · ${s.shipTo.city}${s.shipTo.state ? ' ' + s.shipTo.state : ''}` : ''}
                 </div>
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
-              <StagePill label="Collected" done={!!w.collected_at} onClick={() => stamp(s.id, 'collected_at', w.collected_at)} tip="Pulled from inventory" />
-              <StagePill label="Packed" done={!!w.packed_at} onClick={() => stamp(s.id, 'packed_at', w.packed_at)} tip="Boxed and ready to post" />
+              <StagePill label="Collected" done={!!w.collected_at} onClick={() => stamp(s.id, 'collected_at', w.collected_at)} tip="Pulled from inventory — click to toggle" />
+              <StagePill label="Packed" done={!!w.packed_at} onClick={() => stamp(s.id, 'packed_at', w.packed_at)} tip="Boxed and ready to post — click to toggle" />
               <StagePill label="Posted" done={posted} locked tip={posted ? 'Marked shipped on eBay' : 'Set when you mark the order shipped on eBay'} />
-              <StagePill label="Delivered" done={!!w.delivered_at} onClick={() => stamp(s.id, 'delivered_at', w.delivered_at)} tip="Confirmed arrived — clears from this queue" />
+              <StagePill label="Delivered" done={delivered} onClick={() => stamp(s.id, 'delivered_at', w.delivered_at)} tip="Confirmed arrived — click to toggle. Refresh clears delivered orders." />
               <div style={{ flex: 1 }} />
               <button title="Print a packing slip with the ship-to address" onClick={() => printPackingSlip(s, p)} style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 11 }}>🖨 Slip</button>
               {p && <button title="Reprint this part's SKU sticker" onClick={() => printLabels([p])} style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 11 }}>🏷 SKU</button>}
@@ -402,7 +426,7 @@ function FulfilmentQueue({ sales, partById, wf, setStage, now }) {
           </div>
         )
       })}
-      <div style={{ fontSize: 10.5, color: C.muted, marginTop: 10 }}>Shows orders sold in the last {FULFIL_DAYS} days that aren't marked Delivered. Postage labels are bought on eBay (eBay ↗). <strong>Posted</strong> ticks automatically once you mark the order shipped there. Mark <strong>Delivered</strong> to clear an order from this queue.</div>
+      <div style={{ fontSize: 10.5, color: C.muted, marginTop: 10 }}>Orders sold in the last {FULFIL_DAYS} days. Every stage is a toggle — click to set or undo. <strong>Posted</strong> ticks automatically once you mark the order shipped on eBay. Marking <strong>Delivered</strong> dims the row; hit <strong>↻ Refresh</strong> when you're ready to clear the delivered ones.</div>
     </div>
   )
 }
