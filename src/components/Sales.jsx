@@ -8,21 +8,83 @@ import { getActiveMarketplace } from '../lib/marketplaces'
 // AU) — the "eBay ↗" button deep-links to the order for that.
 function printPackingSlip(sale, part) {
   const st = sale.shipTo || {}
-  const w = window.open('', '_blank', 'width=650,height=800')
+  const esc = s => String(s ?? '').replace(/[<>&]/g, m => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[m]))
+  const sym = getActiveMarketplace().currencySymbol
+  const money = n => `${sym}${(+n || 0).toFixed(2)}`
+
+  const title = esc(part?.title || sale.title || 'Item')
+  const sku = esc(part?.sku || sale.sku || '—')
+  const qty = sale.quantity ?? 1
+  const condition = esc(part?.condition || '')
+  const partNo = esc(part?.partNumber || '')
+  const fits = [part?.year, part?.make, part?.model].filter(Boolean).join(' ')
+  const cat = [part?.category, part?.subcategory].filter(Boolean).join(' › ')
+  const soldDate = sale.soldAt ? new Date(sale.soldAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'long', year: 'numeric' }) : ''
+  const itemPaid = +sale.soldPrice || 0, shipPaid = +sale.shipping || 0
+
+  // Detail rows — only render the ones we actually have, so the slip stays tidy.
+  const detail = [
+    ['SKU', sku],
+    ['Condition', condition],
+    partNo && ['Part number', partNo],
+    fits && ['Fits', esc(fits)],
+    cat && ['Category', esc(cat)],
+  ].filter(Boolean).map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join('')
+
+  const shipToLines = [st.name, st.addressLine1, st.addressLine2, [st.city, st.state, st.postcode].filter(Boolean).join(' '), st.country]
+    .filter(Boolean).map(x => esc(x))
+  const shipTo = shipToLines.length ? shipToLines.map(x => `${x}<br/>`).join('') : '<span class="muted">(address not on file — see the eBay order)</span>'
+
+  const w = window.open('', '_blank', 'width=720,height=900')
   if (!w) return
-  w.document.write(`<!doctype html><html><head><title>Packing slip ${sale.orderId}</title>
-    <style>body{font-family:Arial,sans-serif;padding:28px;color:#111}h1{font-size:18px;margin:0 0 2px}
-    .muted{color:#666;font-size:12px}.box{border:1px solid #ccc;border-radius:8px;padding:14px;margin-top:14px}
-    table{width:100%;border-collapse:collapse;margin-top:6px;font-size:13px}td,th{padding:6px 8px;text-align:left;border-bottom:1px solid #eee}
-    .addr{font-size:15px;line-height:1.5}</style></head><body>
-    <h1>Packing slip</h1>
-    <div class="muted">Order ${sale.orderId} · sold ${sale.soldAt ? new Date(sale.soldAt).toLocaleDateString() : ''}${sale.buyer ? ` · buyer: ${sale.buyer}` : ''}</div>
-    <div class="box"><div class="muted">SHIP TO</div><div class="addr">
-      ${[st.name, st.addressLine1, st.addressLine2, [st.city, st.state, st.postcode].filter(Boolean).join(' '), st.country].filter(Boolean).map(x => `${x}<br/>`).join('') || '(address not on file — see the eBay order)'}
-    </div></div>
-    <div class="box"><table><tr><th>Item</th><th>SKU</th><th>Qty</th></tr>
-      <tr><td>${(part?.title || sale.title || '').replace(/</g, '&lt;')}</td><td>${part?.sku || sale.sku || '—'}</td><td>${sale.quantity ?? 1}</td></tr>
-    </table></div>
+  w.document.write(`<!doctype html><html><head><title>Packing slip ${esc(sale.orderId)}</title>
+    <style>
+      *{box-sizing:border-box} body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:34px 40px;color:#1c1c1e}
+      .top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #1c1c1e;padding-bottom:14px}
+      .top h1{font-size:26px;margin:0;letter-spacing:1px} .brand{font-size:13px;color:#666;margin-top:4px}
+      .ordbox{text-align:right;font-size:13px;color:#333;line-height:1.7}
+      .ordbox b{color:#1c1c1e}
+      .cols{display:flex;gap:22px;margin-top:22px} .col{flex:1}
+      .lbl{font-size:11px;letter-spacing:1px;color:#888;text-transform:uppercase;margin-bottom:6px;font-weight:bold}
+      .addr{font-size:16px;line-height:1.55}
+      .item{margin-top:26px;border:1px solid #ddd;border-radius:10px;overflow:hidden}
+      .item .hd{background:#f6f5f2;padding:14px 18px;font-size:17px;font-weight:bold;border-bottom:1px solid #eee}
+      .item .qty{float:right;font-size:13px;color:#555;font-weight:normal}
+      table{width:100%;border-collapse:collapse;font-size:14px}
+      th{width:130px;text-align:left;color:#666;font-weight:600;padding:9px 18px;vertical-align:top}
+      td{padding:9px 18px;vertical-align:top}
+      tr:not(:last-child) th,tr:not(:last-child) td{border-bottom:1px solid #f0efec}
+      .totals{margin-top:18px;margin-left:auto;width:260px;font-size:14px}
+      .totals div{display:flex;justify-content:space-between;padding:5px 0}
+      .totals .grand{border-top:2px solid #1c1c1e;margin-top:4px;padding-top:8px;font-weight:bold;font-size:16px}
+      .thanks{margin-top:34px;border-top:1px solid #eee;padding-top:18px;font-size:13px;color:#444;line-height:1.6}
+      .thanks b{color:#1c1c1e}
+      .muted{color:#888}
+    </style></head><body>
+    <div class="top">
+      <div><h1>PACKING SLIP</h1><div class="brand">Thank you for your order</div></div>
+      <div class="ordbox">Order <b>${esc(sale.orderId)}</b><br/>${soldDate ? `Sold <b>${soldDate}</b><br/>` : ''}${sale.buyer ? `Buyer <b>${esc(sale.buyer)}</b>` : ''}</div>
+    </div>
+    <div class="cols">
+      <div class="col"><div class="lbl">Ship to</div><div class="addr">${shipTo}</div></div>
+      <div class="col"><div class="lbl">Order</div><div style="font-size:14px;line-height:1.8">
+        Items: <b>${qty}</b><br/>Item total: <b>${money(itemPaid)}</b>${shipPaid > 0 ? `<br/>Postage: <b>${money(shipPaid)}</b>` : ''}
+      </div></div>
+    </div>
+    <div class="item">
+      <div class="hd">${title}<span class="qty">Qty ${qty}</span></div>
+      <table>${detail}</table>
+    </div>
+    <div class="totals">
+      <div><span>Item</span><span>${money(itemPaid)}</span></div>
+      ${shipPaid > 0 ? `<div><span>Postage</span><span>${money(shipPaid)}</span></div>` : ''}
+      <div class="grand"><span>Total paid</span><span>${money(itemPaid + shipPaid)}</span></div>
+    </div>
+    <div class="thanks">
+      <b>Thanks for your purchase!</b> We hope this part is exactly what you needed.
+      Please check the SKU above against your order, and hold onto it if you have any questions.
+      If there's a problem with your item, get in touch through eBay before leaving feedback — we'll always make it right.
+    </div>
     <script>window.onload=()=>window.print()</script></body></html>`)
   w.document.close()
 }
@@ -345,6 +407,14 @@ function StagePill({ label, done, locked, onClick, tip }) {
 // our own toggles persisted in sale_workflow, shared live with the mobile
 // "Collect" pick-list.
 const FULFIL_DAYS = 30
+// Selectable headings to focus the queue on orders missing a given stage.
+const STAGE_FILTERS = [
+  { id: 'all', label: 'All' },
+  { id: 'collect', label: 'To collect', test: (s, w) => !w.collected_at },
+  { id: 'pack', label: 'To pack', test: (s, w) => !w.packed_at },
+  { id: 'post', label: 'To post', test: (s) => s.fulfillmentStatus !== 'FULFILLED' },
+  { id: 'deliver', label: 'To deliver', test: (s, w) => !w.delivered_at },
+]
 function FulfilmentQueue({ sales, partById, wf, setStage, now }) {
   const cutoff = now - FULFIL_DAYS * 86400000
   // Every order in the fulfilment window (sold recently), oldest first. Kept LIVE
@@ -369,6 +439,12 @@ function FulfilmentQueue({ sales, partById, wf, setStage, now }) {
     return next
   })
 
+  // Focus the list on orders still missing a chosen stage.
+  const [stageFilter, setStageFilter] = useState('all')
+  const count = f => f.id === 'all' ? rows.length : rows.filter(s => f.test(s, wf[s.id] || {})).length
+  const activeFilter = STAGE_FILTERS.find(f => f.id === stageFilter) || STAGE_FILTERS[0]
+  const filtered = stageFilter === 'all' ? rows : rows.filter(s => activeFilter.test(s, wf[s.id] || {}))
+
   const ebayDomain = getActiveMarketplace().ebayDomain
   const stamp = (saleId, key, cur) => setStage(saleId, { [key]: cur ? null : new Date().toISOString() })
   const orderUrl = s => `https://www.${ebayDomain}/mesh/ord/details?orderid=${encodeURIComponent(s.orderId)}`
@@ -386,7 +462,17 @@ function FulfilmentQueue({ sales, partById, wf, setStage, now }) {
           ↻ Refresh{deliveredShown ? ` (${deliveredShown} done)` : ''}
         </button>
       </div>
-      {rows.map(s => {
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+        {STAGE_FILTERS.map(f => (
+          <button key={f.id} onClick={() => setStageFilter(f.id)} style={{ ...pillStyle(stageFilter === f.id), padding: '5px 11px', fontSize: 12 }}>
+            {f.label} ({count(f)})
+          </button>
+        ))}
+      </div>
+      {filtered.length === 0 && (
+        <div style={{ fontSize: 12.5, color: C.muted, padding: '14px 2px' }}>No orders {stageFilter === 'all' ? 'in the queue' : `left ${activeFilter.label.toLowerCase()}`} — nice work. 🎉</div>
+      )}
+      {filtered.map(s => {
         const w = wf[s.id] || {}
         const p = s.partId ? partById.get(s.partId) : null
         const thumb = p?.photos?.[0]?.url
