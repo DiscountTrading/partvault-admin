@@ -507,7 +507,7 @@ const STAGE_FILTERS = [
   { id: 'all', label: 'All' },
   { id: 'collect', label: 'To collect', test: (s, w) => !w.collected_at },
   { id: 'pack', label: 'To pack', test: (s, w) => !w.packed_at },
-  { id: 'post', label: 'To post', test: (s) => s.fulfillmentStatus !== 'FULFILLED' },
+  { id: 'post', label: 'To post', test: (s, w) => s.fulfillmentStatus !== 'FULFILLED' && !w.posted_at },
   { id: 'deliver', label: 'To deliver', test: (s, w) => !w.delivered_at },
 ]
 function FulfilmentQueue({ sales, partById, wf, setStage, now }) {
@@ -579,7 +579,10 @@ function FulfilmentQueue({ sales, partById, wf, setStage, now }) {
         const w = wf[s.id] || {}
         const p = s.partId ? partById.get(s.partId) : null
         const thumb = p?.photos?.[0]?.url
-        const posted = s.fulfillmentStatus === 'FULFILLED'
+        // Posted is done when eBay says FULFILLED OR we marked it shipped in-app.
+        // eBay's status is authoritative: once it lands, the pill locks.
+        const postedByEbay = s.fulfillmentStatus === 'FULFILLED'
+        const posted = postedByEbay || !!w.posted_at
         const delivered = !!w.delivered_at
         const days = Math.floor((now - new Date(s.soldAt).getTime()) / 86400000)
         return (
@@ -603,7 +606,9 @@ function FulfilmentQueue({ sales, partById, wf, setStage, now }) {
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
               <StagePill label="Collected" done={!!w.collected_at} onClick={() => stamp(s.id, 'collected_at', w.collected_at)} tip="Pulled from inventory — click to toggle" />
               <StagePill label="Packed" done={!!w.packed_at} onClick={() => stamp(s.id, 'packed_at', w.packed_at)} tip="Boxed and ready to post — click to toggle" />
-              <StagePill label="Posted" done={posted} locked tip={posted ? 'Marked shipped on eBay' : 'Set when you mark the order shipped on eBay'} />
+              <StagePill label="Posted" done={posted} locked={postedByEbay}
+                onClick={postedByEbay ? undefined : () => stamp(s.id, 'posted_at', w.posted_at)}
+                tip={postedByEbay ? 'Marked shipped on eBay — confirmed' : (w.posted_at ? 'Marked shipped in-app — eBay hasn’t confirmed yet. Click to undo.' : 'Not yet shipped on eBay — click to mark it shipped now, before eBay catches up')} />
               <StagePill label="Delivered" done={delivered} onClick={() => stamp(s.id, 'delivered_at', w.delivered_at)} tip="Confirmed arrived — click to toggle. Refresh clears delivered orders." />
               <div style={{ flex: 1 }} />
               <button title="Print a packing slip with the ship-to address" onClick={() => printPackingSlip(s, p)} style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 11 }}>🖨 Slip</button>

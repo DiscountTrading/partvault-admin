@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
 import { sb } from '../lib/supabase'
 
-// Local fulfilment state per sale (Collected/Packed/Delivered/Feedback) — see the
-// 20260707_sale_workflow migration. Keyed by sale_id (ebay_sales.id). "Posted" is
-// NOT here; it's read from the sale's fulfillment_status. Both admin and mobile
-// write this table, so changes stream in via realtime.
+// Local fulfilment state per sale (Collected/Packed/Delivered/Feedback + an
+// optional manual Posted override) — see the 20260707_sale_workflow and
+// 20260708_sale_posted migrations. Keyed by sale_id (ebay_sales.id). Posted is
+// primarily read from the sale's fulfillment_status; posted_at here only lets the
+// app mark it shipped before eBay confirms. Both admin and mobile write this
+// table, so changes stream in via realtime.
 export function useSaleWorkflow(storeId) {
   const [wf, setWf] = useState({})        // sale_id -> row
 
