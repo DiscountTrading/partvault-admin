@@ -315,8 +315,10 @@ function PieWithLegend({ title, slices }) {
   )
 }
 
-const BAR_PROMO = C.accent      // promoted segment
 const BAR_ORG = '#93b4e8'       // organic segment
+// Promoted split by ad rate (matches the tier pie): low ≤3% / med 3–8% / high >8%.
+const SEG = { organic: BAR_ORG, low: '#4b9e6a', med: '#d99a2b', high: '#e8590c' }
+const SEG_ROWS = [['organic', 'Organic'], ['low', 'Promoted low ≤3%'], ['med', 'Promoted med 3–8%'], ['high', 'Promoted high >8%']]
 // Vertical bar chart. Each bar is split into a promoted (bottom) + organic (top)
 // segment; the total sits on top and a tooltip appears ABOVE the hovered bar
 // (not under the cursor). A zero baseline lets loss buckets (negative Profit)
@@ -341,19 +343,19 @@ function BarChart({ bars, money }) {
       {hover != null && bars[hover] && (() => {
         const b = bars[hover]
         const leftPct = ((hover + 0.5) / bars.length) * 100
-        const row = (dot, label, val, cnt) => (
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14 }}>
-            <span><span style={{ color: dot }}>■</span> {label}</span>
-            <span>{fmtV(val)}{money ? ` · ${cnt}` : ''}</span>
+        const row = (key, label) => (b[key] || b[key + 'N']) ? (
+          <div key={key} style={{ display: 'flex', justifyContent: 'space-between', gap: 14 }}>
+            <span><span style={{ color: SEG[key] }}>■</span> {label}</span>
+            <span>{fmtV(b[key])}{money ? ` · ${b[key + 'N']}` : ''}</span>
           </div>
-        )
+        ) : null
+        const totalN = b.organicN + b.lowN + b.medN + b.highN
         return (
           <div style={{ position: 'absolute', bottom: H + 6, left: `${leftPct}%`, transform: 'translateX(-50%)', background: '#1c1c1e', color: '#fff', borderRadius: 8, padding: '8px 11px', fontSize: 11.5, lineHeight: 1.6, whiteSpace: 'nowrap', zIndex: 5, pointerEvents: 'none', boxShadow: '0 6px 18px rgba(0,0,0,0.28)' }}>
             <div style={{ fontWeight: 700, marginBottom: 3 }}>{b.secondary ? `${b.primary} ${b.secondary}` : b.primary}</div>
-            {row(BAR_PROMO, 'Promoted', b.promoted, b.promotedCount)}
-            {row(BAR_ORG, 'Organic', b.organic, b.organicCount)}
+            {SEG_ROWS.map(([key, label]) => row(key, label))}
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, borderTop: '1px solid rgba(255,255,255,0.22)', marginTop: 3, paddingTop: 3, fontWeight: 700 }}>
-              <span>Total</span><span>{fmtV(b.value)}{money ? ` · ${b.promotedCount + b.organicCount}` : ''}</span>
+              <span>Total</span><span>{fmtV(b.value)}{money ? ` · ${totalN}` : ''}</span>
             </div>
             <div style={{ position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)', borderLeft: '6px solid transparent', borderRight: '6px solid transparent', borderTop: '6px solid #1c1c1e' }} />
           </div>
@@ -364,13 +366,12 @@ function BarChart({ bars, money }) {
         {bars.map((b, i) => {
           const total = b.value
           const isNeg = total < 0
-          // Clean stack only when both segments are non-negative (Net & Orders always
+          // Clean stack only when every segment is non-negative (Net & Orders always
           // are; Profit usually is). Otherwise fall back to a single net bar.
-          const stack = total >= 0 && b.promoted >= 0 && b.organic >= 0
+          const groups = [['organic', b.organic, b.organicN], ['low', b.low, b.lowN], ['med', b.med, b.medN], ['high', b.high, b.highN]]
+          const stack = total >= 0 && groups.every(([, v]) => v >= 0)
           const posH = isNeg ? 0 : (total / span) * H
           const negH = isNeg ? (Math.abs(total) / span) * H : 0
-          const orgH = stack ? seg(b.organic) : 0
-          const promoH = stack ? seg(b.promoted) : 0
           const active = hover === i
           return (
             <div key={i} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(h => h === i ? null : h)}
@@ -379,12 +380,19 @@ function BarChart({ bars, money }) {
                 {showBarNums && total !== 0 && !isNeg && <span style={{ fontSize: 9, fontWeight: 700, color: C.text, opacity: active ? 1 : 0.85 }}>{fmtV(total)}</span>}
               </div>
               {!isNeg && total > 0 && (stack ? (
-                <>
-                  {orgH > 0 && <div style={{ height: orgH, background: BAR_ORG, borderRadius: '3px 3px 0 0', minHeight: 1, outline: active ? '1px solid rgba(0,0,0,0.15)' : 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{showBarNums && orgH >= 13 && <span style={{ fontSize: 8.5, fontWeight: 700, color: '#33526f' }}>{b.organicCount}</span>}</div>}
-                  {promoH > 0 && <div style={{ height: promoH, background: BAR_PROMO, borderRadius: orgH > 0 ? '0 0 3px 3px' : '3px', minHeight: 1, outline: active ? '1px solid rgba(0,0,0,0.15)' : 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{showBarNums && promoH >= 13 && <span style={{ fontSize: 8.5, fontWeight: 700, color: '#fff' }}>{b.promotedCount}</span>}</div>}
-                </>
+                <div style={{ height: posH, borderRadius: '3px 3px 0 0', overflow: 'hidden', outline: active ? '1px solid rgba(0,0,0,0.18)' : 'none', display: 'flex', flexDirection: 'column' }}>
+                  {groups.map(([key, v, n]) => {
+                    const sh = seg(v)
+                    if (sh <= 0) return null
+                    return (
+                      <div key={key} style={{ height: sh, background: SEG[key], minHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        {showBarNums && sh >= 13 && <span style={{ fontSize: 8.5, fontWeight: 700, color: key === 'organic' ? '#33526f' : '#fff' }}>{n}</span>}
+                      </div>
+                    )
+                  })}
+                </div>
               ) : (
-                <div style={{ height: posH, background: BAR_ORG, borderRadius: '3px 3px 0 0', minHeight: 2 }} />
+                <div style={{ height: posH, background: SEG.organic, borderRadius: '3px 3px 0 0', minHeight: 2 }} />
               ))}
               {negH > 0 && <div style={{ height: negH, background: C.red, borderRadius: '0 0 3px 3px', minHeight: 2 }} />}
             </div>
@@ -720,23 +728,27 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
     const keys = range.custom
       ? bucketsInRange(eg, range.fromMs, range.toMs)
       : (() => { const g = GRAINS.find(x => x.id === grain); const ks = []; for (let i = g.n - 1; i >= 0; i--) ks.push(bucketStartMs(grain, now, i)); return ks })()
-    const pv = new Map(keys.map(k => [k, 0])), ov = new Map(keys.map(k => [k, 0]))
-    const pc = new Map(keys.map(k => [k, 0])), oc = new Map(keys.map(k => [k, 0]))
+    // Per bucket: organic + promoted split by ad-rate tier (low ≤3% / med 3–8% /
+    // high >8%), each with a summed value and a sale count.
+    const blank = () => ({ organic: 0, low: 0, med: 0, high: 0, organicN: 0, lowN: 0, medN: 0, highN: 0 })
+    const tierOf = x => { if (!x.promoted) return 'organic'; const r = x.adRate ?? 0; return r <= 3 ? 'low' : r <= 8 ? 'med' : 'high' }
+    const acc = new Map(keys.map(k => [k, blank()]))
     for (const x of derivedAll) {
       if (x.t < range.fromMs || x.t > range.toMs) continue
-      const k = bucketKeyMs(eg, x.t)
-      if (!pv.has(k)) continue
-      const v = metricVal(metric, x)
-      if (x.promoted) { pv.set(k, pv.get(k) + v); pc.set(k, pc.get(k) + 1) }
-      else { ov.set(k, ov.get(k) + v); oc.set(k, oc.get(k) + 1) }
+      const a = acc.get(bucketKeyMs(eg, x.t))
+      if (!a) continue
+      const g = tierOf(x)
+      a[g] += metricVal(metric, x); a[g + 'N'] += 1
     }
     const m = METRICS.find(x => x.id === metric)
-    const bars = keys.map((k, i) => ({
-      primary: primaryLabel(eg, k), secondary: secondaryLabel(eg, k),
-      promoted: pv.get(k), organic: ov.get(k), value: pv.get(k) + ov.get(k),
-      promotedCount: pc.get(k), organicCount: oc.get(k),
-      current: !range.custom && i === keys.length - 1,
-    }))
+    const bars = keys.map((k, i) => {
+      const a = acc.get(k)
+      return {
+        primary: primaryLabel(eg, k), secondary: secondaryLabel(eg, k),
+        ...a, value: a.organic + a.low + a.med + a.high,
+        current: !range.custom && i === keys.length - 1,
+      }
+    })
     return { bars, money: m.money }
   }, [derivedAll, grain, metric, now, range])
 
@@ -894,9 +906,8 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
             <span style={{ fontSize: 12, color: C.muted }}>{compare.delta == null ? (range.custom ? 'no earlier data to compare' : 'no prior period to compare') : `vs ${showMetric(compare.prev, chart.money)} ${range.custom ? 'in the preceding period' : `at the same point last ${grainNoun[grain]}`}`}</span>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 14, justifyContent: 'flex-end', marginBottom: 6, fontSize: 11, color: C.muted }}>
-          <span><span style={{ color: BAR_PROMO }}>■</span> Promoted</span>
-          <span><span style={{ color: BAR_ORG }}>■</span> Organic</span>
+        <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end', flexWrap: 'wrap', marginBottom: 6, fontSize: 11, color: C.muted }}>
+          {SEG_ROWS.map(([key, label]) => <span key={key}><span style={{ color: SEG[key] }}>■</span> {label}</span>)}
         </div>
         <div style={{ maxWidth: 560 }}>
           <BarChart bars={chart.bars} money={chart.money} />
