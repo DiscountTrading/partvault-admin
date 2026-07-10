@@ -12,7 +12,16 @@ const CAPS = [
 
 const PRESETS = {
   Worker: { add_edit: true },
+  VA: { add_edit: true, publish: true },
   Admin: { add_edit: true, delete: true, publish: true, settings: true, manage_users: true },
+}
+
+// What each preset grants, in plain English — shown when inviting so an owner
+// understands the access level (esp. that a VA never touches the eBay login).
+const PRESET_DESC = {
+  Worker: 'Capture & edit parts only — no listing to eBay.',
+  VA: 'Capture, edit & list/de-list on eBay. No access to your eBay login, store settings, deletion, or user management — safe for an outside helper / VA.',
+  Admin: 'Full access to everything, including settings and users.',
 }
 
 const ADMIN_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/admin-users'
@@ -144,6 +153,7 @@ export default function TeamAccess({ storeId }) {
                   style={{ flex: 1, padding: '8px 0', borderRadius: 8, border: `1.5px solid ${invitePreset === p ? C.accent : C.border}`, background: invitePreset === p ? C.accent : '#fff', color: invitePreset === p ? '#fff' : C.text, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>{p}</button>
               ))}
             </div>
+            <div style={{ fontSize: 12, color: C.text, marginTop: 8, background: '#f4f4f5', borderRadius: 8, padding: '8px 10px', lineHeight: 1.45 }}>{PRESET_DESC[invitePreset]}</div>
             <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>You can fine-tune their permissions in the table after they join.</div>
             {inviteErr && <div style={{ fontSize: 13, color: C.red, marginTop: 12 }}>{inviteErr}</div>}
             <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
@@ -157,6 +167,9 @@ export default function TeamAccess({ storeId }) {
       )}
 
       <Section title="User Access">
+        <div style={{ fontSize: 12.5, color: C.muted, marginBottom: 12, lineHeight: 1.5 }}>
+          Tick exactly what each person can do — access is enforced in the database, so unticking a box truly removes the ability. Use <strong>Quick set → VA</strong> for an outside helper: they can capture, edit and list to eBay, but never see your eBay login, settings, deletion or user management.
+        </div>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
