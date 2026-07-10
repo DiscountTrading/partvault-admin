@@ -201,7 +201,7 @@ function AddCarModal({ storeId, onSave, onCancel }) {
         </div>
         <Field label="Notes"><textarea style={{ ...S.textarea, minHeight: 60 }} value={form.notes} onChange={e => set('notes', e.target.value)} placeholder="Condition, source, notes..." /></Field>
         <div style={{ marginBottom: 8 }}>
-          <label style={S.label}>Car Photos <span style={{ fontSize: 11, color: C.muted, fontWeight: 400 }}>(attached to all parts — uploaded to Supabase Storage)</span></label>
+          <label style={S.label}>Car Photos <span style={{ fontSize: 11, color: C.muted, fontWeight: 400 }}>(attached to all parts)</span></label>
           <input ref={photoRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={handlePhoto} />
           {photos.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>

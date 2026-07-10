@@ -1954,12 +1954,6 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
               </button>
             </div>
           </Section>
-          <Section title="Supabase Connection">
-            <div style={{ fontSize: 14, color: C.muted, lineHeight: 1.9 }}>
-              <div style={{ color: C.green }}>● Real-time sync active</div>
-              <div>Changes from the mobile app appear instantly.</div>
-            </div>
-          </Section>
           <div style={S.card}>
             <div style={{ fontSize: 12, color: C.muted }}>PartVault Admin v{APP_VERSION}</div>
           </div>
