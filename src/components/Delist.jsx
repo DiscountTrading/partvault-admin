@@ -3,6 +3,10 @@ import { sb } from '../lib/supabase'
 import { C, S, fmt } from '../lib/constants'
 
 const EDGE_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import'
+// Only the columns the table + de-list actually need — NOT select('*'), which drags
+// the heavy photos/costs/description/ebay_overrides JSON for every live listing.
+const LIST_COLS = 'id, sku, title, make, model, list_price, status, primary_photo'
+const RENDER_CAP = 300 // cap DOM rows; search narrows the rest (thousands of live listings otherwise)
 
 const urlFrom = (v) => {
   if (!v) return null
@@ -24,8 +28,8 @@ export default function Delist({ storeId, onChanged }) {
 
   const load = async () => {
     setLoading(true)
-    let { data, error } = await sb.from('parts_for_listing').select('*').eq('store_id', storeId).eq('status', 'listed').is('deleted_at', null).order('created_at', { ascending: false })
-    if (error) ({ data } = await sb.from('parts').select('*').eq('store_id', storeId).eq('status', 'listed').is('deleted_at', null).order('created_at', { ascending: false }))
+    let { data, error } = await sb.from('parts_for_listing').select(LIST_COLS).eq('store_id', storeId).eq('status', 'listed').is('deleted_at', null).order('created_at', { ascending: false })
+    if (error) ({ data } = await sb.from('parts').select('id, sku, title, make, model, list_price, status, photos').eq('store_id', storeId).eq('status', 'listed').is('deleted_at', null).order('created_at', { ascending: false }))
     setParts(data || [])
     setSel(new Set())
     setLoading(false)
@@ -36,14 +40,18 @@ export default function Delist({ storeId, onChanged }) {
     load()
     sb.rpc('has_permission', { p_store_id: storeId, p_capability: 'publish' }).then(({ data }) => setCanDelist(!!data))
     sb.rpc('has_permission', { p_store_id: storeId, p_capability: 'delete' }).then(({ data }) => setCanBin(!!data))
+    // Debounce realtime reloads — a sync touches many parts at once and would
+    // otherwise re-fetch the whole list on every single change.
+    let t
     const channel = sb.channel(`delist-parts-${storeId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'parts', filter: `store_id=eq.${storeId}` }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'parts', filter: `store_id=eq.${storeId}` }, () => { clearTimeout(t); t = setTimeout(load, 900) })
       .subscribe()
-    return () => sb.removeChannel(channel)
+    return () => { clearTimeout(t); sb.removeChannel(channel) }
   }, [storeId])
 
   const q = search.trim().toLowerCase()
   const visible = useMemo(() => q ? parts.filter(p => [p.title, p.sku, p.make, p.model].some(v => (v || '').toLowerCase().includes(q))) : parts, [parts, q])
+  const shown = visible.slice(0, RENDER_CAP)
   const toggle = (id) => setSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
   const allSelected = visible.length > 0 && visible.every(p => sel.has(p.id))
   const toggleAll = () => setSel(s => { const n = new Set(s); allSelected ? visible.forEach(p => n.delete(p.id)) : visible.forEach(p => n.add(p.id)); return n })
@@ -101,6 +109,14 @@ export default function Delist({ storeId, onChanged }) {
         </button>
       </div>
 
+      {!loading && parts.length > 0 && (
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>
+          {q ? `${visible.length} match${visible.length === 1 ? '' : 'es'} of ${parts.length} live listing${parts.length === 1 ? '' : 's'}` : `${parts.length} live listing${parts.length === 1 ? '' : 's'}`}
+          {visible.length > RENDER_CAP && ` · showing first ${RENDER_CAP} — search to narrow`}
+          {sel.size > 0 && ` · ${sel.size} selected`}
+        </div>
+      )}
+
       {loading ? <div style={{ color: C.muted, padding: 20 }}>Loading…</div> : parts.length === 0 ? (
         <div style={{ textAlign: 'center', color: C.muted, padding: 60 }}>No live listings. Parts you've listed appear here.</div>
       ) : (
@@ -114,7 +130,7 @@ export default function Delist({ storeId, onChanged }) {
               </tr>
             </thead>
             <tbody>
-              {visible.map(p => {
+              {shown.map(p => {
                 const thumb = photoOf(p)
                 return (
                   <tr key={p.id} style={{ borderBottom: `1px solid ${C.border}`, background: sel.has(p.id) ? '#fff4ef' : '#fff' }}>
