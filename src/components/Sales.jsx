@@ -177,20 +177,7 @@ function deriveSale(s, partById, costing) {
 const DAY = 86400000
 const startOfDayMs = t => { const x = new Date(t); x.setHours(0, 0, 0, 0); return x.getTime() }
 const startOfWeekMs = t => { const x = new Date(t); x.setHours(0, 0, 0, 0); const dow = (x.getDay() + 6) % 7; x.setDate(x.getDate() - dow); return x.getTime() } // Monday start
-const GRAINS = [
-  { id: 'day', label: 'Day', n: 30 },
-  { id: 'week', label: 'Week', n: 13 },
-  { id: 'month', label: 'Month', n: 12 },
-  { id: 'year', label: 'Year', n: 5 },
-]
-// Start (ms) of the bucket `i` steps back from the bucket containing `now`.
-const bucketStartMs = (grain, now, i) => {
-  const d = new Date(now)
-  if (grain === 'day') return startOfDayMs(d.getTime() - i * DAY)
-  if (grain === 'week') return startOfWeekMs(d.getTime() - i * 7 * DAY)
-  if (grain === 'month') return new Date(d.getFullYear(), d.getMonth() - i, 1).getTime()
-  return new Date(d.getFullYear() - i, 0, 1).getTime()
-}
+// The bucket-start key for time `t` at the given grain (day/week/month/year).
 const bucketKeyMs = (grain, t) => {
   const d = new Date(t)
   if (grain === 'day') return startOfDayMs(t)
@@ -199,8 +186,6 @@ const bucketKeyMs = (grain, t) => {
   return new Date(d.getFullYear(), 0, 1).getTime()
 }
 const grainNoun = { day: 'day', week: 'week', month: 'month', year: 'year' }
-// Human label for the window a grain covers, e.g. month → "last 12 months".
-const grainWindowLabel = id => { const g = GRAINS.find(x => x.id === id); return `last ${g.n} ${id}${g.n === 1 ? '' : 's'}` }
 
 // Auto-pick a sensible bucket grain for a custom from–to range from its span.
 const pickGrain = (fromMs, toMs) => {
@@ -458,6 +443,33 @@ function PromotedPanel({ promo, periodLabel }) {
               { label: 'Med 3–8%', value: promo.tiers.med, color: '#d99a2b' },
               { label: 'High >8%', value: promo.tiers.high, color: '#e8590c' },
             ]} />}
+            {promo.promoted > 0 && (() => {
+              // Compact avg days-to-sell by group — sits alongside the pies (shorter = faster).
+              const rows = [['Organic', 'organic', '#93b4e8'], ['Low ≤3%', 'low', '#4b9e6a'], ['Med 3–8%', 'med', '#d99a2b'], ['High >8%', 'high', '#e8590c']]
+              const known = rows.map(([, k]) => promo.dtsByGroup?.[k]?.d).filter(d => d != null)
+              if (!known.length) return null
+              const maxD = Math.max(...known, 1)
+              return (
+                <div style={{ flex: '1 1 190px', minWidth: 180 }}>
+                  <div style={{ fontSize: 12, color: C.muted, fontWeight: 600, marginBottom: 8 }}>Avg days to sell</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                    {rows.map(([label, key, color]) => {
+                      const g = promo.dtsByGroup?.[key] || { d: null, n: 0 }
+                      const pct = g.d != null ? Math.max(4, (g.d / maxD) * 100) : 0
+                      return (
+                        <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5 }}>
+                          <span style={{ width: 58, flexShrink: 0, color: C.text }}>{label}</span>
+                          <div style={{ flex: 1, background: C.bg, borderRadius: 4, height: 12, overflow: 'hidden' }} title={`${g.n} sold`}>
+                            {g.d != null && <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 4 }} />}
+                          </div>
+                          <span style={{ width: 40, textAlign: 'right', flexShrink: 0, color: C.text, fontWeight: 600 }}>{g.d != null ? `${Math.round(g.d)}d` : '—'}</span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            })()}
           </div>
 
           {promo.promoted > 0 ? (
@@ -475,42 +487,6 @@ function PromotedPanel({ promo, periodLabel }) {
                   {profitDiff != null && <span style={{ color: profitDiff >= 0 ? C.green : C.text, fontWeight: 600 }}>net {signedMoney(profitDiff)} {profitDiff >= 0 ? 'more' : 'less'} per order</span>}.
                 </div>
               )}
-
-              {/* Avg days-to-sell by promotion level — does a higher ad rate sell faster? */}
-              {(() => {
-                const groupRows = [
-                  ['Organic', 'organic', '#93b4e8'],
-                  ['Low ≤3%', 'low', '#4b9e6a'],
-                  ['Med 3–8%', 'med', '#d99a2b'],
-                  ['High >8%', 'high', '#e8590c'],
-                ]
-                const known = groupRows.map(([, k]) => promo.dtsByGroup?.[k]?.d).filter(d => d != null)
-                if (!known.length) return null
-                const maxD = Math.max(...known, 1)
-                return (
-                  <div style={{ marginTop: 16 }}>
-                    <div style={{ fontSize: 12, color: C.muted, fontWeight: 600, marginBottom: 8 }}>Avg days to sell by promotion level</div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      {groupRows.map(([label, key, color]) => {
-                        const g = promo.dtsByGroup?.[key] || { d: null, n: 0 }
-                        const pct = g.d != null ? Math.max(3, (g.d / maxD) * 100) : 0
-                        return (
-                          <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12 }}>
-                            <span style={{ width: 74, flexShrink: 0, color: C.text }}>{label}</span>
-                            <div style={{ flex: 1, background: C.bg, borderRadius: 5, height: 16, overflow: 'hidden' }}>
-                              {g.d != null && <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 5 }} />}
-                            </div>
-                            <span style={{ width: 86, textAlign: 'right', flexShrink: 0 }}>
-                              {g.d != null ? <><strong style={{ color: C.text }}>{Math.round(g.d)}d</strong> <span style={{ color: C.muted }}>· {g.n}</span></> : <span style={{ color: C.muted }}>— · {g.n}</span>}
-                            </span>
-                          </div>
-                        )
-                      })}
-                    </div>
-                    <div style={{ fontSize: 10.5, color: C.muted, marginTop: 6 }}>Shorter bar = sells faster. Count is sold items with a known listing date.</div>
-                  </div>
-                )
-              })()}
             </>
           ) : (
             <div style={{ fontSize: 13, color: C.muted }}>No promoted-listing sales in this period — nothing to compare against organic yet.</div>
@@ -683,10 +659,10 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
 
   const partById = useMemo(() => new Map(parts.filter(p => !p.deletedAt).map(p => [p.id, p])), [parts])
 
-  // Performance graphs (top of tab) — derive money + turnover per sale once, then
-  // slice it by calendar bucket. Independent of the table's period/search filters.
-  // `grain` is Day/Week/Month/Year or 'custom' (a free from–to range).
-  const [grain, setGrain] = useState('month')
+  // Performance graphs (top of tab). ONE time control — the `period` pills
+  // (30d/90d/12mo/All/Custom) — drives EVERYTHING on the page: the chart, the
+  // promoted panel, the days-to-sell breakdown AND the sales table. The chart
+  // auto-buckets (day/week/month/year) to fit the chosen period.
   const [metric, setMetric] = useState('net')
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
@@ -708,26 +684,29 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
     }
   }).filter(x => x.t), [sales, partById, costing])
 
-  // The active time window + the bucket grain to draw it at. Standard grains span
-  // their last-N buckets ending now; 'custom' spans the chosen from–to dates and
-  // auto-picks a bucket size to fit. The chart, headline and promoted panel all
-  // read this, so every one of them moves together when the window changes.
+  // The active time window + the bucket size to draw it at, derived from `period`.
+  // Everything (chart/headline/promoted/table) reads this, so one control moves
+  // the whole page. Custom = a free from–to range; All = since the first sale.
   const range = useMemo(() => {
-    if (grain === 'custom') {
+    if (period === 'custom') {
       const fromMs = customFrom ? startOfDayMs(new Date(`${customFrom}T00:00:00`).getTime()) : startOfDayMs(now - 29 * DAY)
       const toRaw = customTo ? startOfDayMs(new Date(`${customTo}T00:00:00`).getTime()) + DAY - 1 : now
       const toMs = Math.max(fromMs, Math.min(toRaw, now))
       return { fromMs, toMs, eg: pickGrain(fromMs, toMs), custom: true }
     }
-    const g = GRAINS.find(x => x.id === grain)
-    return { fromMs: bucketStartMs(grain, now, g.n - 1), toMs: now, eg: grain, custom: false }
-  }, [grain, customFrom, customTo, now])
+    if (period === 0) { // All time — since the earliest sale
+      let earliest = now
+      for (const x of derivedAll) if (x.t < earliest) earliest = x.t
+      return { fromMs: startOfDayMs(Math.min(earliest, now)), toMs: now, eg: pickGrain(earliest, now), custom: false, all: true }
+    }
+    const fromMs = startOfDayMs(now - (period - 1) * DAY)
+    return { fromMs, toMs: now, eg: pickGrain(fromMs, now), custom: false }
+  }, [period, customFrom, customTo, now, derivedAll])
 
   const chart = useMemo(() => {
     const eg = range.eg
-    const keys = range.custom
-      ? bucketsInRange(eg, range.fromMs, range.toMs)
-      : (() => { const g = GRAINS.find(x => x.id === grain); const ks = []; for (let i = g.n - 1; i >= 0; i--) ks.push(bucketStartMs(grain, now, i)); return ks })()
+    const keys = bucketsInRange(eg, range.fromMs, range.toMs)
+    const nowKey = bucketKeyMs(eg, now)
     // Per bucket: organic + promoted split by ad-rate tier (low ≤3% / med 3–8% /
     // high >8%), each with a summed value and a sale count.
     const blank = () => ({ organic: 0, low: 0, med: 0, high: 0, organicN: 0, lowN: 0, medN: 0, highN: 0 })
@@ -741,55 +720,45 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
       a[g] += metricVal(metric, x); a[g + 'N'] += 1
     }
     const m = METRICS.find(x => x.id === metric)
-    const bars = keys.map((k, i) => {
+    const bars = keys.map((k) => {
       const a = acc.get(k)
       return {
         primary: primaryLabel(eg, k), secondary: secondaryLabel(eg, k),
         ...a, value: a.organic + a.low + a.med + a.high,
-        current: !range.custom && i === keys.length - 1,
+        current: k === nowKey,
       }
     })
     return { bars, money: m.money }
-  }, [derivedAll, grain, metric, now, range])
+  }, [derivedAll, metric, now, range])
 
-  // Headline: the window's total vs the equivalent earlier window. For standard
-  // grains that's the current bucket-to-date vs the same elapsed point last bucket;
-  // for custom it's the range vs the immediately-preceding range of equal length.
+  // Headline: the window's total vs the immediately-preceding window of equal length.
   const compare = useMemo(() => {
-    if (range.custom) {
-      const len = (range.toMs - range.fromMs) || DAY
-      let cur = 0, prev = 0
-      for (const x of derivedAll) {
-        const v = metricVal(metric, x)
-        if (x.t >= range.fromMs && x.t <= range.toMs) cur += v
-        else if (x.t >= range.fromMs - len && x.t < range.fromMs) prev += v
-      }
-      return { cur, prev, delta: prev !== 0 ? ((cur - prev) / Math.abs(prev)) * 100 : null }
-    }
-    const curStart = bucketStartMs(grain, now, 0)
-    const prevStart = bucketStartMs(grain, now, 1)
-    const prevEnd = prevStart + (now - curStart)
+    const len = (range.toMs - range.fromMs) || DAY
     let cur = 0, prev = 0
     for (const x of derivedAll) {
       const v = metricVal(metric, x)
-      if (x.t >= curStart && x.t <= now) cur += v
-      else if (x.t >= prevStart && x.t <= prevEnd) prev += v
+      if (x.t >= range.fromMs && x.t <= range.toMs) cur += v
+      else if (x.t >= range.fromMs - len && x.t < range.fromMs) prev += v
     }
     return { cur, prev, delta: prev !== 0 ? ((cur - prev) / Math.abs(prev)) * 100 : null }
-  }, [derivedAll, grain, metric, now, range])
+  }, [derivedAll, metric, range])
 
+  // The sales table honours the SAME period window (+ the search box).
   const rows = useMemo(() => {
-    const cutoff = period ? now - period * 86400000 : 0
     const q = query.trim().toLowerCase()
     return sales
-      .filter(s => !s.cancelled && (!period || (s.soldAt && new Date(s.soldAt).getTime() >= cutoff)))
+      .filter(s => {
+        if (s.cancelled || !s.soldAt) return false
+        const t = new Date(s.soldAt).getTime()
+        return t >= range.fromMs && t <= range.toMs
+      })
       .filter(s => {
         if (!q) return true
         // Search the local record where we have one, plus the eBay text as a fallback.
         const p = s.partId && partById.get(s.partId)
         return `${p ? `${p.title} ${p.sku}` : ''} ${s.title} ${s.sku}`.toLowerCase().includes(q)
       })
-  }, [sales, period, query, partById, now])
+  }, [sales, range, query, partById])
 
   const totals = useMemo(() => rows.reduce((a, s) => {
     const d = deriveSale(s, partById, costing)
@@ -861,6 +830,8 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
     document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(a.href)
   }
 
+  const PERIOD_TITLES = { 0: 'All time', 30: 'Last 30 days', 90: 'Last 90 days', 365: 'Last 12 months' }
+  const periodTitle = period === 'custom' ? 'Selected range' : (PERIOD_TITLES[period] || `Last ${period} days`)
   const th = { textAlign: 'left', padding: '9px 12px', color: C.muted, fontWeight: 700, fontSize: 11, whiteSpace: 'nowrap' }
   const td = (align = 'left') => ({ textAlign: align, padding: '9px 12px', color: C.text, whiteSpace: 'nowrap' })
 
@@ -873,19 +844,19 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
       <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12, padding: '16px 18px', marginBottom: 16 }}>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {GRAINS.map(g => <button key={g.id} onClick={() => setGrain(g.id)} style={pillStyle(grain === g.id)}>{g.label}</button>)}
+            {PERIODS.map(([d, lbl]) => <button key={d} onClick={() => setPeriod(d)} style={pillStyle(period === d)}>{lbl}</button>)}
             <button onClick={() => {
               if (!customFrom) setCustomFrom(new Date(now - 29 * DAY).toISOString().slice(0, 10))
               if (!customTo) setCustomTo(new Date(now).toISOString().slice(0, 10))
-              setGrain('custom')
-            }} style={pillStyle(grain === 'custom')}>Custom</button>
+              setPeriod('custom')
+            }} style={pillStyle(period === 'custom')}>Custom</button>
           </div>
           <div style={{ flex: 1 }} />
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {METRICS.map(m => <button key={m.id} onClick={() => setMetric(m.id)} style={pillStyle(metric === m.id)}>{m.label}</button>)}
           </div>
         </div>
-        {grain === 'custom' && (
+        {period === 'custom' && (
           <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap', marginBottom: 16 }}>
             <label style={{ fontSize: 12, color: C.muted, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
               From <input type="date" value={customFrom} max={customTo || undefined} onChange={e => setCustomFrom(e.target.value)}
@@ -899,11 +870,11 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
           </div>
         )}
         <div style={{ marginBottom: 14 }}>
-          <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.3 }}>{range.custom ? 'Selected range' : `This ${grainNoun[grain]} so far`}</div>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.3 }}>{periodTitle}</div>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 28, fontWeight: 800, color: C.text }}>{showMetric(compare.cur, chart.money)}</span>
             {compare.delta != null && <DeltaBadge delta={compare.delta} />}
-            <span style={{ fontSize: 12, color: C.muted }}>{compare.delta == null ? (range.custom ? 'no earlier data to compare' : 'no prior period to compare') : `vs ${showMetric(compare.prev, chart.money)} ${range.custom ? 'in the preceding period' : `at the same point last ${grainNoun[grain]}`}`}</span>
+            <span style={{ fontSize: 12, color: C.muted }}>{compare.delta == null ? 'no earlier data to compare' : `vs ${showMetric(compare.prev, chart.money)} in the preceding period`}</span>
           </div>
         </div>
         <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end', flexWrap: 'wrap', marginBottom: 6, fontSize: 11, color: C.muted }}>
@@ -914,17 +885,12 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
         </div>
       </div>
 
-      <PromotedPanel promo={promo} periodLabel={range.custom ? `${fmtDate(range.fromMs)} – ${fmtDate(range.toMs)}` : grainWindowLabel(grain)} />
+      <PromotedPanel promo={promo} periodLabel={range.custom ? `${fmtDate(range.fromMs)} – ${fmtDate(range.toMs)}` : periodTitle} />
 
       <FulfilmentQueue sales={sales} partById={partById} wf={wf} setStage={setStage} now={now} />
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
-        {PERIODS.map(([d, lbl]) => (
-          <button key={d} onClick={() => setPeriod(d)}
-            style={{ padding: '7px 14px', borderRadius: 20, border: `1.5px solid ${period === d ? C.accent : C.border}`, background: period === d ? C.accent : '#fff', color: period === d ? '#fff' : C.muted, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-            {lbl}
-          </button>
-        ))}
+        <div style={{ fontSize: 13, color: C.muted, fontWeight: 600 }}>{periodTitle} · {rows.length} sale{rows.length === 1 ? '' : 's'}</div>
         <div style={{ flex: 1 }} />
         <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search item or SKU…"
           style={{ ...S.input, marginBottom: 0, padding: '7px 12px', width: 220 }} />

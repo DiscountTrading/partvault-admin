@@ -1,18 +1,14 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { sb } from '../lib/supabase'
 import { C, S, fmt } from '../lib/constants'
 
 const EDGE_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import'
-// Only the columns the table + de-list actually need — NOT select('*'), which drags
-// the heavy photos/costs/description/ebay_overrides JSON for every live listing.
-const LIST_COLS = 'id, sku, title, make, model, list_price, status, primary_photo'
+// Only the columns the table needs, queried straight from `parts` — NOT the
+// parts_for_listing view, whose per-row primary_photo subquery ran thousands of
+// times and was the real cause of the slow load. Thumbnails load lazily, only for
+// the rows actually on screen.
+const LIST_COLS = 'id, sku, title, make, model, list_price, status'
 const RENDER_CAP = 300 // cap DOM rows; search narrows the rest (thousands of live listings otherwise)
-
-const urlFrom = (v) => {
-  if (!v) return null
-  if (typeof v === 'object') return v.url || v.ebay_url || null
-  try { const o = JSON.parse(v); return o.url || o.ebay_url || v } catch { return v }
-}
 
 export default function Delist({ storeId, onChanged }) {
   const [parts, setParts] = useState([])
@@ -25,11 +21,14 @@ export default function Delist({ storeId, onChanged }) {
   const [confirm, setConfirm] = useState(false)
   const [working, setWorking] = useState(false)
   const [result, setResult] = useState(null)
+  const [photoMap, setPhotoMap] = useState({}) // partId -> thumb url (lazy, visible rows only)
+  const photoMapRef = useRef({})
 
   const load = async () => {
     setLoading(true)
-    let { data, error } = await sb.from('parts_for_listing').select(LIST_COLS).eq('store_id', storeId).eq('status', 'listed').is('deleted_at', null).order('created_at', { ascending: false })
-    if (error) ({ data } = await sb.from('parts').select('id, sku, title, make, model, list_price, status, photos').eq('store_id', storeId).eq('status', 'listed').is('deleted_at', null).order('created_at', { ascending: false }))
+    const { data } = await sb.from('parts').select(LIST_COLS)
+      .eq('store_id', storeId).eq('status', 'listed').is('deleted_at', null)
+      .order('created_at', { ascending: false })
     setParts(data || [])
     setSel(new Set())
     setLoading(false)
@@ -52,11 +51,35 @@ export default function Delist({ storeId, onChanged }) {
   const q = search.trim().toLowerCase()
   const visible = useMemo(() => q ? parts.filter(p => [p.title, p.sku, p.make, p.model].some(v => (v || '').toLowerCase().includes(q))) : parts, [parts, q])
   const shown = visible.slice(0, RENDER_CAP)
+
+  // Lazily fetch thumbnails for the rows actually on screen (one batched query,
+  // cached so search/refresh don't re-fetch). Keeps the initial list fast.
+  useEffect(() => {
+    const vis = (q ? parts.filter(p => [p.title, p.sku, p.make, p.model].some(v => (v || '').toLowerCase().includes(q))) : parts).slice(0, RENDER_CAP)
+    const ids = vis.map(p => p.id).filter(id => !(id in photoMapRef.current))
+    if (!ids.length) return
+    let cancelled = false
+    ;(async () => {
+      const found = {}
+      for (let i = 0; i < ids.length; i += 200) {
+        const { data } = await sb.from('photos').select('parent_id, thumb_url, url, is_primary')
+          .eq('parent_type', 'part').in('parent_id', ids.slice(i, i + 200))
+        for (const ph of (data || [])) if (!found[ph.parent_id] || ph.is_primary) found[ph.parent_id] = ph.thumb_url || ph.url
+      }
+      if (cancelled) return
+      const next = { ...photoMapRef.current }
+      for (const id of ids) if (!(id in next)) next[id] = null // resolved (maybe no photo) → don't refetch
+      Object.assign(next, found)
+      photoMapRef.current = next
+      setPhotoMap(next)
+    })()
+    return () => { cancelled = true }
+  }, [parts, q])
   const toggle = (id) => setSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
   const allSelected = visible.length > 0 && visible.every(p => sel.has(p.id))
   const toggleAll = () => setSel(s => { const n = new Set(s); allSelected ? visible.forEach(p => n.delete(p.id)) : visible.forEach(p => n.add(p.id)); return n })
   const selectedParts = parts.filter(p => sel.has(p.id))
-  const photoOf = p => p.primary_photo || urlFrom((p.photos || [])[0])
+  const photoOf = p => photoMap[p.id] || null
 
   const run = async () => {
     setWorking(true); setResult(null)
