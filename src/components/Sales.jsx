@@ -467,6 +467,42 @@ function PromotedPanel({ promo, periodLabel }) {
                   {profitDiff != null && <span style={{ color: profitDiff >= 0 ? C.green : C.text, fontWeight: 600 }}>net {signedMoney(profitDiff)} {profitDiff >= 0 ? 'more' : 'less'} per order</span>}.
                 </div>
               )}
+
+              {/* Avg days-to-sell by promotion level — does a higher ad rate sell faster? */}
+              {(() => {
+                const groupRows = [
+                  ['Organic', 'organic', '#93b4e8'],
+                  ['Low ≤3%', 'low', '#4b9e6a'],
+                  ['Med 3–8%', 'med', '#d99a2b'],
+                  ['High >8%', 'high', '#e8590c'],
+                ]
+                const known = groupRows.map(([, k]) => promo.dtsByGroup?.[k]?.d).filter(d => d != null)
+                if (!known.length) return null
+                const maxD = Math.max(...known, 1)
+                return (
+                  <div style={{ marginTop: 16 }}>
+                    <div style={{ fontSize: 12, color: C.muted, fontWeight: 600, marginBottom: 8 }}>Avg days to sell by promotion level</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {groupRows.map(([label, key, color]) => {
+                        const g = promo.dtsByGroup?.[key] || { d: null, n: 0 }
+                        const pct = g.d != null ? Math.max(3, (g.d / maxD) * 100) : 0
+                        return (
+                          <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12 }}>
+                            <span style={{ width: 74, flexShrink: 0, color: C.text }}>{label}</span>
+                            <div style={{ flex: 1, background: C.bg, borderRadius: 5, height: 16, overflow: 'hidden' }}>
+                              {g.d != null && <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 5 }} />}
+                            </div>
+                            <span style={{ width: 86, textAlign: 'right', flexShrink: 0 }}>
+                              {g.d != null ? <><strong style={{ color: C.text }}>{Math.round(g.d)}d</strong> <span style={{ color: C.muted }}>· {g.n}</span></> : <span style={{ color: C.muted }}>— · {g.n}</span>}
+                            </span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <div style={{ fontSize: 10.5, color: C.muted, marginTop: 6 }}>Shorter bar = sells faster. Count is sold items with a known listing date.</div>
+                  </div>
+                )
+              })()}
             </>
           ) : (
             <div style={{ fontSize: 13, color: C.muted }}>No promoted-listing sales in this period — nothing to compare against organic yet.</div>
@@ -766,14 +802,22 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
     const adSpend = sum(pro, x => x.adFee)
     const proRev = sum(pro, x => x.net + x.adFee)
     // Split promoted sales by ad rate (ad fee as % of sale): Low ≤3%, Med 3–8%, High >8%.
+    const tierOf = x => { const r = x.adRate ?? 0; return r <= 3 ? 'low' : r <= 8 ? 'med' : 'high' }
     const tiers = { low: 0, med: 0, high: 0 }
-    for (const x of pro) { const r = x.adRate ?? 0; if (r <= 3) tiers.low++; else if (r <= 8) tiers.med++; else tiers.high++ }
+    for (const x of pro) tiers[tierOf(x)]++
+    // Avg days-to-sell per group (organic + each promoted ad-rate tier) — shows
+    // whether a higher ad rate actually turns stock over faster.
+    const groups = { organic: org, low: pro.filter(x => tierOf(x) === 'low'), med: pro.filter(x => tierOf(x) === 'med'), high: pro.filter(x => tierOf(x) === 'high') }
+    const dtsByGroup = Object.fromEntries(Object.entries(groups).map(([k, arr]) => {
+      const ds = arr.map(x => x.dts).filter(v => v != null)
+      return [k, { d: ds.length ? ds.reduce((a, n) => a + n, 0) / ds.length : null, n: ds.length }]
+    }))
     return {
       orders: inWin.length, promoted: pro.length, organic: org.length,
       adSpend, adPct: proRev > 0 ? (adSpend / proRev) * 100 : null,
       proProfit: avg(pro, x => x.profit), orgProfit: avg(org, x => x.profit),
       proDts: avg(pro, x => x.dts), orgDts: avg(org, x => x.dts),
-      tiers,
+      tiers, dtsByGroup,
     }
   }, [derivedAll, range])
 
