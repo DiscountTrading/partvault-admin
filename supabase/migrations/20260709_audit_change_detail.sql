@@ -64,7 +64,7 @@ as $$
     a.changed_at,
     u.email,
     case
-      when a.table_name = 'sync' then 'sync'
+      when a.table_name = 'sync' then 'sync_' || coalesce(a.new_data->>'kind', 'manual')  -- sync_nightly / sync_manual / sync_live
       when a.table_name = 'store_members' then
         case lower(a.action) when 'insert' then 'member_added' when 'delete' then 'member_removed' else 'member_updated' end
       when lower(a.action) = 'update' and (a.new_data->>'deleted_at') is not null and (a.old_data->>'deleted_at') is null then 'delete'

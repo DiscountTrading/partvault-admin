@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { C, S } from '../lib/constants'
 import { sb } from '../lib/supabase'
 
@@ -11,6 +11,14 @@ export default function HelpAssistant({ storeId, context, compact = false }) {
   const [msgs, setMsgs] = useState([])
   const [q, setQ] = useState('')
   const [busy, setBusy] = useState(false)
+  const scrollRef = useRef(null)
+
+  // Keep the newest message (your question + the answer) in view — scroll the
+  // thread to the bottom whenever it changes instead of leaving it at the top.
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [msgs, busy])
 
   const ask = async () => {
     const question = q.trim()
@@ -37,7 +45,7 @@ export default function HelpAssistant({ storeId, context, compact = false }) {
     <div>
       {!compact && <div style={{ fontSize: 13, color: C.muted, marginBottom: 8 }}>Ask a quick question and the assistant will answer from PartVault's help. For anything it can't solve, use <b>Message us</b>.</div>}
       {msgs.length > 0 && (
-        <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, maxHeight: 300, overflowY: 'auto', marginBottom: 10 }}>
+        <div ref={scrollRef} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: 12, maxHeight: 300, overflowY: 'auto', marginBottom: 10 }}>
           {msgs.map((m, i) => (
             <div key={i} style={{ display: 'flex', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start', marginBottom: 8 }}>
               <div style={{ maxWidth: '80%', background: m.role === 'user' ? C.accent : '#fff', color: m.role === 'user' ? '#fff' : C.text, border: m.role === 'user' ? 'none' : `1px solid ${C.border}`, borderRadius: 12, padding: '8px 12px', fontSize: 14, lineHeight: 1.45, whiteSpace: 'pre-wrap' }}>{m.content}</div>

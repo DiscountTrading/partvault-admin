@@ -14,7 +14,10 @@ const ACTION_STYLE = {
   member_added:   { label: 'Member +',  color: C.green },
   member_removed: { label: 'Member −',  color: C.red },
   member_updated: { label: 'Access',    color: C.blue },
-  sync:           { label: 'Sync',      color: C.accent },
+  sync_nightly:   { label: 'Nightly',   color: C.accent },
+  sync_manual:    { label: 'Sync',      color: C.accent },
+  sync_live:      { label: 'Live sync', color: C.muted },
+  sync:           { label: 'Sync',      color: C.accent }, // legacy rows pre-migration
 }
 const ACTIONS = Object.entries(ACTION_STYLE).map(([id, v]) => ({ id, label: v.label }))
 
@@ -108,6 +111,7 @@ export default function Activity({ storeId }) {
   }, [search])
 
   const users = useMemo(() => [...new Set(rows.map(r => r.user_email).filter(Boolean))], [rows])
+  const hasSystem = useMemo(() => rows.some(r => !r.user_email), [rows]) // sync/system events have no user
 
   // Type (entity) filter — categories present in the current feed, with counts.
   const catCounts = useMemo(() => { const m = {}; for (const r of rows) { const c = catOf(r); m[c] = (m[c] || 0) + 1 } return m }, [rows])
@@ -126,7 +130,7 @@ export default function Activity({ storeId }) {
   const actLabel = enabledActs == null ? 'All' : `${enabledActCount} of ${presentActs.length}`
 
   const visible = useMemo(() => rows.filter(r =>
-    (!userFilter || r.user_email === userFilter) &&
+    (userFilter === '' || (userFilter === '__system' ? !r.user_email : r.user_email === userFilter)) &&
     catEnabled(catOf(r)) &&
     actEnabled(r.action)
   ), [rows, userFilter, enabledCats, enabledActs, presentCats, presentActs])
@@ -165,10 +169,11 @@ export default function Activity({ storeId }) {
             onAll={() => setEnabledActs(null)} onNone={() => setEnabledActs(new Set())} open={actOpen} setOpen={setActOpen}
             allActive={enabledActs == null} label={actLabel} />
 
-          {users.length > 0 && (
+          {(users.length > 0 || hasSystem) && (
             <select value={userFilter} onChange={e => setUserFilter(e.target.value)}
               style={{ border: `1px solid ${C.border}`, borderRadius: 6, padding: '5px 8px', fontSize: 12, background: '#fff' }}>
               <option value="">All users</option>
+              {hasSystem && <option value="__system">system (sync)</option>}
               {users.map(u => <option key={u} value={u}>{u}</option>)}
             </select>
           )}
