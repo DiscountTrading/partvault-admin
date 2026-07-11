@@ -398,6 +398,24 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     setSaving(false)
   }
 
+  // Warehouse settings auto-save (debounced) so toggling containers / editing the
+  // grid just works — no separate Save press for this tab.
+  const whTimer = useRef(null)
+  const persistWarehouse = async (wh) => {
+    if (!storeId) return
+    try {
+      const { data: cur } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      await sb.from('stores').update({ settings: { ...(cur?.settings || {}), warehouse: wh } }).eq('id', storeId)
+      onSettingsSaved?.({ warehouse: wh })
+    } catch (e) { console.error('Warehouse save failed', e) }
+  }
+  const updateWarehouse = (updater) => setWarehouse(prev => {
+    const next = typeof updater === 'function' ? updater(prev) : updater
+    clearTimeout(whTimer.current)
+    whTimer.current = setTimeout(() => persistWarehouse(next), 500)
+    return next
+  })
+
 
   const saveSkuFormat = async () => {
     if (!storeId) return
@@ -1804,7 +1822,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
               Leave it off if you don't want structured locations (the free-text location field still works).
             </p>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: C.text, cursor: 'pointer', marginBottom: 14, fontWeight: 600 }}>
-              <input type="checkbox" checked={!!warehouse.enabled} onChange={e => setWarehouse(w => ({ ...w, enabled: e.target.checked }))} />
+              <input type="checkbox" checked={!!warehouse.enabled} onChange={e => updateWarehouse(w => ({ ...w, enabled: e.target.checked }))} />
               Use a warehouse grid
             </label>
             {warehouse.enabled && (() => {
@@ -1814,29 +1832,29 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                   <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
                     <div style={{ flex: '1 1 120px' }}>
                       <label style={S.label}>Rows / aisles (how many wide)</label>
-                      <input type="number" min="0" max="40" style={S.input} value={warehouse.rows} onChange={e => setWarehouse(w => ({ ...w, rows: clampN(e.target.value) }))} placeholder="e.g. 6" />
+                      <input type="number" min="0" max="40" style={S.input} value={warehouse.rows} onChange={e => updateWarehouse(w => ({ ...w, rows: clampN(e.target.value) }))} placeholder="e.g. 6" />
                     </div>
                     <div style={{ flex: '1 1 120px' }}>
                       <label style={S.label}>Bays per row (length)</label>
-                      <input type="number" min="0" max="40" style={S.input} value={warehouse.bays} onChange={e => setWarehouse(w => ({ ...w, bays: clampN(e.target.value) }))} placeholder="e.g. 10" />
+                      <input type="number" min="0" max="40" style={S.input} value={warehouse.bays} onChange={e => updateWarehouse(w => ({ ...w, bays: clampN(e.target.value) }))} placeholder="e.g. 10" />
                     </div>
                     <div style={{ flex: '1 1 120px' }}>
                       <label style={S.label}>Shelves per bay (levels)</label>
-                      <input type="number" min="0" max="40" style={S.input} value={warehouse.shelves} onChange={e => setWarehouse(w => ({ ...w, shelves: clampN(e.target.value) }))} placeholder="e.g. 4" />
+                      <input type="number" min="0" max="40" style={S.input} value={warehouse.shelves} onChange={e => updateWarehouse(w => ({ ...w, shelves: clampN(e.target.value) }))} placeholder="e.g. 4" />
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
                     <div style={{ flex: '1 1 120px' }}>
                       <label style={S.label}>Name for a row</label>
-                      <input style={S.input} value={warehouse.rowLabel} onChange={e => setWarehouse(w => ({ ...w, rowLabel: e.target.value || 'Row' }))} placeholder="Row" />
+                      <input style={S.input} value={warehouse.rowLabel} onChange={e => updateWarehouse(w => ({ ...w, rowLabel: e.target.value || 'Row' }))} placeholder="Row" />
                     </div>
                     <div style={{ flex: '1 1 120px' }}>
                       <label style={S.label}>Name for a bay</label>
-                      <input style={S.input} value={warehouse.bayLabel} onChange={e => setWarehouse(w => ({ ...w, bayLabel: e.target.value || 'Bay' }))} placeholder="Bay" />
+                      <input style={S.input} value={warehouse.bayLabel} onChange={e => updateWarehouse(w => ({ ...w, bayLabel: e.target.value || 'Bay' }))} placeholder="Bay" />
                     </div>
                     <div style={{ flex: '1 1 120px' }}>
                       <label style={S.label}>Name for a shelf</label>
-                      <input style={S.input} value={warehouse.shelfLabel} onChange={e => setWarehouse(w => ({ ...w, shelfLabel: e.target.value || 'Shelf' }))} placeholder="Shelf" />
+                      <input style={S.input} value={warehouse.shelfLabel} onChange={e => updateWarehouse(w => ({ ...w, shelfLabel: e.target.value || 'Shelf' }))} placeholder="Shelf" />
                     </div>
                   </div>
                   {warehouse.rows > 0 && warehouse.bays > 0 ? (
@@ -1860,21 +1878,18 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
             </p>
             <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 16 }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: C.text, cursor: 'pointer', fontWeight: 600 }}>
-                <input type="checkbox" checked={!!warehouse.containers} onChange={e => setWarehouse(w => ({ ...w, containers: e.target.checked }))} />
+                <input type="checkbox" checked={!!warehouse.containers} onChange={e => updateWarehouse(w => ({ ...w, containers: e.target.checked }))} />
                 Use containers
               </label>
               {warehouse.containers && (
                 <div style={{ flex: '0 1 200px' }}>
                   <label style={S.label}>What you call one</label>
-                  <input style={S.input} value={warehouse.containerLabel} onChange={e => setWarehouse(w => ({ ...w, containerLabel: e.target.value || 'Bucket' }))} placeholder="Bucket / Tub / Bin" />
+                  <input style={S.input} value={warehouse.containerLabel} onChange={e => updateWarehouse(w => ({ ...w, containerLabel: e.target.value || 'Bucket' }))} placeholder="Bucket / Tub / Bin" />
                 </div>
               )}
             </div>
             {warehouse.containers && (
-              <>
-                <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>Save the setting above first if you just turned this on, then manage your {warehouse.containerLabel.toLowerCase()}s here:</div>
-                <ContainerManager storeId={storeId} warehouse={warehouse} labels={labels} />
-              </>
+              <ContainerManager storeId={storeId} warehouse={warehouse} labels={labels} />
             )}
           </Section>
         </>

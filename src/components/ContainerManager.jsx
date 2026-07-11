@@ -13,12 +13,16 @@ export default function ContainerManager({ storeId, warehouse, labels = DEFAULT_
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
 
+  const [needsMigration, setNeedsMigration] = useState(false)
+  const isMissingTable = (e) => /could not find the table|schema cache|relation .*containers.* does not exist|42P01/i.test(e?.message || '')
+
   const load = useCallback(async () => {
     if (!storeId) return
     setLoading(true); setErr('')
     const { data, error } = await sb.from('containers')
       .select('*').eq('store_id', storeId).is('deleted_at', null).order('code')
-    if (error) setErr(error.message); else setRows(data || [])
+    if (error) { if (isMissingTable(error)) setNeedsMigration(true); else setErr(error.message) }
+    else { setNeedsMigration(false); setRows(data || []) }
     setLoading(false)
   }, [storeId])
   useEffect(() => { load() }, [load])
@@ -40,7 +44,7 @@ export default function ContainerManager({ storeId, warehouse, labels = DEFAULT_
       .insert({ store_id: storeId, code: nextCode(), kind: (wc.containerLabel || 'bucket').toLowerCase() })
       .select('*').single()
     setBusy(false)
-    if (error) { setErr(error.message); return }
+    if (error) { if (isMissingTable(error)) setNeedsMigration(true); else setErr(error.message); return }
     setRows(r => [...r, data].sort((a, b) => (a.code || '').localeCompare(b.code || '')))
   }
 
@@ -64,6 +68,13 @@ export default function ContainerManager({ storeId, warehouse, labels = DEFAULT_
       <option value="">—</option>
       {Array.from({ length: Math.max(0, count | 0) }, (_, i) => <option key={i} value={i + 1}>{i + 1}</option>)}
     </select>
+  )
+
+  if (needsMigration) return (
+    <div style={{ fontSize: 13, color: C.text, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '14px 16px', lineHeight: 1.6 }}>
+      <strong>One database step needed.</strong> Containers need the <code>20260712_containers.sql</code> migration applied in Supabase → SQL Editor. Once it's run, reload this page and you can add {wc.containerLabel.toLowerCase()}s here.
+      <div style={{ marginTop: 10 }}><button style={{ ...S.btn('secondary'), padding: '6px 12px' }} onClick={() => { setNeedsMigration(false); load() }}>Recheck</button></div>
+    </div>
   )
 
   return (
