@@ -132,7 +132,9 @@ export default function Activity({ storeId }) {
   const visible = useMemo(() => rows.filter(r =>
     (userFilter === '' || (userFilter === '__system' ? !r.user_email : r.user_email === userFilter)) &&
     catEnabled(catOf(r)) &&
-    actEnabled(r.action)
+    actEnabled(r.action) &&
+    // Hide bookkeeping-only "changes" (sync touches) — real changes only.
+    !(r.summary || '').endsWith(' — background update')
   ), [rows, userFilter, enabledCats, enabledActs, presentCats, presentActs])
 
   const fmtTime = (t) => {
