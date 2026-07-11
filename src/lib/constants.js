@@ -1,4 +1,4 @@
-export const APP_VERSION = '3.34.0'
+export const APP_VERSION = '3.34.1'
 
 import { getActiveMarketplace } from './marketplaces'
 
