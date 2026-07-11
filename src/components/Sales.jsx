@@ -813,10 +813,7 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
       <h2 style={{ ...S.h1, marginBottom: 4 }}>Recent Sales</h2>
       <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>Every eBay sale, newest first — what each item made after fees. Item &amp; SKU come from your inventory record (matched by eBay item number); sales with no inventory match are tagged <strong>eBay only</strong>.</div>
 
-      {/* Fulfilment first — the actionable pack/post list, visible without scrolling past the graphs. */}
-      <FulfilmentQueue sales={sales} partById={partById} wf={wf} setStage={setStage} now={now} />
-
-      {/* Performance overview — trend + comparison against the previous period (compact). */}
+      {/* Performance overview — trend + comparison against the previous period (compact). Always at the top. */}
       <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12, padding: '14px 16px', marginBottom: 16 }}>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -862,6 +859,8 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
       </div>
 
       <PromotedPanel promo={promo} periodLabel={range.custom ? `${fmtDate(range.fromMs)} – ${fmtDate(range.toMs)}` : periodTitle} />
+
+      <FulfilmentQueue sales={sales} partById={partById} wf={wf} setStage={setStage} now={now} />
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
         <div style={{ fontSize: 13, color: C.muted, fontWeight: 600 }}>{periodTitle} · {rows.length} sale{rows.length === 1 ? '' : 's'}</div>
