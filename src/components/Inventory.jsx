@@ -249,9 +249,16 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
   const [form, setForm] = useState(part ? { ...part, costs: { ...part.costs }, listPrice: part.list_price||part.listPrice||0, ai_assessed: part.ai_assessed??false, acquiredDate: part.acquiredDate ? String(part.acquiredDate).slice(0,10) : (part.createdAt ? String(part.createdAt).slice(0,10) : '') } : {
     title:'', category:defCat, subcategory:EBAY_AU_CATEGORIES[defCat][0], make:'', model:'', year:'', condition:PART_CONDITIONS[1],
     description:'', acquiredDate:new Date().toISOString().slice(0,10), costs:defCosts(), listPrice:'', soldPrice:'', photos:[], weight:'', status:'in_stock',
-    partNumber:'', notes:'', location:'', locRow:'', locBay:'', locShelf:'', ai_assessed:false, car_id:null,
+    partNumber:'', notes:'', location:'', locRow:'', locBay:'', locShelf:'', containerId:'', ai_assessed:false, car_id:null,
   })
   const [generating, setGenerating] = useState(false)
+  const [containers, setContainers] = useState([])     // store's tubs/buckets (when enabled)
+  useEffect(() => {
+    if (!warehouse?.containers || !storeId) return
+    sb.from('containers').select('id, code, name, loc_row, loc_bay, loc_shelf')
+      .eq('store_id', storeId).is('deleted_at', null).order('code')
+      .then(({ data }) => setContainers(data || []))
+  }, [warehouse?.containers, storeId])
   const [descOptions, setDescOptions] = useState([])   // ranked description choices
   const [descPicker, setDescPicker] = useState(false)  // options panel open
   const [descBusy, setDescBusy] = useState(false)
@@ -864,6 +871,22 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
             </div>
           )
         })()}
+        {warehouse?.containers && (
+          <Field label={`${warehouseConfig(warehouse).containerLabel} (tub / bucket)`}>
+            <select style={S.select} value={form.containerId || ''} onChange={e => {
+              const id = e.target.value || null
+              const ct = containers.find(c => c.id === id)
+              // Inherit the container's home spot onto the part so the map/badges match.
+              set('containerId', id)
+              if (ct && (ct.loc_row != null || ct.loc_bay != null || ct.loc_shelf != null)) {
+                setForm(f => ({ ...f, containerId: id, locRow: ct.loc_row ?? '', locBay: ct.loc_bay ?? '', locShelf: ct.loc_shelf ?? '' }))
+              }
+            }}>
+              <option value="">— none (loose) —</option>
+              {containers.map(c => <option key={c.id} value={c.id}>{[c.code, c.name].filter(Boolean).join(' · ')}</option>)}
+            </select>
+          </Field>
+        )}
         <Field label="Notes"><input style={S.input} value={form.notes||''} onChange={e => set('notes', e.target.value)} /></Field>
       </Section>
 

@@ -11,6 +11,7 @@ import Activity from './Activity'
 import { compressImage } from '../lib/image'
 import ShippingSettings from './ShippingSettings'
 import WarehouseMap from './WarehouseMap'
+import ContainerManager from './ContainerManager'
 import { WAREHOUSE_DEFAULTS } from '../lib/warehouse'
 import EbayHistoryUpload from './EbayHistoryUpload'
 import HistoricalCosts from './HistoricalCosts'
@@ -1849,6 +1850,32 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                 </>
               )
             })()}
+          </Section>
+
+          <Section title="🪣 Containers (tubs & buckets)">
+            <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
+              For stock kept in movable tubs, buckets or bins rather than a fixed shelf. Each container gets a printable QR —
+              scan it from the phone, then scan parts <strong>in</strong> (putting away) or <strong>out</strong> (pulling). A
+              container can be parked at a grid spot so parts inside inherit that location, or just float and be found by scanning.
+            </p>
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 16 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: C.text, cursor: 'pointer', fontWeight: 600 }}>
+                <input type="checkbox" checked={!!warehouse.containers} onChange={e => setWarehouse(w => ({ ...w, containers: e.target.checked }))} />
+                Use containers
+              </label>
+              {warehouse.containers && (
+                <div style={{ flex: '0 1 200px' }}>
+                  <label style={S.label}>What you call one</label>
+                  <input style={S.input} value={warehouse.containerLabel} onChange={e => setWarehouse(w => ({ ...w, containerLabel: e.target.value || 'Bucket' }))} placeholder="Bucket / Tub / Bin" />
+                </div>
+              )}
+            </div>
+            {warehouse.containers && (
+              <>
+                <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>Save the setting above first if you just turned this on, then manage your {warehouse.containerLabel.toLowerCase()}s here:</div>
+                <ContainerManager storeId={storeId} warehouse={warehouse} labels={labels} />
+              </>
+            )}
           </Section>
         </>
       )}

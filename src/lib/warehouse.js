@@ -11,6 +11,14 @@ export const WAREHOUSE_DEFAULTS = {
   rowLabel: 'Row',
   bayLabel: 'Bay',
   shelfLabel: 'Shelf',
+  containers: false,        // tubs/buckets/bins on top of (or instead of) the grid
+  containerLabel: 'Bucket', // what a container is called in this store
+}
+
+// One-line container label: "TUB-014 · Corolla fronts" (name optional).
+export function formatContainer(c) {
+  if (!c) return ''
+  return [c.code, c.name].filter(Boolean).join(' · ')
 }
 
 // Normalise whatever is stored (may be partial / legacy) into a full config.

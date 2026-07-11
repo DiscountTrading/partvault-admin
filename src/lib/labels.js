@@ -1,4 +1,5 @@
 import QRCode from 'qrcode'
+import { formatGridLoc } from './warehouse'
 
 // Stock labels — printable SKU + scannable QR stickers for the shelf. Size and
 // contents are configurable (stores.settings.labels) so any printer works: a
@@ -16,6 +17,7 @@ export const DEFAULT_LABELS = {
 
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
 const labelTarget = (p, cfg) => `${(cfg.qrBaseUrl || '').replace(/\/$/, '')}/p/${encodeURIComponent(p.sku || p.id)}`
+const containerTarget = (ct, cfg) => `${(cfg.qrBaseUrl || '').replace(/\/$/, '')}/c/${encodeURIComponent(ct.code || ct.id)}`
 
 // Generate the label(s) and open a print window. `parts` may be one part or many.
 export async function printLabels(parts, cfg = DEFAULT_LABELS) {
@@ -65,6 +67,57 @@ export async function printLabels(parts, cfg = DEFAULT_LABELS) {
 
   // Open in a floating pop-up window (not a new tab) so printing a sticker doesn't
   // navigate away from the current page — matches the packing-slip behaviour.
+  const w = window.open('', '_blank', 'width=520,height=640')
+  if (!w) { alert('Pop-up blocked — allow pop-ups for this site to print labels.'); return }
+  w.document.write(html)
+  w.document.close()
+}
+
+// Printable QR labels for storage containers (tubs/buckets). The QR encodes
+// /c/<code> so the mobile scanner opens that bucket. Bigger code text than a
+// stock label — you read a tub from across the room. `cfg` is the same labels
+// config (for size + qrBaseUrl); `wh` is the warehouse config (for home-cell
+// naming). Prints one label per container.
+export async function printContainerLabels(containers, cfg = DEFAULT_LABELS, wh = null) {
+  const c = { ...DEFAULT_LABELS, ...(cfg || {}) }
+  const list = (Array.isArray(containers) ? containers : [containers]).filter(Boolean)
+  if (!list.length) return
+
+  const qr = {}
+  await Promise.all(list.map(async ct => {
+    try { qr[ct.id] = await QRCode.toDataURL(containerTarget(ct, c), { margin: 0, scale: 6 }) } catch { qr[ct.id] = '' }
+  }))
+
+  const W = +c.widthMm || 50, H = +c.heightMm || 30
+  const qrMm = Math.max(8, Math.min(H - 3, W * 0.42))
+  const noteName = (wh?.containerLabel || 'Bucket')
+  const labelHtml = (ct) => {
+    const home = formatGridLoc(ct, wh)
+    const rows = [`<div class="code">${esc(ct.code || '')}</div>`]
+    if (ct.name) rows.push(`<div class="cname">${esc(ct.name)}</div>`)
+    rows.push(`<div class="fit">${esc(home ? `📍 ${home}` : noteName)}</div>`)
+    return `<div class="label"><img class="qr" src="${qr[ct.id] || ''}"/><div class="info">${rows.join('')}</div></div>`
+  }
+
+  const isSheet = c.mode === 'sheet'
+  const pageCss = isSheet
+    ? `@page { size: A4; margin: 8mm; } .sheet { display:grid; grid-template-columns:repeat(${+c.sheetCols || 3}, 1fr); gap:2mm; }`
+    : `@page { size: ${W}mm ${H}mm; margin: 0; } body { margin:0; } .label { page-break-after: always; }`
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Container labels</title><style>
+    *{box-sizing:border-box;} body{font-family:'Inter Tight',system-ui,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    ${pageCss}
+    .label{width:${W}mm;height:${H}mm;display:flex;align-items:center;gap:2mm;padding:1.5mm;overflow:hidden;${isSheet ? 'border:0.2mm solid #ccc;' : ''}}
+    .qr{height:${qrMm}mm;width:${qrMm}mm;flex-shrink:0;}
+    .info{flex:1;min-width:0;line-height:1.2;}
+    .code{font-weight:800;font-size:${Math.max(11, H * 0.24)}pt;letter-spacing:-0.3px;}
+    .cname{font-size:7.5pt;font-weight:600;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
+    .fit{font-size:7pt;font-weight:600;margin-top:0.5mm;}
+  </style></head><body>
+    ${isSheet ? `<div class="sheet">${list.map(labelHtml).join('')}</div>` : list.map(labelHtml).join('')}
+    <script>window.onload=function(){setTimeout(function(){window.print();},150);};<\/script>
+  </body></html>`
+
   const w = window.open('', '_blank', 'width=520,height=640')
   if (!w) { alert('Pop-up blocked — allow pop-ups for this site to print labels.'); return }
   w.document.write(html)
