@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { C, S } from '../lib/constants'
 import Insights from './Insights'
 import Vehicles from './Vehicles'
+import SpellingCleanup from './SpellingCleanup'
 
 // ============================================================================
 // Analytics — one place to understand the stock, pivoted three ways. Formerly
@@ -19,8 +20,9 @@ const PIVOTS = [
   { id: 'car',   label: '🔧 By car',   sub: 'Which donor cars actually make money — true ROI on each vehicle you bought.' },
 ]
 
-export default function Analytics({ storeId, initial, parts, cars, sales, costing }) {
+export default function Analytics({ storeId, initial, parts, cars, sales, costing, onVehiclesChanged }) {
   const [pivot, setPivot] = useState('part')
+  const [tidyOpen, setTidyOpen] = useState(false)
 
   // A Dashboard drill-down always targets individual parts, so snap to By part
   // whenever a new one arrives. Done as a during-render state adjustment (the
@@ -46,7 +48,14 @@ export default function Analytics({ storeId, initial, parts, cars, sales, costin
             {p.label}
           </button>
         ))}
+        <div style={{ flex: 1 }} />
+        <button onClick={() => setTidyOpen(o => !o)}
+          style={{ padding: '8px 14px', borderRadius: 22, border: `1.5px solid ${tidyOpen ? C.accent : C.border}`, background: tidyOpen ? '#fff4ef' : '#fff', color: C.text, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+          🧹 Tidy spellings
+        </button>
       </div>
+
+      {tidyOpen && <SpellingCleanup storeId={storeId} parts={parts} cars={cars} onApplied={onVehiclesChanged} />}
 
       {pivot === 'part'
         ? <Insights storeId={storeId} initial={initial} />

@@ -297,7 +297,8 @@ export default function App() {
           />
         )}
         {tab === 'ebay' && <Ebay storeId={storeId} onChanged={smartRefetch} />}
-        {tab === 'analytics' && <Analytics storeId={storeId} initial={insightsInit} parts={parts} cars={cars} sales={sales} costing={costingFull} />}
+        {tab === 'analytics' && <Analytics storeId={storeId} initial={insightsInit} parts={parts} cars={cars} sales={sales} costing={costingFull}
+          onVehiclesChanged={() => { refetch(); sb.from('cars').select('*').eq('store_id', storeId).is('deleted_at', null).order('created_at', { ascending: false }).then(({ data }) => setCars(data || [])) }} />}
         {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores}
           onSettingsSaved={s => { if (s?.costing) setCosting(c => ({ ...c, ...s.costing })); if (s?.inventory) setInventory(i => ({ ...i, ...s.inventory })); if (s?.storage) setStorage(st => ({ ...st, ...s.storage })); if (s?.shipping) setShipping(s.shipping); if (s?.warehouse) setWarehouse(w => ({ ...w, ...s.warehouse })); if (s?.labels) setLabels(l => ({ ...l, ...s.labels })) }} />}
         {tab === 'help' && <Help storeId={storeId} />}

@@ -57,7 +57,7 @@ function Card({ label, value, sub }) {
 }
 
 export default function Insights({ storeId, initial }) {
-  const [rows, setRows] = useState([])
+  const [allRows, setAllRows] = useState([])
   const [loading, setLoading] = useState(true)
 
   // Progressive paged load: render the first page as soon as it lands and stream the
@@ -71,7 +71,7 @@ export default function Insights({ storeId, initial }) {
       const { data, error } = await sb.from('part_insights').select('*')
         .eq('store_id', storeId).order('part_id').range(from, from + PAGE - 1)
       if (error) { setLoading(false); return }
-      if (data && data.length) { all.push(...data); setRows([...all]) }
+      if (data && data.length) { all.push(...data); setAllRows([...all]) }
       if (from === 0) setLoading(false)            // first page on screen ASAP
       if (!data || data.length < PAGE) break
     }
@@ -128,13 +128,20 @@ export default function Insights({ storeId, initial }) {
 
   useEffect(() => {
     if (!storeId) return
-    setLoading(true); setRows([])
+    setLoading(true); setAllRows([])
     sb.auth.getUser().then(({ data: { user } }) => setMeId(user?.id || null))
     loadRows()
     loadViews()
   }, [storeId, loadRows])
 
   const loadViews = () => sb.from('saved_views').select('*').eq('store_id', storeId).order('name').then(({ data }) => setViews(data || []))
+
+  // Source filter (matches the By-model / By-car "Include" toggles): eBay API =
+  // synced listings (source='ebay_import'), Imported history = CSV backfill
+  // (source='ebay_history'), PartVault = everything captured in-app.
+  const [srcSel, setSrcSel] = useState({ partvault: true, ebay: true, history: true })
+  const srcOf = (r) => r.source === 'ebay_import' ? 'ebay' : r.source === 'ebay_history' ? 'history' : 'partvault'
+  const rows = useMemo(() => allRows.filter(r => srcSel[srcOf(r)]), [allRows, srcSel])
 
   const statuses = useMemo(() => [...new Set(rows.map(r => r.status).filter(Boolean))].sort(), [rows])
 
@@ -281,6 +288,18 @@ export default function Insights({ storeId, initial }) {
         <Card label="Avg margin (unsold)" value={summary.avgMargin == null ? '—' : `${summary.avgMargin}%`} />
         <Card label="Avg days to sell" value={summary.avgDts != null ? `${summary.avgDts}d` : '—'} />
         <Card label="Dead stock" value={summary.deadCount} sub={`>${DEAD_DAYS}d & ≤${DEAD_MARGIN}% margin`} />
+      </div>
+
+      {/* Source include filter — matches the By-model / By-car toggles */}
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 12, color: C.muted, flexWrap: 'wrap', marginBottom: 12 }}>
+        <span>Include:</span>
+        {[['partvault', 'PartVault'], ['ebay', 'eBay API'], ['history', 'Imported history']].map(([k, label]) => (
+          <label key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}
+            title={k === 'ebay' ? "Parts synced from eBay listings" : k === 'history' ? 'Parts from the CSV order-history import' : 'Parts captured in PartVault'}>
+            <input type="checkbox" checked={srcSel[k]} onChange={e => setSrcSel(s => ({ ...s, [k]: e.target.checked }))} />
+            {label}
+          </label>
+        ))}
       </div>
 
       {/* Segments + saved views */}
