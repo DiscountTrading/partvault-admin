@@ -252,7 +252,7 @@ function DeltaBadge({ delta }) {
 }
 
 // Small SVG donut chart (no dependency). slices: [{ label, value, color }].
-function PieChart({ slices, size = 116 }) {
+function PieChart({ slices, size = 96 }) {
   const nonzero = slices.filter(s => s.value > 0)
   const total = nonzero.reduce((a, s) => a + s.value, 0)
   const r = size / 2, cx = r, cy = r, inner = r * 0.6
@@ -314,7 +314,7 @@ function BarChart({ bars, money }) {
   const maxPos = Math.max(0, ...vals)
   const minNeg = Math.min(0, ...vals)
   const span = (maxPos - minNeg) || 1
-  const H = 150
+  const H = 118
   const topPad = (maxPos / span) * H // pixels from top down to the zero line
   const dense = bars.length > 16
   const step = dense ? Math.ceil(bars.length / 12) : 1
@@ -443,33 +443,6 @@ function PromotedPanel({ promo, periodLabel }) {
               { label: 'Med 3–8%', value: promo.tiers.med, color: '#d99a2b' },
               { label: 'High >8%', value: promo.tiers.high, color: '#e8590c' },
             ]} />}
-            {promo.promoted > 0 && (() => {
-              // Compact avg days-to-sell by group — sits alongside the pies (shorter = faster).
-              const rows = [['Organic', 'organic', '#93b4e8'], ['Low ≤3%', 'low', '#4b9e6a'], ['Med 3–8%', 'med', '#d99a2b'], ['High >8%', 'high', '#e8590c']]
-              const known = rows.map(([, k]) => promo.dtsByGroup?.[k]?.d).filter(d => d != null)
-              if (!known.length) return null
-              const maxD = Math.max(...known, 1)
-              return (
-                <div style={{ flex: '1 1 190px', minWidth: 180 }}>
-                  <div style={{ fontSize: 12, color: C.muted, fontWeight: 600, marginBottom: 8 }}>Avg days to sell</div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                    {rows.map(([label, key, color]) => {
-                      const g = promo.dtsByGroup?.[key] || { d: null, n: 0 }
-                      const pct = g.d != null ? Math.max(4, (g.d / maxD) * 100) : 0
-                      return (
-                        <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5 }}>
-                          <span style={{ width: 58, flexShrink: 0, color: C.text }}>{label}</span>
-                          <div style={{ flex: 1, background: C.bg, borderRadius: 4, height: 12, overflow: 'hidden' }} title={`${g.n} sold`}>
-                            {g.d != null && <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 4 }} />}
-                          </div>
-                          <span style={{ width: 40, textAlign: 'right', flexShrink: 0, color: C.text, fontWeight: 600 }}>{g.d != null ? `${Math.round(g.d)}d` : '—'}</span>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )
-            })()}
           </div>
 
           {promo.promoted > 0 ? (
@@ -666,6 +639,10 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
   const [metric, setMetric] = useState('net')
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
+  // Analytics graphs are collapsible (remembered) so the Fulfilment queue + sales
+  // table stay in view without scrolling past a tall chart section.
+  const [showAnalytics, setShowAnalytics] = useState(() => { try { return localStorage.getItem('pv_sales_analytics') !== 'hidden' } catch { return true } })
+  const toggleAnalytics = () => setShowAnalytics(v => { const n = !v; try { localStorage.setItem('pv_sales_analytics', n ? 'shown' : 'hidden') } catch { /* ignore */ } return n })
 
   const derivedAll = useMemo(() => sales.filter(s => !s.cancelled).map(s => {
     const d = deriveSale(s, partById, costing)
@@ -840,8 +817,17 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
       <h2 style={{ ...S.h1, marginBottom: 4 }}>Recent Sales</h2>
       <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>Every eBay sale, newest first — what each item made after fees. Item &amp; SKU come from your inventory record (matched by eBay item number); sales with no inventory match are tagged <strong>eBay only</strong>.</div>
 
+      {/* Fulfilment first — the actionable pack/post list, visible without scrolling past the graphs. */}
+      <FulfilmentQueue sales={sales} partById={partById} wf={wf} setStage={setStage} now={now} />
+
+      {/* Collapsible analytics — keep the page short so fulfilment + sales stay in view. */}
+      <button onClick={toggleAnalytics} style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0', marginBottom: showAnalytics ? 8 : 14, color: C.text, fontSize: 14, fontWeight: 700 }}>
+        <span style={{ fontSize: 12, color: C.muted, width: 12 }}>{showAnalytics ? '▾' : '▸'}</span> 📊 Performance &amp; promoted analytics
+      </button>
+
+      {showAnalytics && <>
       {/* Performance overview — trend + comparison against the previous period. */}
-      <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12, padding: '16px 18px', marginBottom: 16 }}>
+      <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12, padding: '14px 16px', marginBottom: 16 }}>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {PERIODS.map(([d, lbl]) => <button key={d} onClick={() => setPeriod(d)} style={pillStyle(period === d)}>{lbl}</button>)}
@@ -872,7 +858,7 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
         <div style={{ marginBottom: 14 }}>
           <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.3 }}>{periodTitle}</div>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 28, fontWeight: 800, color: C.text }}>{showMetric(compare.cur, chart.money)}</span>
+            <span style={{ fontSize: 23, fontWeight: 800, color: C.text }}>{showMetric(compare.cur, chart.money)}</span>
             {compare.delta != null && <DeltaBadge delta={compare.delta} />}
             <span style={{ fontSize: 12, color: C.muted }}>{compare.delta == null ? 'no earlier data to compare' : `vs ${showMetric(compare.prev, chart.money)} in the preceding period`}</span>
           </div>
@@ -886,8 +872,7 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
       </div>
 
       <PromotedPanel promo={promo} periodLabel={range.custom ? `${fmtDate(range.fromMs)} – ${fmtDate(range.toMs)}` : periodTitle} />
-
-      <FulfilmentQueue sales={sales} partById={partById} wf={wf} setStage={setStage} now={now} />
+      </>}
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
         <div style={{ fontSize: 13, color: C.muted, fontWeight: 600 }}>{periodTitle} · {rows.length} sale{rows.length === 1 ? '' : 's'}</div>
