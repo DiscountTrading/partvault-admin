@@ -1,23 +1,34 @@
 -- ============================================================================
--- Activity log: hide bookkeeping-only "changes" + friendly change descriptions.
+-- Activity log: fix phantom "price changed" rows, add a full change-detail
+-- payload for the per-row Details view, and stop internal job-queue rows from
+-- leaking into the feed. Supersedes 20260709 (audit_change_detail) AND
+-- 20260710 (audit_summary_friendly) — this is the single migration to run.
 --
--- The audit trigger logs a row on EVERY write to a part, including the nightly
--- sync's background touches (updated_at / market_checked_at / market price) where
--- nothing the user cares about changed. Those flooded the log as vague "edits".
--- This migration:
---   1. FILTERS OUT parts UPDATE rows where no meaningful field changed (so the
---      feed shows real changes only, not sync bookkeeping).
---   2. Gives each real change a short, human description — "Marked as sold",
---      "Listed to eBay", "Listing ended", "Returned to stock", or the field diff
---      (e.g. "price 50→65 · category …") for other edits.
+-- Three fixes:
+--   1. NUMERIC-DIFF PHANTOM. audit_change_summary compared fields as TEXT
+--      (->>), so a price stored as 50 in one write and 50.00 in another (same
+--      money, different scale) was reported as "price 50→50.00". The sync never
+--      writes parts.list_price, so these were never real eBay price changes —
+--      just a text-vs-value mismatch. Now compares the JSONB VALUES (->), where
+--      50 and 50.00 are equal, so numeric-format-only diffs disappear.
+--   2. DETAILS PAYLOAD. New audit_change_details(old,new) returns a JSON array
+--      of every meaningful field that actually changed, with old/new values, so
+--      the Activity view can show a full "what changed" table on demand.
+--   3. JOB NOISE. The generic audit trigger is attached to the internal `jobs`
+--      queue (import/sync machinery). Those "jobs / added jobs" rows are not
+--      user activity — the friendly per-sync summary row already represents sync
+--      work — so get_audit_log now excludes table_name = 'jobs'.
 --
--- Supersedes the get_audit_log from 20260709. Idempotent (create-or-replace);
--- apply via the Supabase SQL editor. Re-includes audit_change_summary so it's
--- self-contained.
+-- Idempotent (create-or-replace); apply via the Supabase SQL editor.
 -- ============================================================================
 
 begin;
 
+-- ---------------------------------------------------------------------------
+-- Friendly one-line summary. Compares JSONB values (->) not text (->>) so a
+-- numeric re-scale (50 vs 50.00) is NOT counted as a change. Display still uses
+-- ->> for a clean human value.
+-- ---------------------------------------------------------------------------
 create or replace function public.audit_change_summary(p_old jsonb, p_new jsonb)
 returns text language sql immutable set search_path = public as $$
   select nullif(string_agg(
@@ -29,17 +40,55 @@ returns text language sql immutable set search_path = public as $$
     ('sku','SKU',4,false),('category','category',5,false),('subcategory','subcategory',6,false),
     ('condition','condition',7,false),('make','make',8,false),('model','model',9,false),
     ('year','year',10,false),('title','name',11,false),('location','location',12,false),
-    ('weight','weight',13,false),('part_number','part #',14,false),
-    ('description','description',15,true),('notes','notes',16,true)
+    ('loc_row','row',13,false),('loc_bay','bay',14,false),('loc_shelf','shelf',15,false),
+    ('weight','weight',16,false),('part_number','part #',17,false),
+    ('description','description',18,true),('notes','notes',19,true)
   ) as f(key, label, ord, long)
-  where (p_old ? f.key or p_new ? f.key) and (p_old->>f.key) is distinct from (p_new->>f.key);
+  where (p_old ? f.key or p_new ? f.key)
+    and (p_old->f.key) is distinct from (p_new->f.key);  -- VALUE compare, not text
 $$;
 grant execute on function public.audit_change_summary(jsonb, jsonb) to authenticated;
 
-create or replace function public.get_audit_log(
+-- ---------------------------------------------------------------------------
+-- Full field-level diff for the Details view. Every key that actually changed
+-- (JSONB value compare), minus internal/bookkeeping/huge fields. Returns
+-- [{ field, old, new }, …] preserving the JSON types so the UI can format.
+-- ---------------------------------------------------------------------------
+create or replace function public.audit_change_details(p_old jsonb, p_new jsonb)
+returns jsonb language sql immutable set search_path = public as $$
+  with keys as (
+    select k from jsonb_object_keys(coalesce(p_old, '{}'::jsonb)) k
+    union
+    select k from jsonb_object_keys(coalesce(p_new, '{}'::jsonb)) k
+  )
+  select coalesce(
+    jsonb_agg(jsonb_build_object('field', k, 'old', p_old->k, 'new', p_new->k) order by k),
+    '[]'::jsonb)
+  from keys
+  where k not in (
+    -- bookkeeping / sync touch fields
+    'updated_at','created_at','market_checked_at','market_price','market_count',
+    -- internal / identity (never user-meaningful)
+    'id','store_id','record_id','embedding','search_vector','tsv',
+    -- large blobs that don't read well in a diff row
+    'photos','platform_data','ebay_overrides'
+  )
+  and (p_old->k) is distinct from (p_new->k);
+$$;
+grant execute on function public.audit_change_details(jsonb, jsonb) to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- Read RPC. Same 4-param call signature; adds a `details` column and excludes
+-- the internal jobs queue. Keeps the friendly summaries + real-changes-only
+-- filter from 20260710.
+-- ---------------------------------------------------------------------------
+drop function if exists public.get_audit_log(uuid, int, text);
+drop function if exists public.get_audit_log(uuid, int, text, timestamptz);
+
+create function public.get_audit_log(
   p_store_id uuid, p_limit int default 300, p_search text default null, p_before timestamptz default null
 )
-returns table (id uuid, created_at timestamptz, user_email text, action text, entity_type text, summary text)
+returns table (id uuid, created_at timestamptz, user_email text, action text, entity_type text, summary text, details jsonb)
 language sql security definer stable set search_path = public
 as $$
   select
@@ -86,14 +135,22 @@ as $$
       when 'store_members' then case lower(a.action)
         when 'insert' then 'user added to store' when 'delete' then 'user removed from store' else 'user access changed' end
       else a.table_name
-    end as summary
+    end as summary,
+    -- Full change detail for the per-row Details expander (inserts/deletes get
+    -- the whole new/old row so the UI can show what was created/removed).
+    case
+      when a.table_name = 'sync' then '[]'::jsonb
+      when lower(a.action) = 'insert' then public.audit_change_details('{}'::jsonb, coalesce(a.new_data, '{}'::jsonb))
+      when lower(a.action) = 'delete' then public.audit_change_details(coalesce(a.old_data, '{}'::jsonb), '{}'::jsonb)
+      else public.audit_change_details(a.old_data, a.new_data)
+    end as details
   from public.audit_log a
   left join auth.users u on u.id = a.changed_by
   where a.store_id = p_store_id
     and public.has_permission(p_store_id, 'manage_users')
+    and a.table_name <> 'jobs'          -- internal import/sync queue, not user activity
     and (p_before is null or a.changed_at < p_before)
     -- Real changes only: drop parts UPDATE rows where no meaningful field changed
-    -- (nightly-sync bookkeeping touches like updated_at / market_checked_at).
     and (
       a.table_name <> 'parts'
       or lower(a.action) in ('insert', 'delete')

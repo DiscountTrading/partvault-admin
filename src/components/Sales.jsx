@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { C, S, fmt, partEffectiveCost, estimateCostBasis, storageCostFor, storageConfigured, FEE_COST_KEYS } from '../lib/constants'
 import { printLabels } from '../lib/labels'
+import { hasGridLoc, gridLocShort } from '../lib/warehouse'
 import { getActiveMarketplace } from '../lib/marketplaces'
 
 // Simple printable packing slip for one sale (opens the browser print dialog).
@@ -587,6 +588,7 @@ function FulfilmentQueue({ sales, partById, wf, setStage, now }) {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p?.title || s.title}</span>
+                  {p && hasGridLoc(p) && <span title="Warehouse grid location" style={{ flexShrink: 0, background: '#fff7ed', border: `1px solid ${C.accent}66`, color: C.accent, fontSize: 11, fontWeight: 700, borderRadius: 6, padding: '1px 7px' }}>🗺️ {gridLocShort(p)}</span>}
                   {p?.location && <span title="Storage location" style={{ flexShrink: 0, background: '#fef3c7', border: '1px solid #fcd34d', color: '#92400e', fontSize: 11, fontWeight: 700, borderRadius: 6, padding: '1px 7px' }}>📍 {p.location}</span>}
                 </div>
                 <div style={{ fontSize: 11, color: C.muted }}>

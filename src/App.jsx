@@ -8,6 +8,7 @@ import { C, S, APP_VERSION, rentPerDay } from './lib/constants'
 import { MARKETPLACE_LIST, guessMarketplace, setActiveMarketplace } from './lib/marketplaces'
 import { planState } from './lib/plan'
 import { DEFAULT_LABELS } from './lib/labels'
+import { WAREHOUSE_DEFAULTS } from './lib/warehouse'
 import AuthScreen from './components/AuthScreen'
 import Dashboard from './components/Dashboard'
 import Inventory from './components/Inventory'
@@ -183,6 +184,7 @@ export default function App() {
   const [inventory, setInventory] = useState({ agedThresholdDays: 60, ageBrackets: [90, 180, 365, 730, 1065] })
   const [storage, setStorage] = useState({ volumeM3: 0, rent: 0, rentPeriod: 'monthly', usablePct: 25 })
   const [shipping, setShipping] = useState(null)
+  const [warehouse, setWarehouse] = useState(WAREHOUSE_DEFAULTS)
   const [labels, setLabels] = useState(DEFAULT_LABELS)
   const [insightsInit, setInsightsInit] = useState(null) // drill-down filter from Dashboard
   const [cars, setCars] = useState([])
@@ -219,6 +221,7 @@ export default function App() {
       if (data?.settings?.costing) setCosting(s => ({ ...s, ...data.settings.costing }))
       if (data?.settings?.inventory) setInventory(s => ({ ...s, ...data.settings.inventory }))
       if (data?.settings?.storage) setStorage(s => ({ ...s, ...data.settings.storage }))
+      if (data?.settings?.warehouse) setWarehouse(s => ({ ...s, ...data.settings.warehouse }))
       if (data?.settings?.shipping) setShipping(data.settings.shipping)
       if (data?.settings?.labels) setLabels(s => ({ ...s, ...data.settings.labels }))
       // Currency/units follow the store's marketplace: set the module-level
@@ -290,13 +293,13 @@ export default function App() {
             parts={parts} cars={cars} storeId={storeId}
             onAdd={handleAdd} onEdit={handleEdit} onDelete={handleDel}
             onDeleteCar={softDeleteCar} onAddCar={handleAddCar}
-            aiSettings={aiSettings} footer={footer} costing={costingFull} labels={labels}
+            aiSettings={aiSettings} footer={footer} costing={costingFull} labels={labels} warehouse={warehouse}
           />
         )}
         {tab === 'ebay' && <Ebay storeId={storeId} onChanged={smartRefetch} />}
         {tab === 'analytics' && <Analytics storeId={storeId} initial={insightsInit} parts={parts} cars={cars} sales={sales} costing={costingFull} />}
         {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores}
-          onSettingsSaved={s => { if (s?.costing) setCosting(c => ({ ...c, ...s.costing })); if (s?.inventory) setInventory(i => ({ ...i, ...s.inventory })); if (s?.storage) setStorage(st => ({ ...st, ...s.storage })); if (s?.shipping) setShipping(s.shipping); if (s?.labels) setLabels(l => ({ ...l, ...s.labels })) }} />}
+          onSettingsSaved={s => { if (s?.costing) setCosting(c => ({ ...c, ...s.costing })); if (s?.inventory) setInventory(i => ({ ...i, ...s.inventory })); if (s?.storage) setStorage(st => ({ ...st, ...s.storage })); if (s?.shipping) setShipping(s.shipping); if (s?.warehouse) setWarehouse(w => ({ ...w, ...s.warehouse })); if (s?.labels) setLabels(l => ({ ...l, ...s.labels })) }} />}
         {tab === 'help' && <Help storeId={storeId} />}
       </main>
       {/* Floating context-aware help on every page (hidden on the Help tab itself) */}

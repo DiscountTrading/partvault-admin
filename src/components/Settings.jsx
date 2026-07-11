@@ -10,6 +10,8 @@ import TeamAccess from './TeamAccess'
 import Activity from './Activity'
 import { compressImage } from '../lib/image'
 import ShippingSettings from './ShippingSettings'
+import WarehouseMap from './WarehouseMap'
+import { WAREHOUSE_DEFAULTS } from '../lib/warehouse'
 import EbayHistoryUpload from './EbayHistoryUpload'
 import HistoricalCosts from './HistoricalCosts'
 
@@ -108,6 +110,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   const [costing, setCosting] = useState({ labourRate: 60, adminPct: 10, adminMin: 5, baseCostPct: 25, handlingFee: 2, postageDefaultG: 1000, postageTiers: DEFAULT_POSTAGE_TIERS, labourMode: 'fixed', adminMode: 'percent', adminMinMode: 'fixed', baseCostMode: 'percent' })
   const [inventory, setInventory] = useState({ agedThresholdDays: DEFAULT_AGED_THRESHOLD_DAYS, ageBrackets: DEFAULT_AGE_BRACKETS })
   const [storage, setStorage] = useState({ volumeM3: '', rent: '', rentPeriod: 'monthly', usablePct: 25 })
+  const [warehouse, setWarehouse] = useState(WAREHOUSE_DEFAULTS)
   const [labels, setLabels] = useState(DEFAULT_LABELS)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -349,6 +352,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         if (!data.settings.costing?.postageTiers?.length) setCosting(s => ({ ...s, postageTiers: defaultPostageTiers() }))
         if (data.settings.inventory) setInventory(s => ({ ...s, ...data.settings.inventory }))
         if (data.settings.storage) setStorage(s => ({ ...s, ...data.settings.storage }))
+        if (data.settings.warehouse) setWarehouse(s => ({ ...s, ...data.settings.warehouse }))
         if (data.settings.labels) setLabels(s => ({ ...s, ...data.settings.labels }))
         if (data.settings.shipAddress) setShipAddress(a => ({ ...a, ...data.settings.shipAddress }))
         if (data.settings.ebayLocationKey) setEbayLocationKey(data.settings.ebayLocationKey)
@@ -382,7 +386,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     setSaving(true)
     try {
       const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const merged = { ...(current?.settings || {}), footer, aiDescription: aiSettings, captureAssess, costing, inventory, storage, labels, timezone }
+      const merged = { ...(current?.settings || {}), footer, aiDescription: aiSettings, captureAssess, costing, inventory, storage, warehouse, labels, timezone }
       await sb.from('stores').update({ settings: merged }).eq('id', storeId)
       onSettingsSaved?.(merged) // let the app refresh costing/inventory-driven views live
       setSaved(true)
@@ -2106,6 +2110,61 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                   <strong> ${ratePerM3Yr.toFixed(0)}/m³ per year</strong> (${(ratePerM3Yr / 365).toFixed(3)}/m³/day).
                   A part in a 40×30×20 cm box (0.024 m³) held 6 months ≈ <strong>${(ratePerM3Yr * 0.024 / 2).toFixed(2)}</strong>.
                 </div>
+              )
+            })()}
+          </Section>
+
+          <Section title="🗺️ Warehouse map">
+            <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
+              Optional. Describe your shelving as a grid so each part can be tagged with a <strong>{warehouse.rowLabel}/{warehouse.bayLabel}/{warehouse.shelfLabel}</strong> position.
+              The mobile Collect pick-list then draws a little map that points a picker straight to the spot — no more hunting by photo.
+              Leave it off if you don't want structured locations (the free-text location field still works).
+            </p>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: C.text, cursor: 'pointer', marginBottom: 14, fontWeight: 600 }}>
+              <input type="checkbox" checked={!!warehouse.enabled} onChange={e => setWarehouse(w => ({ ...w, enabled: e.target.checked }))} />
+              Use a warehouse grid
+            </label>
+            {warehouse.enabled && (() => {
+              const clampN = v => { const n = Math.round(+v || 0); return n < 0 ? 0 : (n > 40 ? 40 : n) }
+              return (
+                <>
+                  <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+                    <div style={{ flex: '1 1 120px' }}>
+                      <label style={S.label}>Rows / aisles (how many wide)</label>
+                      <input type="number" min="0" max="40" style={S.input} value={warehouse.rows} onChange={e => setWarehouse(w => ({ ...w, rows: clampN(e.target.value) }))} placeholder="e.g. 6" />
+                    </div>
+                    <div style={{ flex: '1 1 120px' }}>
+                      <label style={S.label}>Bays per row (length)</label>
+                      <input type="number" min="0" max="40" style={S.input} value={warehouse.bays} onChange={e => setWarehouse(w => ({ ...w, bays: clampN(e.target.value) }))} placeholder="e.g. 10" />
+                    </div>
+                    <div style={{ flex: '1 1 120px' }}>
+                      <label style={S.label}>Shelves per bay (levels)</label>
+                      <input type="number" min="0" max="40" style={S.input} value={warehouse.shelves} onChange={e => setWarehouse(w => ({ ...w, shelves: clampN(e.target.value) }))} placeholder="e.g. 4" />
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+                    <div style={{ flex: '1 1 120px' }}>
+                      <label style={S.label}>Name for a row</label>
+                      <input style={S.input} value={warehouse.rowLabel} onChange={e => setWarehouse(w => ({ ...w, rowLabel: e.target.value || 'Row' }))} placeholder="Row" />
+                    </div>
+                    <div style={{ flex: '1 1 120px' }}>
+                      <label style={S.label}>Name for a bay</label>
+                      <input style={S.input} value={warehouse.bayLabel} onChange={e => setWarehouse(w => ({ ...w, bayLabel: e.target.value || 'Bay' }))} placeholder="Bay" />
+                    </div>
+                    <div style={{ flex: '1 1 120px' }}>
+                      <label style={S.label}>Name for a shelf</label>
+                      <input style={S.input} value={warehouse.shelfLabel} onChange={e => setWarehouse(w => ({ ...w, shelfLabel: e.target.value || 'Shelf' }))} placeholder="Shelf" />
+                    </div>
+                  </div>
+                  {warehouse.rows > 0 && warehouse.bays > 0 ? (
+                    <div>
+                      <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>Floor plan preview ({warehouse.rows} {warehouse.rows === 1 ? 'row' : 'rows'} × {warehouse.bays} {warehouse.bays === 1 ? 'bay' : 'bays'}, {warehouse.shelves || 0} {warehouse.shelves === 1 ? 'shelf' : 'shelves'} deep):</div>
+                      <WarehouseMap warehouse={warehouse} part={{ locRow: 1, locBay: 1, locShelf: warehouse.shelves ? 1 : null }} />
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 12, color: C.muted }}>Enter rows and bays to see the floor plan.</div>
+                  )}
+                </>
               )
             })()}
           </Section>

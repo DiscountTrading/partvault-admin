@@ -32,6 +32,28 @@ const CATEGORIES = [
 const catOf = (r) => (CATEGORIES.some(c => c.id === r.entity_type) ? r.entity_type : 'other')
 const PAGE = 300
 
+// Friendly labels for the per-row Details diff (falls back to the raw column).
+const FIELD_LABELS = {
+  status: 'Status', list_price: 'Price', sold_price: 'Sold price', sku: 'SKU',
+  category: 'Category', subcategory: 'Subcategory', condition: 'Condition',
+  make: 'Make', model: 'Model', year: 'Year', title: 'Name', location: 'Location',
+  loc_row: 'Row', loc_bay: 'Bay', loc_shelf: 'Shelf', weight: 'Weight',
+  part_number: 'Part #', description: 'Description', notes: 'Notes',
+  deleted_at: 'Deleted', listed_date: 'Listed date', sold_date: 'Sold date',
+  acquired_date: 'Acquired date', shipping_charged: 'Shipping charged',
+  permissions: 'Permissions', role: 'Role', source: 'Source', costs: 'Costs',
+  platform_sku: 'eBay SKU', platform_listing_id: 'eBay item', listed_at: 'Listed', sold_at: 'Sold',
+}
+const labelFor = (f) => FIELD_LABELS[f] || f.replace(/_/g, ' ')
+// Render a JSON value from the diff as a short human string.
+const fmtVal = (v) => {
+  if (v === null || v === undefined || v === '') return '—'
+  if (typeof v === 'boolean') return v ? 'yes' : 'no'
+  if (typeof v === 'object') { const s = JSON.stringify(v); return s.length > 80 ? s.slice(0, 80) + '…' : s }
+  const s = String(v)
+  return s.length > 80 ? s.slice(0, 80) + '…' : s
+}
+
 function Section({ title, action, children }) {
   return (
     <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 14, padding: '18px 22px', marginBottom: 16, boxShadow: '0 1px 2px rgba(0,0,0,0.04)' }}>
@@ -88,6 +110,8 @@ export default function Activity({ storeId }) {
   const [enabledActs, setEnabledActs] = useState(null)
   const [catOpen, setCatOpen] = useState(false)
   const [actOpen, setActOpen] = useState(false)
+  const [expanded, setExpanded] = useState(() => new Set()) // row ids with Details open
+  const toggleExpand = (id) => setExpanded(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s })
 
   // Paged fetch. `before` (a changed_at cursor) drives "Load more" so the feed can
   // keep going past the first page instead of stopping at a fixed cap.
@@ -196,15 +220,44 @@ export default function Activity({ storeId }) {
             const sep = (r.summary || '').indexOf(' — ')
             const head = sep >= 0 ? r.summary.slice(0, sep) : (r.summary || '')
             const detail = sep >= 0 ? r.summary.slice(sep + 3) : ''
+            const changes = Array.isArray(r.details) ? r.details : []
+            const isOpen = expanded.has(r.id)
             return (
-              <div key={r.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 0', borderBottom: `1px solid ${C.border}` }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: a.color, background: a.color + '18', borderRadius: 6, padding: '3px 8px', minWidth: 64, textAlign: 'center', flexShrink: 0, marginTop: 1 }}>{a.label}</span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.summary}>{head}</div>
-                  {detail && <div style={{ fontSize: 12.5, color: detail === 'background update' ? C.muted : C.accent, marginTop: 2, wordBreak: 'break-word', lineHeight: 1.4 }}>{detail}</div>}
+              <div key={r.id} style={{ borderBottom: `1px solid ${C.border}`, padding: '10px 0' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: a.color, background: a.color + '18', borderRadius: 6, padding: '3px 8px', minWidth: 64, textAlign: 'center', flexShrink: 0, marginTop: 1 }}>{a.label}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.summary}>{head}</div>
+                    {detail && <div style={{ fontSize: 12.5, color: detail === 'background update' ? C.muted : C.accent, marginTop: 2, wordBreak: 'break-word', lineHeight: 1.4 }}>{detail}</div>}
+                  </div>
+                  {changes.length > 0 && (
+                    <button onClick={() => toggleExpand(r.id)} title="Show every field that changed"
+                      style={{ flexShrink: 0, border: `1px solid ${C.border}`, borderRadius: 6, padding: '3px 8px', fontSize: 11, background: isOpen ? C.accent + '14' : '#fff', color: C.text, cursor: 'pointer', fontWeight: isOpen ? 600 : 400, marginTop: 1 }}>
+                      {isOpen ? 'Hide' : `Details (${changes.length})`}
+                    </button>
+                  )}
+                  <span style={{ fontSize: 12, color: C.muted, flexShrink: 0, marginTop: 1 }}>{r.user_email || 'system'}</span>
+                  <span style={{ fontSize: 12, color: C.muted, flexShrink: 0, minWidth: 96, textAlign: 'right', marginTop: 1 }}>{fmtTime(r.created_at)}</span>
                 </div>
-                <span style={{ fontSize: 12, color: C.muted, flexShrink: 0, marginTop: 1 }}>{r.user_email || 'system'}</span>
-                <span style={{ fontSize: 12, color: C.muted, flexShrink: 0, minWidth: 96, textAlign: 'right', marginTop: 1 }}>{fmtTime(r.created_at)}</span>
+                {isOpen && changes.length > 0 && (
+                  <div style={{ margin: '10px 0 2px 76px', background: '#fafafa', border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 12px' }}>
+                    <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>
+                      {r.entity_type} · {r.user_email || 'system (sync)'} · {fmtTime(r.created_at)}
+                    </div>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                      <tbody>
+                        {changes.map((c, i) => (
+                          <tr key={i} style={{ borderTop: i ? `1px solid ${C.border}` : 'none' }}>
+                            <td style={{ padding: '4px 10px 4px 0', color: C.muted, whiteSpace: 'nowrap', verticalAlign: 'top', fontWeight: 600 }}>{labelFor(c.field)}</td>
+                            <td style={{ padding: '4px 8px', color: C.text, wordBreak: 'break-word' }}>{fmtVal(c.old)}</td>
+                            <td style={{ padding: '4px 6px', color: C.muted, verticalAlign: 'top' }}>→</td>
+                            <td style={{ padding: '4px 0', color: C.accent, wordBreak: 'break-word', fontWeight: 600 }}>{fmtVal(c.new)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             )
           })}

@@ -4,6 +4,7 @@ import { sb } from '../lib/supabase'
 import { getActiveMarketplace, formatWeight } from '../lib/marketplaces'
 import { makesFor, MODEL_SUGS } from '../lib/vehicles'
 import { printLabels, DEFAULT_LABELS } from '../lib/labels'
+import { WAREHOUSE_DEFAULTS, warehouseConfig } from '../lib/warehouse'
 
 function Field({ label, children }) {
   return <div style={{ marginBottom: 12 }}><label style={S.label}>{label}</label>{children}</div>
@@ -241,14 +242,14 @@ function WeightField({ grams, onChange }) {
 }
 
 // ─── Part Form ─────────────────────────────────────────────────────────────
-function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSettings, footer, costing, labels = DEFAULT_LABELS, allParts = [] }) {
+function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSettings, footer, costing, labels = DEFAULT_LABELS, warehouse = WAREHOUSE_DEFAULTS, allParts = [] }) {
   const defCat = CATEGORY_NAMES[4]
   const curSym = getActiveMarketplace().currencySymbol
   const usesOz = getActiveMarketplace().weightUnit === 'oz'
   const [form, setForm] = useState(part ? { ...part, costs: { ...part.costs }, listPrice: part.list_price||part.listPrice||0, ai_assessed: part.ai_assessed??false, acquiredDate: part.acquiredDate ? String(part.acquiredDate).slice(0,10) : (part.createdAt ? String(part.createdAt).slice(0,10) : '') } : {
     title:'', category:defCat, subcategory:EBAY_AU_CATEGORIES[defCat][0], make:'', model:'', year:'', condition:PART_CONDITIONS[1],
     description:'', acquiredDate:new Date().toISOString().slice(0,10), costs:defCosts(), listPrice:'', soldPrice:'', photos:[], weight:'', status:'in_stock',
-    partNumber:'', notes:'', location:'', ai_assessed:false, car_id:null,
+    partNumber:'', notes:'', location:'', locRow:'', locBay:'', locShelf:'', ai_assessed:false, car_id:null,
   })
   const [generating, setGenerating] = useState(false)
   const [descOptions, setDescOptions] = useState([])   // ranked description choices
@@ -845,6 +846,24 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
           <Field label="Acquired Date"><input style={S.input} type="date" value={form.acquiredDate||''} onChange={e => set('acquiredDate', e.target.value)} /></Field>
           <Field label="Storage location"><input style={S.input} value={form.location||''} onChange={e => set('location', e.target.value)} placeholder="Shelf / bin / rack…" /></Field>
         </div>
+        {warehouse?.enabled && (() => {
+          const wc = warehouseConfig(warehouse)
+          const axis = (key, label, count) => (
+            <Field label={label}>
+              <select style={S.select} value={form[key] ?? ''} onChange={e => set(key, e.target.value === '' ? '' : +e.target.value)}>
+                <option value="">—</option>
+                {Array.from({ length: Math.max(0, count | 0) }, (_, i) => <option key={i} value={i + 1}>{i + 1}</option>)}
+              </select>
+            </Field>
+          )
+          return (
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12, marginTop:12 }}>
+              {axis('locRow', wc.rowLabel, wc.rows)}
+              {axis('locBay', wc.bayLabel, wc.bays)}
+              {axis('locShelf', wc.shelfLabel, wc.shelves)}
+            </div>
+          )
+        })()}
         <Field label="Notes"><input style={S.input} value={form.notes||''} onChange={e => set('notes', e.target.value)} /></Field>
       </Section>
 
@@ -908,7 +927,7 @@ function BulkAIPanel({ group, onComplete, aiSettings, footer, storeId }) {
 }
 
 // ─── Main Inventory ────────────────────────────────────────────────────────
-export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDeleteCar, onAddCar, storeId, aiSettings, footer, costing, labels = DEFAULT_LABELS }) {
+export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDeleteCar, onAddCar, storeId, aiSettings, footer, costing, labels = DEFAULT_LABELS, warehouse = WAREHOUSE_DEFAULTS }) {
   const [viewMode, setViewMode] = useState('parts')
   const [search, setSearch] = useState('')
   const [filterMake, setFilterMake] = useState('')
@@ -986,7 +1005,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
   }
 
   if (showForm) return (
-    <PartForm part={editingPart} cars={cars} storeId={storeId} aiSettings={aiSettings} footer={footer} costing={costing} labels={labels} allParts={parts}
+    <PartForm part={editingPart} cars={cars} storeId={storeId} aiSettings={aiSettings} footer={footer} costing={costing} labels={labels} warehouse={warehouse} allParts={parts}
       onSave={async p => {
         try {
           if (editingPart) await onEdit({ ...editingPart, ...p }); else await onAdd(p)
