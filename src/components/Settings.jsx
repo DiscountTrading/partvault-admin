@@ -1407,6 +1407,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     { id: 'descriptions', label: '📝 Descriptions' },
     { id: 'ebay', label: '🛒 eBay Sync' },
     { id: 'shipping', label: '📦 Shipping' },
+    { id: 'warehouse', label: '🗺️ Warehouse' },
     { id: 'team', label: '👥 User Access' },
     { id: 'activity', label: '📋 Activity' },
   ]
@@ -1721,7 +1722,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, paddingBottom: 16, borderBottom: `1px solid ${C.border}` }}>
         <h2 style={S.h1}>⚙️ Settings</h2>
-        {tab === 'descriptions' && (
+        {(tab === 'descriptions' || tab === 'warehouse') && (
           <button style={{ ...S.btn(), opacity: saving ? 0.6 : 1 }} onClick={saveSettings} disabled={saving}>
             {saving ? 'Saving...' : saved ? '✓ Saved' : 'Save Settings'}
           </button>
@@ -1743,6 +1744,114 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
 
       {/* SHIPPING TAB */}
       {tab === 'shipping' && <ShippingSettings storeId={storeId} />}
+
+      {/* WAREHOUSE TAB — physical storage: rent-based storage cost + the optional Row/Bay/Shelf grid */}
+      {tab === 'warehouse' && !loading && (
+        <>
+          <Section title="🏠 Storage facility">
+            <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
+              Turns your warehouse rent into a per-part storage cost. Rent is spread over the volume you can actually use
+              for sellable stock (the rest — working space, intake, air — is paid for too, so the stock carries it). A part's
+              volume comes from its category box size (set under Shipping), and the cost accrues over how long it's held, so
+              slow movers cost more. Feeds into part cost, margins and the Vehicle scores.
+            </p>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
+              <div style={{ flex: '1 1 150px' }}>
+                <label style={S.label}>Total warehouse volume (m³)</label>
+                <input type="number" style={S.input} value={storage.volumeM3} onChange={e => setStorage(s => ({ ...s, volumeM3: e.target.value }))} placeholder="e.g. 600" />
+              </div>
+              <div style={{ flex: '1 1 150px' }}>
+                <label style={S.label}>Rent ($)</label>
+                <input type="number" style={S.input} value={storage.rent} onChange={e => setStorage(s => ({ ...s, rent: e.target.value }))} placeholder="e.g. 3000" />
+              </div>
+              <div style={{ flex: '1 1 120px' }}>
+                <label style={S.label}>Rent period</label>
+                <select style={S.select} value={storage.rentPeriod} onChange={e => setStorage(s => ({ ...s, rentPeriod: e.target.value }))}>
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="annual">Annual</option>
+                </select>
+              </div>
+              <div style={{ flex: '1 1 150px' }}>
+                <label style={S.label}>Usable for storage (%)</label>
+                <input type="number" style={S.input} value={storage.usablePct} onChange={e => setStorage(s => ({ ...s, usablePct: e.target.value }))} />
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>Default 25% (15% working · 10% intake · 50% air).</div>
+              </div>
+            </div>
+            {(() => {
+              const vol = +storage.volumeM3 || 0, pct = +storage.usablePct || 0
+              const perDay = rentPerDay(storage.rent, storage.rentPeriod)
+              const usable = vol * pct / 100
+              if (!(vol > 0 && perDay > 0 && usable > 0)) return (
+                <div style={{ fontSize: 12, color: C.muted }}>Enter volume, rent and usable % to see the storage rate.</div>
+              )
+              const ratePerM3Yr = (perDay / usable) * 365
+              return (
+                <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.7 }}>
+                  Usable storage volume: <strong>{usable.toFixed(1)} m³</strong> · Storage rate:
+                  <strong> ${ratePerM3Yr.toFixed(0)}/m³ per year</strong> (${(ratePerM3Yr / 365).toFixed(3)}/m³/day).
+                  A part in a 40×30×20 cm box (0.024 m³) held 6 months ≈ <strong>${(ratePerM3Yr * 0.024 / 2).toFixed(2)}</strong>.
+                </div>
+              )
+            })()}
+          </Section>
+
+          <Section title="🗺️ Warehouse map">
+            <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
+              Optional. Describe your shelving as a grid so each part can be tagged with a <strong>{warehouse.rowLabel}/{warehouse.bayLabel}/{warehouse.shelfLabel}</strong> position.
+              The mobile Collect pick-list then draws a little map that points a picker straight to the spot — no more hunting by photo.
+              Leave it off if you don't want structured locations (the free-text location field still works).
+            </p>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: C.text, cursor: 'pointer', marginBottom: 14, fontWeight: 600 }}>
+              <input type="checkbox" checked={!!warehouse.enabled} onChange={e => setWarehouse(w => ({ ...w, enabled: e.target.checked }))} />
+              Use a warehouse grid
+            </label>
+            {warehouse.enabled && (() => {
+              const clampN = v => { const n = Math.round(+v || 0); return n < 0 ? 0 : (n > 40 ? 40 : n) }
+              return (
+                <>
+                  <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+                    <div style={{ flex: '1 1 120px' }}>
+                      <label style={S.label}>Rows / aisles (how many wide)</label>
+                      <input type="number" min="0" max="40" style={S.input} value={warehouse.rows} onChange={e => setWarehouse(w => ({ ...w, rows: clampN(e.target.value) }))} placeholder="e.g. 6" />
+                    </div>
+                    <div style={{ flex: '1 1 120px' }}>
+                      <label style={S.label}>Bays per row (length)</label>
+                      <input type="number" min="0" max="40" style={S.input} value={warehouse.bays} onChange={e => setWarehouse(w => ({ ...w, bays: clampN(e.target.value) }))} placeholder="e.g. 10" />
+                    </div>
+                    <div style={{ flex: '1 1 120px' }}>
+                      <label style={S.label}>Shelves per bay (levels)</label>
+                      <input type="number" min="0" max="40" style={S.input} value={warehouse.shelves} onChange={e => setWarehouse(w => ({ ...w, shelves: clampN(e.target.value) }))} placeholder="e.g. 4" />
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+                    <div style={{ flex: '1 1 120px' }}>
+                      <label style={S.label}>Name for a row</label>
+                      <input style={S.input} value={warehouse.rowLabel} onChange={e => setWarehouse(w => ({ ...w, rowLabel: e.target.value || 'Row' }))} placeholder="Row" />
+                    </div>
+                    <div style={{ flex: '1 1 120px' }}>
+                      <label style={S.label}>Name for a bay</label>
+                      <input style={S.input} value={warehouse.bayLabel} onChange={e => setWarehouse(w => ({ ...w, bayLabel: e.target.value || 'Bay' }))} placeholder="Bay" />
+                    </div>
+                    <div style={{ flex: '1 1 120px' }}>
+                      <label style={S.label}>Name for a shelf</label>
+                      <input style={S.input} value={warehouse.shelfLabel} onChange={e => setWarehouse(w => ({ ...w, shelfLabel: e.target.value || 'Shelf' }))} placeholder="Shelf" />
+                    </div>
+                  </div>
+                  {warehouse.rows > 0 && warehouse.bays > 0 ? (
+                    <div>
+                      <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>Floor plan preview ({warehouse.rows} {warehouse.rows === 1 ? 'row' : 'rows'} × {warehouse.bays} {warehouse.bays === 1 ? 'bay' : 'bays'}, {warehouse.shelves || 0} {warehouse.shelves === 1 ? 'shelf' : 'shelves'} deep):</div>
+                      <WarehouseMap warehouse={warehouse} part={{ locRow: 1, locBay: 1, locShelf: warehouse.shelves ? 1 : null }} />
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 12, color: C.muted }}>Enter rows and bays to see the floor plan.</div>
+                  )}
+                </>
+              )
+            })()}
+          </Section>
+        </>
+      )}
 
       {/* USER ACCESS TAB */}
       {tab === 'team' && <TeamAccess storeId={storeId} />}
@@ -2064,109 +2173,6 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
               </div>
               <div style={{ fontSize: 12, color: C.muted, marginTop: 12 }}>The heaviest tier is used for anything over the top weight. Estimated postage = matching carrier rate + handling fee.</div>
             </div>
-          </Section>
-
-          <Section title="🏠 Storage facility">
-            <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
-              Turns your warehouse rent into a per-part storage cost. Rent is spread over the volume you can actually use
-              for sellable stock (the rest — working space, intake, air — is paid for too, so the stock carries it). A part's
-              volume comes from its category box size (set under Shipping), and the cost accrues over how long it's held, so
-              slow movers cost more. Feeds into part cost, margins and the Vehicle scores.
-            </p>
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
-              <div style={{ flex: '1 1 150px' }}>
-                <label style={S.label}>Total warehouse volume (m³)</label>
-                <input type="number" style={S.input} value={storage.volumeM3} onChange={e => setStorage(s => ({ ...s, volumeM3: e.target.value }))} placeholder="e.g. 600" />
-              </div>
-              <div style={{ flex: '1 1 150px' }}>
-                <label style={S.label}>Rent ($)</label>
-                <input type="number" style={S.input} value={storage.rent} onChange={e => setStorage(s => ({ ...s, rent: e.target.value }))} placeholder="e.g. 3000" />
-              </div>
-              <div style={{ flex: '1 1 120px' }}>
-                <label style={S.label}>Rent period</label>
-                <select style={S.select} value={storage.rentPeriod} onChange={e => setStorage(s => ({ ...s, rentPeriod: e.target.value }))}>
-                  <option value="weekly">Weekly</option>
-                  <option value="monthly">Monthly</option>
-                  <option value="annual">Annual</option>
-                </select>
-              </div>
-              <div style={{ flex: '1 1 150px' }}>
-                <label style={S.label}>Usable for storage (%)</label>
-                <input type="number" style={S.input} value={storage.usablePct} onChange={e => setStorage(s => ({ ...s, usablePct: e.target.value }))} />
-                <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>Default 25% (15% working · 10% intake · 50% air).</div>
-              </div>
-            </div>
-            {(() => {
-              const vol = +storage.volumeM3 || 0, pct = +storage.usablePct || 0
-              const perDay = rentPerDay(storage.rent, storage.rentPeriod)
-              const usable = vol * pct / 100
-              if (!(vol > 0 && perDay > 0 && usable > 0)) return (
-                <div style={{ fontSize: 12, color: C.muted }}>Enter volume, rent and usable % to see the storage rate.</div>
-              )
-              const ratePerM3Yr = (perDay / usable) * 365
-              return (
-                <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.7 }}>
-                  Usable storage volume: <strong>{usable.toFixed(1)} m³</strong> · Storage rate:
-                  <strong> ${ratePerM3Yr.toFixed(0)}/m³ per year</strong> (${(ratePerM3Yr / 365).toFixed(3)}/m³/day).
-                  A part in a 40×30×20 cm box (0.024 m³) held 6 months ≈ <strong>${(ratePerM3Yr * 0.024 / 2).toFixed(2)}</strong>.
-                </div>
-              )
-            })()}
-          </Section>
-
-          <Section title="🗺️ Warehouse map">
-            <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
-              Optional. Describe your shelving as a grid so each part can be tagged with a <strong>{warehouse.rowLabel}/{warehouse.bayLabel}/{warehouse.shelfLabel}</strong> position.
-              The mobile Collect pick-list then draws a little map that points a picker straight to the spot — no more hunting by photo.
-              Leave it off if you don't want structured locations (the free-text location field still works).
-            </p>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: C.text, cursor: 'pointer', marginBottom: 14, fontWeight: 600 }}>
-              <input type="checkbox" checked={!!warehouse.enabled} onChange={e => setWarehouse(w => ({ ...w, enabled: e.target.checked }))} />
-              Use a warehouse grid
-            </label>
-            {warehouse.enabled && (() => {
-              const clampN = v => { const n = Math.round(+v || 0); return n < 0 ? 0 : (n > 40 ? 40 : n) }
-              return (
-                <>
-                  <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
-                    <div style={{ flex: '1 1 120px' }}>
-                      <label style={S.label}>Rows / aisles (how many wide)</label>
-                      <input type="number" min="0" max="40" style={S.input} value={warehouse.rows} onChange={e => setWarehouse(w => ({ ...w, rows: clampN(e.target.value) }))} placeholder="e.g. 6" />
-                    </div>
-                    <div style={{ flex: '1 1 120px' }}>
-                      <label style={S.label}>Bays per row (length)</label>
-                      <input type="number" min="0" max="40" style={S.input} value={warehouse.bays} onChange={e => setWarehouse(w => ({ ...w, bays: clampN(e.target.value) }))} placeholder="e.g. 10" />
-                    </div>
-                    <div style={{ flex: '1 1 120px' }}>
-                      <label style={S.label}>Shelves per bay (levels)</label>
-                      <input type="number" min="0" max="40" style={S.input} value={warehouse.shelves} onChange={e => setWarehouse(w => ({ ...w, shelves: clampN(e.target.value) }))} placeholder="e.g. 4" />
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
-                    <div style={{ flex: '1 1 120px' }}>
-                      <label style={S.label}>Name for a row</label>
-                      <input style={S.input} value={warehouse.rowLabel} onChange={e => setWarehouse(w => ({ ...w, rowLabel: e.target.value || 'Row' }))} placeholder="Row" />
-                    </div>
-                    <div style={{ flex: '1 1 120px' }}>
-                      <label style={S.label}>Name for a bay</label>
-                      <input style={S.input} value={warehouse.bayLabel} onChange={e => setWarehouse(w => ({ ...w, bayLabel: e.target.value || 'Bay' }))} placeholder="Bay" />
-                    </div>
-                    <div style={{ flex: '1 1 120px' }}>
-                      <label style={S.label}>Name for a shelf</label>
-                      <input style={S.input} value={warehouse.shelfLabel} onChange={e => setWarehouse(w => ({ ...w, shelfLabel: e.target.value || 'Shelf' }))} placeholder="Shelf" />
-                    </div>
-                  </div>
-                  {warehouse.rows > 0 && warehouse.bays > 0 ? (
-                    <div>
-                      <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>Floor plan preview ({warehouse.rows} {warehouse.rows === 1 ? 'row' : 'rows'} × {warehouse.bays} {warehouse.bays === 1 ? 'bay' : 'bays'}, {warehouse.shelves || 0} {warehouse.shelves === 1 ? 'shelf' : 'shelves'} deep):</div>
-                      <WarehouseMap warehouse={warehouse} part={{ locRow: 1, locBay: 1, locShelf: warehouse.shelves ? 1 : null }} />
-                    </div>
-                  ) : (
-                    <div style={{ fontSize: 12, color: C.muted }}>Enter rows and bays to see the floor plan.</div>
-                  )}
-                </>
-              )
-            })()}
           </Section>
 
           <Section title="🏷️ Stock labels">
