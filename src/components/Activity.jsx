@@ -188,12 +188,21 @@ export default function Activity({ storeId }) {
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           {visible.map(r => {
             const a = ACTION_STYLE[r.action] || { label: r.action, color: C.muted }
+            // Split "part Name — price 50→65 · status listed→sold" into a heading
+            // (what/who touched) + the change detail, shown on its own line so the
+            // "what changed" is always visible rather than truncated off the end.
+            const sep = (r.summary || '').indexOf(' — ')
+            const head = sep >= 0 ? r.summary.slice(0, sep) : (r.summary || '')
+            const detail = sep >= 0 ? r.summary.slice(sep + 3) : ''
             return (
-              <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderBottom: `1px solid ${C.border}` }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: a.color, background: a.color + '18', borderRadius: 6, padding: '3px 8px', minWidth: 64, textAlign: 'center', flexShrink: 0 }}>{a.label}</span>
-                <span title={r.summary} style={{ flex: 1, minWidth: 0, fontSize: 13, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.summary}</span>
-                <span style={{ fontSize: 12, color: C.muted, flexShrink: 0 }}>{r.user_email || 'system'}</span>
-                <span style={{ fontSize: 12, color: C.muted, flexShrink: 0, minWidth: 96, textAlign: 'right' }}>{fmtTime(r.created_at)}</span>
+              <div key={r.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '10px 0', borderBottom: `1px solid ${C.border}` }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: a.color, background: a.color + '18', borderRadius: 6, padding: '3px 8px', minWidth: 64, textAlign: 'center', flexShrink: 0, marginTop: 1 }}>{a.label}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.summary}>{head}</div>
+                  {detail && <div style={{ fontSize: 12.5, color: detail === 'background update' ? C.muted : C.accent, marginTop: 2, wordBreak: 'break-word', lineHeight: 1.4 }}>{detail}</div>}
+                </div>
+                <span style={{ fontSize: 12, color: C.muted, flexShrink: 0, marginTop: 1 }}>{r.user_email || 'system'}</span>
+                <span style={{ fontSize: 12, color: C.muted, flexShrink: 0, minWidth: 96, textAlign: 'right', marginTop: 1 }}>{fmtTime(r.created_at)}</span>
               </div>
             )
           })}
