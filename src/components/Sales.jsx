@@ -639,10 +639,6 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
   const [metric, setMetric] = useState('net')
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
-  // Analytics graphs are collapsible (remembered) so the Fulfilment queue + sales
-  // table stay in view without scrolling past a tall chart section.
-  const [showAnalytics, setShowAnalytics] = useState(() => { try { return localStorage.getItem('pv_sales_analytics') !== 'hidden' } catch { return true } })
-  const toggleAnalytics = () => setShowAnalytics(v => { const n = !v; try { localStorage.setItem('pv_sales_analytics', n ? 'shown' : 'hidden') } catch { /* ignore */ } return n })
 
   const derivedAll = useMemo(() => sales.filter(s => !s.cancelled).map(s => {
     const d = deriveSale(s, partById, costing)
@@ -820,13 +816,7 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
       {/* Fulfilment first — the actionable pack/post list, visible without scrolling past the graphs. */}
       <FulfilmentQueue sales={sales} partById={partById} wf={wf} setStage={setStage} now={now} />
 
-      {/* Collapsible analytics — keep the page short so fulfilment + sales stay in view. */}
-      <button onClick={toggleAnalytics} style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0', marginBottom: showAnalytics ? 8 : 14, color: C.text, fontSize: 14, fontWeight: 700 }}>
-        <span style={{ fontSize: 12, color: C.muted, width: 12 }}>{showAnalytics ? '▾' : '▸'}</span> 📊 Performance &amp; promoted analytics
-      </button>
-
-      {showAnalytics && <>
-      {/* Performance overview — trend + comparison against the previous period. */}
+      {/* Performance overview — trend + comparison against the previous period (compact). */}
       <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12, padding: '14px 16px', marginBottom: 16 }}>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -872,7 +862,6 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
       </div>
 
       <PromotedPanel promo={promo} periodLabel={range.custom ? `${fmtDate(range.fromMs)} – ${fmtDate(range.toMs)}` : periodTitle} />
-      </>}
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
         <div style={{ fontSize: 13, color: C.muted, fontWeight: 600 }}>{periodTitle} · {rows.length} sale{rows.length === 1 ? '' : 's'}</div>
