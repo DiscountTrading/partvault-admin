@@ -145,6 +145,19 @@ serve(async (req) => {
     // admin. Which light items run is a per-store setting (default category+price).
     const capCfg = { category: true, price: true }
 
+    // Anthropic call helpers. Declared UP HERE (not lower down) because the help
+    // assistant mode runs before this point — with `const` in the temporal dead
+    // zone, calling these from the help block threw a ReferenceError that was
+    // swallowed into a generic error, so the assistant always fell back to
+    // "Sorry, I couldn't answer that". Defining them first fixes it.
+    const callAnthropic = (payload: Record<string, unknown>) => fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': ANTHROPIC, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    const textOf = (data: any) => (data.content || []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('').trim()
+    const parseJson = (raw: string) => { try { return JSON.parse(raw) } catch { const m = raw?.match(/\{[\s\S]*\}/); return m ? JSON.parse(m[0]) : null } }
+
     // Mode: help assistant — answers "how do I…" questions from PartVault help
     // knowledge (fast Haiku). Hands off to "Message us" when unsure.
     if (mode === 'help') {
@@ -209,14 +222,6 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
       const { data: member } = await userClient.rpc('is_store_member', { p_store_id: storeId })
       if (!member) return json({ error: 'Not authorised' }, 403)
     }
-
-    const callAnthropic = (payload: Record<string, unknown>) => fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': ANTHROPIC, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-    const textOf = (data: any) => (data.content || []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('').trim()
-    const parseJson = (raw: string) => { try { return JSON.parse(raw) } catch { const m = raw?.match(/\{[\s\S]*\}/); return m ? JSON.parse(m[0]) : null } }
 
     // Mode: write an eBay listing description from a prebuilt prompt. With
     // body.options > 1, returns several ranked variants ({descriptions:[...]})
