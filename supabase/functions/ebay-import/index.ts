@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.35.0'
+const EDGE_FN_VERSION         = '3.36.0'
 const CHUNK_SIZE              = 20
 // eBay's getOrders can't return orders older than this, so the live sync only ever
 // manages sales within this window. The CSV history import must stay strictly OLDER
@@ -2755,6 +2755,101 @@ async function handleRequest(req: Request): Promise<Response> {
         await new Promise((res) => setTimeout(res, 150))
       }
       return json({ ok: true, updated, checked: parts.length })
+    }
+
+    if (action === 'category_aspects') {
+      // Return the full item-aspect (item specifics) definition for a friendly
+      // category — used by the bulk Specifics editor to render its fields.
+      const authHeader = req.headers.get('Authorization') || ''
+      const userClient = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: authHeader } } })
+      const { data: member } = await userClient.rpc('is_store_member', { p_store_id: storeId })
+      if (!member) return json({ error: 'Not authorised' }, 403)
+
+      const category = body.category || ''
+      const { token } = await getToken()
+      const mkt = await storeMarketplace(sb, storeId)
+      const ebayHeaders = {
+        'Authorization': `Bearer ${token}`, 'Accept': 'application/json',
+        'Content-Language': mkt.lang, 'X-EBAY-C-MARKETPLACE-ID': mkt.mp,
+      }
+      const map = await categoryMapFor(sb, mkt.mp)
+      const categoryId = map[category] || '9886'
+      const categoryTreeId = mkt.treeId
+      let specs: any[] = []
+      try {
+        const aRes = await fetch(`https://api.ebay.com/commerce/taxonomy/v1/category_tree/${categoryTreeId}/get_item_aspects_for_category?category_id=${categoryId}`, { headers: ebayHeaders })
+        if (aRes.ok) {
+          const aData = await aRes.json()
+          specs = (aData.aspects || []).map((a: any) => ({
+            name: a.localizedAspectName,
+            required: !!a.aspectConstraint?.aspectRequired,
+            mode: a.aspectConstraint?.aspectMode || 'FREE_TEXT',            // FREE_TEXT | SELECTION_ONLY
+            multi: a.aspectConstraint?.itemToAspectCardinality === 'MULTI',
+            allowed: (a.aspectValues || []).map((v: any) => v.localizedValue).filter(Boolean).slice(0, 200),
+          })).filter((s: any) => s.name)
+        }
+      } catch (_) { /* return empty on taxonomy hiccup */ }
+      return json({ ok: true, version: EDGE_FN_VERSION, categoryId, specs })
+    }
+
+    if (action === 'apply_specifics') {
+      // Bulk-set item specifics across selected parts. Always writes the value as
+      // a manual override (parts.ebay_overrides.specifics) so it's authoritative
+      // on the next publish/preview. Optionally pushes to CURRENTLY LIVE listings
+      // via Trading ReviseItem (best-effort, per-item errors collected).
+      const authHeader = req.headers.get('Authorization') || ''
+      const userClient = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: authHeader } } })
+      const partIds: string[] = Array.isArray(body.partIds) ? body.partIds : []
+      const setVals: Record<string, string> = body.set || {}   // { aspectName: value }  ('' = clear)
+      const pushLive = !!body.pushLive
+      if (!partIds.length) return json({ error: 'No parts selected' }, 400)
+      if (!Object.keys(setVals).length) return json({ error: 'No specifics to set' }, 400)
+
+      const { data: canEdit } = await userClient.rpc('has_permission', { p_store_id: storeId, p_capability: 'add_edit' })
+      if (!canEdit) return json({ error: 'Not authorised' }, 403)
+      if (pushLive) {
+        const { data: canPub } = await userClient.rpc('has_permission', { p_store_id: storeId, p_capability: 'publish' })
+        if (!canPub) return json({ error: 'Updating live eBay listings needs the publish permission' }, 403)
+      }
+
+      const { data: parts } = await sb.from('parts').select('id, ebay_overrides').eq('store_id', storeId).in('id', partIds)
+      let updated = 0
+      for (const p of (parts || [])) {
+        const ov = p.ebay_overrides || {}
+        const spec: Record<string, string> = { ...(ov.specifics || {}) }
+        for (const [k, v] of Object.entries(setVals)) spec[k] = v as string
+        const { error: uErr } = await sb.from('parts').update({ ebay_overrides: { ...ov, specifics: spec } }).eq('id', p.id)
+        if (!uErr) updated++
+      }
+
+      let pushed = 0
+      const failed: any[] = []
+      if (pushLive) {
+        const xesc = (s: string) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        const { token, certId } = await getToken()
+        const { data: live } = await sb.from('listings')
+          .select('part_id, platform_listing_id').eq('store_id', storeId)
+          .in('part_id', partIds).in('status', ['active', 'live']).is('deleted_at', null)
+        for (const l of (live || [])) {
+          const itemId = l.platform_listing_id
+          if (!itemId) continue
+          try {
+            // Merge onto the listing's CURRENT specifics (ReviseItem replaces the
+            // whole ItemSpecifics container, so we must send the full set).
+            const gx = await trading(token, certId, 'GetItem',
+              `<?xml version="1.0" encoding="utf-8"?><GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><ItemID>${itemId}</ItemID><DetailLevel>ReturnAll</DetailLevel></GetItemRequest>`)
+            const merged: Record<string, string> = extractItemSpecifics(gx)
+            for (const [k, v] of Object.entries(setVals)) { if (v === '' || v == null) delete merged[k]; else merged[k] = v as string }
+            const nvl = Object.entries(merged).filter(([, v]) => v != null && v !== '')
+              .map(([k, v]) => `<NameValueList><Name>${xesc(k)}</Name><Value>${xesc(String(v))}</Value></NameValueList>`).join('')
+            const rx = await trading(token, certId, 'ReviseItem',
+              `<?xml version="1.0" encoding="utf-8"?><ReviseItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><Item><ItemID>${itemId}</ItemID><ItemSpecifics>${nvl}</ItemSpecifics></Item></ReviseItemRequest>`)
+            if (getTag(rx, 'Ack') === 'Failure') { failed.push({ item: itemId, error: getTag(rx, 'LongMessage') || 'ReviseItem failed' }); continue }
+            pushed++
+          } catch (e) { failed.push({ item: itemId, error: (e as Error).message }) }
+        }
+      }
+      return json({ ok: true, version: EDGE_FN_VERSION, updated, pushed, failed })
     }
 
     if (action === 'preview_listing') {
