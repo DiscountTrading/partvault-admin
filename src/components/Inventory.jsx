@@ -844,11 +844,19 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
                       : Math.abs(delta) < 1 ? <span style={{ fontSize:12, color:C.green, fontWeight:700 }}>✓ You're right on the median</span>
                       : <span style={{ fontSize:12, fontWeight:700, color: delta > 0 ? C.yellow : C.green }}>You're {fmt(Math.abs(delta))} {delta > 0 ? 'above' : 'below'} the median</span>}
                     <div style={{ flex:1 }} />
-                    <span style={{ fontSize:12, color:C.muted }}>Suggested: <strong style={{ color:C.text }}>{fmt(med)}</strong></span>
-                    <button type="button" onClick={() => set('listPrice', med)} disabled={mine === med}
-                      style={{ ...S.btn('secondary'), padding:'4px 12px', fontSize:12, opacity: mine === med ? 0.5 : 1, cursor: mine === med ? 'default' : 'pointer' }}>
-                      Set to {fmt(med)}
-                    </button>
+                    {(() => {
+                      const under = Math.max(1, Math.round(med * 0.95))
+                      return <>
+                        <button type="button" onClick={() => set('listPrice', med)} disabled={mine === med}
+                          style={{ ...S.btn('secondary'), padding:'4px 12px', fontSize:12, opacity: mine === med ? 0.5 : 1, cursor: mine === med ? 'default' : 'pointer' }}>
+                          Match median {fmt(med)}
+                        </button>
+                        <button type="button" onClick={() => set('listPrice', under)} disabled={mine === under} title="Undercut the median by 5% to sell faster"
+                          style={{ ...S.btn('secondary'), padding:'4px 12px', fontSize:12, opacity: mine === under ? 0.5 : 1, cursor: mine === under ? 'default' : 'pointer' }}>
+                          Undercut 5% {fmt(under)}
+                        </button>
+                      </>
+                    })()}
                   </div>
                 )
               })()}

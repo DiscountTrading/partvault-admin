@@ -47,6 +47,7 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
   const [edits, setEdits] = useState({})          // { partId: { field|spec:Name : value } }
   const [saving, setSaving] = useState(false)
   const [marketBusy, setMarketBusy] = useState(false)
+  const [underPct, setUnderPct] = useState(0)   // undercut the market median by this %
   const [msg, setMsg] = useState('')
 
   const makes = useMemo(() => [...new Set(rows.map(r => r.make).filter(Boolean))].sort(), [rows])
@@ -144,12 +145,13 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
   // Stage list-price edits toward the market (median) for every filtered part that
   // has a market price — the user reviews the amber cells, then Saves.
   const priceToMarket = () => {
+    const factor = 1 - (Math.max(0, Math.min(90, +underPct || 0)) / 100)
     let n = 0
     setEdits(m => {
       const next = { ...m }
       for (const r of filtered) {
         if (r.market_price == null || r.market_price === '') continue
-        const target = String(Math.round(+r.market_price))
+        const target = String(Math.max(1, Math.round(+r.market_price * factor)))
         const cur = (next[r.id] && 'list_price' in next[r.id]) ? next[r.id].list_price : r.list_price
         if (String(cur ?? '') === target) continue
         next[r.id] = { ...(next[r.id] || {}), list_price: target }
@@ -158,7 +160,8 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
       return next
     })
     setVisible(s => { const v = new Set(s); v.add('market_price'); return v })
-    setMsg(n ? `Staged ${n} price change${n === 1 ? '' : 's'} to market — review the highlighted cells, then Save.` : 'No filtered parts have a market price yet — Refresh market first.')
+    const at = +underPct > 0 ? `${underPct}% under market` : 'the market median'
+    setMsg(n ? `Staged ${n} price change${n === 1 ? '' : 's'} to ${at} — review the highlighted cells, then Save.` : 'No filtered parts have a market price yet — Refresh market first.')
     setTimeout(() => setMsg(''), 5000)
   }
   const withMarket = useMemo(() => filtered.filter(r => r.market_price != null && r.market_price !== '').length, [filtered])
@@ -209,7 +212,11 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
         {/* Market pricing actions */}
         <button onClick={refreshMarket} disabled={marketBusy} title="Fetch live eBay median prices for in-stock parts"
           style={{ ...S.btn('secondary'), padding: '8px 12px', opacity: marketBusy ? 0.6 : 1 }}>{marketBusy ? '⏳ Checking…' : '↻ Market prices'}</button>
-        <button onClick={priceToMarket} disabled={!withMarket} title="Stage list prices toward the market median for the filtered parts"
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, border: `1.5px solid ${C.border}`, borderRadius: 8, padding: '0 8px', height: 36 }} title="Undercut the market median by this %">
+          <input type="number" min="0" max="90" value={underPct} onChange={e => setUnderPct(e.target.value)} style={{ width: 36, border: 'none', outline: 'none', fontSize: 13, textAlign: 'right', color: C.text }} />
+          <span style={{ fontSize: 12, color: C.muted }}>% under</span>
+        </div>
+        <button onClick={priceToMarket} disabled={!withMarket} title="Stage list prices toward the market for the filtered parts"
           style={{ ...S.btn(), padding: '8px 12px', opacity: withMarket ? 1 : 0.5, cursor: withMarket ? 'pointer' : 'not-allowed' }}>⚡ Price to market{withMarket ? ` (${withMarket})` : ''}</button>
 
         {/* Column chooser */}
