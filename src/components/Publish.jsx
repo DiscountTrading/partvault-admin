@@ -13,6 +13,12 @@ export default function Publish({ storeId, onChanged }) {
   const [review, setReview] = useState(false)
   const [publishing, setPublishing] = useState(false)
   const [result, setResult] = useState(null)
+  // Inline ship-from address prompt — eBay needs a merchant location before it
+  // accepts any listing. Rather than bounce to Settings, ask for it right here.
+  const [needAddr, setNeedAddr] = useState(false)
+  const [addr, setAddr] = useState({ addressLine1: '', city: '', stateOrProvince: '', postalCode: '', country: 'AU' })
+  const [addrSaving, setAddrSaving] = useState(false)
+  const [addrErr, setAddrErr] = useState('')
 
   const load = async () => {
     setLoading(true)
@@ -31,6 +37,8 @@ export default function Publish({ storeId, onChanged }) {
     if (!storeId) return
     load()
     sb.rpc('has_permission', { p_store_id: storeId, p_capability: 'publish' }).then(({ data }) => setCanPublish(!!data))
+    // Prefill the address prompt from any saved ship-from address.
+    sb.from('stores').select('settings').eq('id', storeId).single().then(({ data }) => { const a = data?.settings?.shipAddress; if (a) setAddr(x => ({ ...x, ...a })) })
     // Live updates — new parts captured in the field app appear without a refresh
     const channel = sb.channel(`publish-parts-${storeId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'parts', filter: `store_id=eq.${storeId}` }, () => load())
@@ -82,9 +90,30 @@ export default function Publish({ storeId, onChanged }) {
       await load()
       onChanged?.() // refresh the inventory/parts list so statuses stay in sync
     } catch (e) {
-      setResult({ error: e.message })
+      // Missing ship-from address → prompt for it inline instead of dead-ending.
+      if (/ship-from address|inventory location/i.test(e.message)) setNeedAddr(true)
+      else setResult({ error: e.message })
     }
     setPublishing(false)
+  }
+
+  // Save the entered ship-from address, create the eBay location, then retry.
+  const saveAddrAndList = async () => {
+    setAddrSaving(true); setAddrErr('')
+    try {
+      if (!addr.addressLine1 || !addr.city || !addr.postalCode || !addr.country) throw new Error('Fill in address, city, postcode and country.')
+      const { data: cur } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      await sb.from('stores').update({ settings: { ...(cur?.settings || {}), shipAddress: addr } }).eq('id', storeId)
+      const { data: { session } } = await sb.auth.getSession()
+      const res = await fetch(EDGE_FN, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ action: 'setup_ebay_location', storeId, address: addr }),
+      })
+      const d = await res.json()
+      if (!res.ok || d.error) throw new Error(d.error || 'Could not create your eBay location')
+      setNeedAddr(false); setAddrSaving(false)
+      await publish()   // retry now that the location exists
+    } catch (e) { setAddrErr(e.message); setAddrSaving(false) }
   }
 
   const th = { textAlign: 'left', padding: '9px 12px', color: C.muted, fontWeight: 700, fontSize: 11, whiteSpace: 'nowrap' }
@@ -192,6 +221,33 @@ export default function Publish({ storeId, onChanged }) {
               <button onClick={() => setReview(false)} disabled={publishing} style={{ ...S.btn('secondary'), padding: '11px 20px' }}>Cancel</button>
               <button onClick={publish} disabled={publishing} style={{ ...S.btn('primary'), padding: '11px 22px', opacity: publishing ? 0.6 : 1 }}>
                 {publishing ? 'Listing…' : `🚀 List ${selectedParts.length} live on eBay`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Ship-from address prompt — shown when eBay has no location yet */}
+      {needAddr && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300, padding: 20 }} onClick={() => !addrSaving && setNeedAddr(false)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: 24, maxWidth: 460, width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+            <div style={{ fontSize: 17, fontWeight: 700, color: C.text, marginBottom: 6 }}>📍 Where do you ship from?</div>
+            <div style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.5 }}>eBay needs a ship-from location before it accepts a listing. Enter it once and we'll register it with eBay and finish listing.</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 10 }}>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <label style={S.label}>Address</label>
+                <input style={S.input} value={addr.addressLine1} onChange={e => setAddr(a => ({ ...a, addressLine1: e.target.value }))} placeholder="12 Yard St" />
+              </div>
+              <div><label style={S.label}>City / Suburb</label><input style={S.input} value={addr.city} onChange={e => setAddr(a => ({ ...a, city: e.target.value }))} /></div>
+              <div><label style={S.label}>State</label><input style={S.input} value={addr.stateOrProvince} onChange={e => setAddr(a => ({ ...a, stateOrProvince: e.target.value.toUpperCase() }))} placeholder="QLD" /></div>
+              <div><label style={S.label}>Postcode</label><input style={S.input} value={addr.postalCode} onChange={e => setAddr(a => ({ ...a, postalCode: e.target.value }))} /></div>
+              <div><label style={S.label}>Country</label><input style={S.input} value={addr.country} onChange={e => setAddr(a => ({ ...a, country: e.target.value.toUpperCase() }))} maxLength={2} placeholder="AU" /></div>
+            </div>
+            {addrErr && <div style={{ fontSize: 12, color: C.red, marginTop: 10 }}>{addrErr}</div>}
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 18 }}>
+              <button onClick={() => setNeedAddr(false)} disabled={addrSaving} style={{ ...S.btn('secondary'), padding: '9px 16px' }}>Cancel</button>
+              <button onClick={saveAddrAndList} disabled={addrSaving} style={{ ...S.btn('primary'), padding: '9px 18px', opacity: addrSaving ? 0.6 : 1 }}>
+                {addrSaving ? 'Saving & listing…' : 'Save & list'}
               </button>
             </div>
           </div>
