@@ -2,12 +2,10 @@ import { useState } from 'react'
 import { C, S } from '../lib/constants'
 import Publish from './Publish'
 import Delist from './Delist'
-import Specifics from './Specifics'
 
 const SUBS = [
   { id: 'list', label: 'List' },
   { id: 'delist', label: 'De-list' },
-  { id: 'specifics', label: 'Specifics' },
 ]
 
 export default function Ebay({ storeId, onChanged }) {
@@ -28,7 +26,6 @@ export default function Ebay({ storeId, onChanged }) {
       </div>
       {sub === 'list' && <Publish storeId={storeId} onChanged={onChanged} />}
       {sub === 'delist' && <Delist storeId={storeId} onChanged={onChanged} />}
-      {sub === 'specifics' && <Specifics storeId={storeId} onChanged={onChanged} />}
     </div>
   )
 }

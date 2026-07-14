@@ -5,6 +5,7 @@ import { getActiveMarketplace, formatWeight } from '../lib/marketplaces'
 import { makesFor, MODEL_SUGS } from '../lib/vehicles'
 import { printLabels, DEFAULT_LABELS } from '../lib/labels'
 import { WAREHOUSE_DEFAULTS, warehouseConfig } from '../lib/warehouse'
+import BulkEdit from './BulkEdit'
 
 function Field({ label, children }) {
   return <div style={{ marginBottom: 12 }}><label style={S.label}>{label}</label>{children}</div>
@@ -950,7 +951,7 @@ function BulkAIPanel({ group, onComplete, aiSettings, footer, storeId }) {
 }
 
 // ─── Main Inventory ────────────────────────────────────────────────────────
-export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDeleteCar, onAddCar, storeId, aiSettings, footer, costing, labels = DEFAULT_LABELS, warehouse = WAREHOUSE_DEFAULTS }) {
+export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDeleteCar, onAddCar, storeId, aiSettings, footer, costing, labels = DEFAULT_LABELS, warehouse = WAREHOUSE_DEFAULTS, refetch }) {
   const [viewMode, setViewMode] = useState('parts')
   const [search, setSearch] = useState('')
   const [filterMake, setFilterMake] = useState('')
@@ -1087,11 +1088,15 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
           <div style={{ display:'flex', borderRadius:8, overflow:'hidden', border:`1.5px solid ${C.border}` }}>
             <button onClick={() => setViewMode('parts')} style={{ padding:'5px 14px', fontSize:12, fontWeight:600, background:viewMode==='parts'?C.accent:'white', color:viewMode==='parts'?'white':C.muted, border:'none', cursor:'pointer' }}>📦 By Part</button>
             <button onClick={() => setViewMode('car')} style={{ padding:'5px 14px', fontSize:12, fontWeight:600, background:viewMode==='car'?C.accent:'white', color:viewMode==='car'?'white':C.muted, border:'none', cursor:'pointer', borderLeft:`1px solid ${C.border}` }}>🚗 By Car</button>
+            <button onClick={() => setViewMode('bulk')} style={{ padding:'5px 14px', fontSize:12, fontWeight:600, background:viewMode==='bulk'?C.accent:'white', color:viewMode==='bulk'?'white':C.muted, border:'none', cursor:'pointer', borderLeft:`1px solid ${C.border}` }}>✏️ Bulk edit</button>
           </div>
           <span style={{ fontSize:12, color:C.muted, background:C.panel, borderRadius:10, padding:'2px 10px', fontWeight:600 }}>{totals.count} parts</span>
         </div>
       </div>
 
+      {viewMode==='bulk' && <BulkEdit storeId={storeId} parts={parts} onSaved={refetch} />}
+
+      {viewMode!=='bulk' && <>
       <div style={{ display:'flex', gap:12, marginBottom:14, flexWrap:'wrap' }}>
         {[['Stock Value',`$${totals.list.toFixed(0)}`,C.blue],['Total Cost',`$${totals.cost.toFixed(0)}`,C.red],['Est. Profit',`$${totals.profit.toFixed(0)}`,totals.profit>=0?C.green:C.red]].map(([l,v,col])=>(
           <div key={l} style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:8, padding:'8px 16px', borderTop:`3px solid ${col}` }}>
@@ -1152,6 +1157,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
           )}
         </div>
       </div>
+      </>}
 
       {viewMode==='car' && (
         <div>

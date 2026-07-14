@@ -293,7 +293,7 @@ export default function App() {
             parts={parts} cars={cars} storeId={storeId}
             onAdd={handleAdd} onEdit={handleEdit} onDelete={handleDel}
             onDeleteCar={softDeleteCar} onAddCar={handleAddCar}
-            aiSettings={aiSettings} footer={footer} costing={costingFull} labels={labels} warehouse={warehouse}
+            aiSettings={aiSettings} footer={footer} costing={costingFull} labels={labels} warehouse={warehouse} refetch={smartRefetch}
           />
         )}
         {tab === 'ebay' && <Ebay storeId={storeId} onChanged={smartRefetch} />}
