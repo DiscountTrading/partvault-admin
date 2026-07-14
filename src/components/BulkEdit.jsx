@@ -46,6 +46,7 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
   const [page, setPage] = useState(0)
   const [edits, setEdits] = useState({})          // { partId: { field|spec:Name : value } }
   const [saving, setSaving] = useState(false)
+  const [marketBusy, setMarketBusy] = useState(false)
   const [msg, setMsg] = useState('')
 
   const makes = useMemo(() => [...new Set(rows.map(r => r.make).filter(Boolean))].sort(), [rows])
@@ -124,6 +125,44 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
     setTimeout(() => setMsg(''), 3000)
   }
 
+  // Pull fresh eBay market prices (in-stock parts, stalest first, bounded server-side).
+  const refreshMarket = async () => {
+    setMarketBusy(true); setMsg('Checking eBay market prices…')
+    try {
+      const { data: { session } } = await sb.auth.getSession()
+      const res = await fetch(EDGE_FN, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ action: 'refresh_market', storeId }),
+      })
+      const d = await res.json()
+      if (d.error) setMsg(d.error)
+      else { setMsg(`Updated market prices for ${d.updated} of ${d.checked} in-stock parts.`); onSaved?.() }
+    } catch (e) { setMsg(e.message) }
+    finally { setMarketBusy(false); setVisible(s => new Set(s).add('market_price')) }
+  }
+
+  // Stage list-price edits toward the market (median) for every filtered part that
+  // has a market price — the user reviews the amber cells, then Saves.
+  const priceToMarket = () => {
+    let n = 0
+    setEdits(m => {
+      const next = { ...m }
+      for (const r of filtered) {
+        if (r.market_price == null || r.market_price === '') continue
+        const target = String(Math.round(+r.market_price))
+        const cur = (next[r.id] && 'list_price' in next[r.id]) ? next[r.id].list_price : r.list_price
+        if (String(cur ?? '') === target) continue
+        next[r.id] = { ...(next[r.id] || {}), list_price: target }
+        n++
+      }
+      return next
+    })
+    setVisible(s => { const v = new Set(s); v.add('market_price'); return v })
+    setMsg(n ? `Staged ${n} price change${n === 1 ? '' : 's'} to market — review the highlighted cells, then Save.` : 'No filtered parts have a market price yet — Refresh market first.')
+    setTimeout(() => setMsg(''), 5000)
+  }
+  const withMarket = useMemo(() => filtered.filter(r => r.market_price != null && r.market_price !== '').length, [filtered])
+
   const inp = { width: '100%', border: 'none', background: 'transparent', font: 'inherit', color: C.text, padding: '6px 8px', outline: 'none', boxSizing: 'border-box' }
   const editedCell = (id, key) => edits[id] && key in edits[id]
 
@@ -166,6 +205,12 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
         <select value={fMake} onChange={e => setFMake(e.target.value)} style={selStyle}><option value="">All makes</option>{makes.map(m => <option key={m} value={m}>{m}</option>)}</select>
         <select value={fCategory} onChange={e => setFCategory(e.target.value)} style={selStyle}><option value="">All categories</option>{CATEGORY_NAMES.map(c => <option key={c} value={c}>{c}</option>)}</select>
         <select value={fStatus} onChange={e => setFStatus(e.target.value)} style={selStyle}><option value="">All statuses</option>{STATUS_OPTS.map(s => <option key={s} value={s}>{STATUS_LABELS[s] || s}</option>)}</select>
+
+        {/* Market pricing actions */}
+        <button onClick={refreshMarket} disabled={marketBusy} title="Fetch live eBay median prices for in-stock parts"
+          style={{ ...S.btn('secondary'), padding: '8px 12px', opacity: marketBusy ? 0.6 : 1 }}>{marketBusy ? '⏳ Checking…' : '↻ Market prices'}</button>
+        <button onClick={priceToMarket} disabled={!withMarket} title="Stage list prices toward the market median for the filtered parts"
+          style={{ ...S.btn(), padding: '8px 12px', opacity: withMarket ? 1 : 0.5, cursor: withMarket ? 'pointer' : 'not-allowed' }}>⚡ Price to market{withMarket ? ` (${withMarket})` : ''}</button>
 
         {/* Column chooser */}
         <div style={{ position: 'relative' }}>
