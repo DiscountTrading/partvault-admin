@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.36.5'
+const EDGE_FN_VERSION         = '3.36.6'
 const CHUNK_SIZE              = 20
 // eBay's getOrders can't return orders older than this, so the live sync only ever
 // manages sales within this window. The CSV history import must stay strictly OLDER
@@ -2507,6 +2507,29 @@ async function handleRequest(req: Request): Promise<Response> {
       return json({ updated, noData, hasMore: false })
     }
 
+    // Resolve the store's eBay merchant (ship-from) location. eBay's Inventory API
+    // won't accept a listing without one. If eBay has none registered yet, create
+    // PARTVAULT_MAIN from the store's SAVED ship-from address (settings.shipAddress)
+    // so a first-time list doesn't dead-end at "no inventory location". Returns the
+    // key, or null when there's no saved address to create one from.
+    const ensureMerchantLocation = async (ebayHeaders: Record<string, string>, existingKey: string | undefined): Promise<string | null> => {
+      if (existingKey) return existingKey
+      const { data: sRow } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      const a = sRow?.settings?.shipAddress
+      if (!(a && a.addressLine1 && a.city && a.postalCode && a.country)) return null
+      const key = 'PARTVAULT_MAIN'
+      const exist = await fetch(`https://api.ebay.com/sell/inventory/v1/location/${key}`, { headers: ebayHeaders })
+      if (exist.ok) return key
+      const payload = {
+        location: { address: { addressLine1: a.addressLine1, city: a.city, stateOrProvince: a.stateOrProvince || '', postalCode: a.postalCode, country: String(a.country).toUpperCase() } },
+        name: 'PartVault Main', merchantLocationStatus: 'ENABLED', locationTypes: ['WAREHOUSE'],
+      }
+      const res = await fetch(`https://api.ebay.com/sell/inventory/v1/location/${key}`, { method: 'POST', headers: ebayHeaders, body: JSON.stringify(payload) })
+      if (res.ok || res.status === 204) return key
+      const e = await res.json().catch(() => ({}))
+      throw new Error(`Could not create your eBay ship-from location from the saved address (${e.errors?.[0]?.message || res.status}). Check Settings → eBay Inventory Location.`)
+    }
+
     if (action === 'create_draft_listings') {
       const { token } = await getToken()
       const partIds: string[] = body.partIds ?? []
@@ -2542,12 +2565,11 @@ async function handleRequest(req: Request): Promise<Response> {
       const fulfillmentPolicyId  = fpData.fulfillmentPolicies?.[0]?.fulfillmentPolicyId
       const paymentPolicyId      = ppData.paymentPolicies?.[0]?.paymentPolicyId
       const returnPolicyId       = rpData.returnPolicies?.[0]?.returnPolicyId
-      const merchantLocationKey  = locData.locations?.[0]?.merchantLocationKey
-
       if (!fulfillmentPolicyId) throw new Error('No fulfillment policy on eBay account — set one up in eBay Seller Hub first')
       if (!paymentPolicyId)     throw new Error('No payment policy on eBay account — set one up in eBay Seller Hub first')
       if (!returnPolicyId)      throw new Error('No return policy on eBay account — set one up in eBay Seller Hub first')
-      if (!merchantLocationKey) throw new Error('No inventory location — go to Settings → eBay Inventory Location and set up your address first')
+      const merchantLocationKey = await ensureMerchantLocation(ebayHeaders, locData.locations?.[0]?.merchantLocationKey)
+      if (!merchantLocationKey) throw new Error('No ship-from address saved — add it in Settings → eBay Inventory Location, then list again (it is created on eBay automatically).')
 
       const CONDITION_MAP: Record<string, string> = {
         'Used – Excellent': 'USED_EXCELLENT',
@@ -2992,11 +3014,11 @@ async function handleRequest(req: Request): Promise<Response> {
       const fulfillmentPolicyId  = fpData.fulfillmentPolicies?.[0]?.fulfillmentPolicyId
       const paymentPolicyId      = ppData.paymentPolicies?.[0]?.paymentPolicyId
       const returnPolicyId       = rpData.returnPolicies?.[0]?.returnPolicyId
-      const merchantLocationKey  = locData.locations?.[0]?.merchantLocationKey
       if (!fulfillmentPolicyId) throw new Error('No fulfillment policy on eBay account — set one up in eBay Seller Hub first')
       if (!paymentPolicyId)     throw new Error('No payment policy on eBay account — set one up in eBay Seller Hub first')
       if (!returnPolicyId)      throw new Error('No return policy on eBay account — set one up in eBay Seller Hub first')
-      if (!merchantLocationKey) throw new Error('No inventory location — set it up in Settings → eBay first')
+      const merchantLocationKey = await ensureMerchantLocation(ebayHeaders, locData.locations?.[0]?.merchantLocationKey)
+      if (!merchantLocationKey) throw new Error('No ship-from address saved — add it in Settings → eBay Inventory Location, then list again (it is created on eBay automatically).')
 
       // Auto-parts categories only accept "Used" (id 3000 = USED_EXCELLENT enum),
       // "For parts" (7000), "New" (1000), or Refurbished — NOT the graded
