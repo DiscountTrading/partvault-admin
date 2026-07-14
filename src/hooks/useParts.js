@@ -121,27 +121,51 @@ export function useParts(storeId) {
     }
   }, [storeId, fetch])
 
+  // PostgREST returns PGRST204 ("Could not find the 'X' column of 'parts' in the
+  // schema cache") when the frontend writes a column whose migration hasn't been
+  // applied yet (e.g. container_id before 20260712). Strip that column and let the
+  // caller retry, so a pending migration never blocks saving a part. The proper
+  // fix is still running the migration — this is just a safety net.
+  const stripMissingColumn = (error, row) => {
+    const m = /Could not find the '([^']+)' column/.exec(error?.message || '')
+    if (!m || !(m[1] in row)) return null
+    const { [m[1]]: _drop, ...rest } = row
+    return rest
+  }
+
   const addPart = async p => {
     const { data: { user } } = await sb.auth.getUser()
-    const { data, error } = await sb.from('parts').insert({
-      ...mapToRow(p),
-      store_id: storeId,
-      created_by: user?.id,
-    }).select().single()
-    if (!error) { setParts(ps => [mapRow(data), ...ps]); return mapRow(data) }
-    throw error
+    let row = { ...mapToRow(p), store_id: storeId, created_by: user?.id }
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const { data, error } = await sb.from('parts').insert(row).select().single()
+      if (!error) { setParts(ps => [mapRow(data), ...ps]); return mapRow(data) }
+      const stripped = stripMissingColumn(error, row)
+      if (!stripped) throw error
+      row = stripped
+    }
+    throw new Error('Save failed')
   }
 
   const editPart = async p => {
     // Optimistic concurrency: only update if the row hasn't changed since it was
     // loaded. If updated_at no longer matches, someone else saved first → reject
     // (don't silently overwrite their change).
-    let q = sb.from('parts').update(mapToRow(p)).eq('id', p.id)
-    if (p.updatedAt) q = q.eq('updated_at', p.updatedAt)
-    const { data, error } = await q.select()
-    if (error) throw error
-    if (!data || !data.length) { const e = new Error('Part was changed by someone else'); e.code = 'STALE'; throw e }
-    setParts(ps => ps.map(x => x.id===p.id ? mapRow(data[0]) : x))
+    let row = mapToRow(p)
+    for (let attempt = 0; attempt < 4; attempt++) {
+      let q = sb.from('parts').update(row).eq('id', p.id)
+      if (p.updatedAt) q = q.eq('updated_at', p.updatedAt)
+      const { data, error } = await q.select()
+      if (error) {
+        const stripped = stripMissingColumn(error, row)
+        if (!stripped) throw error
+        row = stripped
+        continue
+      }
+      if (!data || !data.length) { const e = new Error('Part was changed by someone else'); e.code = 'STALE'; throw e }
+      setParts(ps => ps.map(x => x.id===p.id ? mapRow(data[0]) : x))
+      return
+    }
+    throw new Error('Save failed')
   }
 
   const softDelete = async id => {
