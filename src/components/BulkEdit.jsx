@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { sb } from '../lib/supabase'
-import { C, S, CATEGORY_NAMES, PART_CONDITIONS, STATUS_LABELS } from '../lib/constants'
+import { C, S, fmt, CATEGORY_NAMES, PART_CONDITIONS, STATUS_LABELS } from '../lib/constants'
 
 const EDGE_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import'
 const STATUS_OPTS = ['in_stock', 'listed', 'sold', 'scrapped', 'deferred']
@@ -13,6 +13,7 @@ const COLS = [
   { key: 'category',   label: 'Category',  type: 'select', w: 180, options: CATEGORY_NAMES },
   { key: 'condition',  label: 'Condition', type: 'select', w: 150, options: PART_CONDITIONS },
   { key: 'list_price', label: 'Price',     type: 'number', w: 90 },
+  { key: 'market_price', label: 'Market',  type: 'readonly', w: 90 },
   { key: 'status',     label: 'Status',    type: 'select', w: 120, options: STATUS_OPTS, labels: STATUS_LABELS },
   { key: 'location',   label: 'Location',  type: 'text',   w: 130 },
   { key: 'part_number',label: 'Part #',    type: 'text',   w: 120 },
@@ -26,6 +27,7 @@ const toRow = (p) => ({
   make: p.make || '', model: p.model || '', year: p.year || '',
   category: p.category || '', condition: p.condition || '',
   list_price: p.listPrice ?? p.list_price ?? '', status: p.status || 'in_stock',
+  market_price: p.marketPrice ?? p.market_price ?? null,
   location: p.location || '', part_number: p.partNumber || p.part_number || '',
   ebayOverrides: p.ebayOverrides || p.ebay_overrides || {},
 })
@@ -129,6 +131,9 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
     const key = col.key
     const val = cellVal(row, key)
     const bg = editedCell(row.id, key) ? '#fff7ed' : 'transparent'
+    if (col.type === 'readonly') {
+      return <div style={{ padding: '6px 8px', color: val == null || val === '' ? C.muted : C.text }}>{val == null || val === '' ? '—' : fmt(val)}</div>
+    }
     if (col.type === 'select') {
       return <select value={val ?? ''} onChange={e => setCell(row.id, key, e.target.value)} style={{ ...inp, background: bg, cursor: 'pointer' }}>
         {col.options.map(o => <option key={o} value={o}>{col.labels ? col.labels[o] || o : o}</option>)}

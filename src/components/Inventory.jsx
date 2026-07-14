@@ -832,6 +832,26 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
                 <span>Median: <strong style={{ color:C.text }}>{fmt(market.browse.median)}</strong></span>
                 {market.browse.cheaperThanPct != null && <span style={{ color: market.browse.cheaperThanPct>=50?C.green:C.yellow }}>Your price beats {market.browse.cheaperThanPct}% of them</span>}
               </div>
+              {/* Actionable pricing — how you sit vs the median + one-click apply */}
+              {(() => {
+                const med = Math.round(+market.browse.median || 0)
+                if (med <= 0) return null
+                const mine = +form.listPrice || 0
+                const delta = mine > 0 ? Math.round(mine - med) : null
+                return (
+                  <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap', marginBottom:8, padding:'8px 10px', background:C.panel, borderRadius:8 }}>
+                    {delta == null ? <span style={{ fontSize:12, color:C.muted }}>Set a price to compare with the median.</span>
+                      : Math.abs(delta) < 1 ? <span style={{ fontSize:12, color:C.green, fontWeight:700 }}>✓ You're right on the median</span>
+                      : <span style={{ fontSize:12, fontWeight:700, color: delta > 0 ? C.yellow : C.green }}>You're {fmt(Math.abs(delta))} {delta > 0 ? 'above' : 'below'} the median</span>}
+                    <div style={{ flex:1 }} />
+                    <span style={{ fontSize:12, color:C.muted }}>Suggested: <strong style={{ color:C.text }}>{fmt(med)}</strong></span>
+                    <button type="button" onClick={() => set('listPrice', med)} disabled={mine === med}
+                      style={{ ...S.btn('secondary'), padding:'4px 12px', fontSize:12, opacity: mine === med ? 0.5 : 1, cursor: mine === med ? 'default' : 'pointer' }}>
+                      Set to {fmt(med)}
+                    </button>
+                  </div>
+                )
+              })()}
               {!!market.browse.samples?.length && (
                 <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
                   {market.browse.samples.map((s,i) => (
