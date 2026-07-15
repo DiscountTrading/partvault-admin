@@ -14,7 +14,27 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.36.8'
+const EDGE_FN_VERSION         = '3.36.12'
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  HARD BLOCK — EDITING LIVE eBay LISTINGS IS DISABLED AT THE CODE LEVEL.
+//
+//  Requested by the store owner (2026-07-14). Rationale: a wrong write to a live
+//  listing — above all a SKU/custom label — makes parts unfindable in the
+//  warehouse. That is unrecoverable in practice, so the capability is removed
+//  rather than guarded by a confirmation dialog.
+//
+//  While false:
+//    • apply_specifics NEVER pushes to eBay (local overrides only).
+//    • publish_listings REFUSES any part that already has a live listing —
+//      no inventory-item replace, no offer update, no compatibility write.
+//    • Creating a listing for a part that is NOT live is still allowed.
+//
+//  DO NOT flip this to true without explicit written sign-off from the owner.
+//  Any future live-edit feature must be per-item, explicitly confirmed, never
+//  bulk, and must never send a SKU.
+// ═══════════════════════════════════════════════════════════════════════════
+const ALLOW_LIVE_EBAY_EDITS = false
 const CHUNK_SIZE              = 20
 // eBay's getOrders can't return orders older than this, so the live sync only ever
 // manages sales within this window. The CSV history import must stay strictly OLDER
@@ -178,6 +198,7 @@ async function fillAspects(
   categoryTreeId: string,
   ebayHeaders: Record<string, string>,
   aiPhotos: string[],
+  listingDefaults: any = {},
 ): Promise<{ aspects: Record<string, string[]>; fitmentList: any[]; specs: any[] }> {
   const aspects: Record<string, string[]> = {}
   let fitmentList: any[] = []
@@ -193,7 +214,9 @@ async function fillAspects(
   }
   const derive = (name: string): string | null => {
     const n = name.toLowerCase()
-    if (/\b(brand|manufacturer)\b/.test(n) && !/part/.test(n)) return part.make || null
+    // "Manufacturer Warranty" contains "manufacturer" but is a warranty PERIOD,
+    // not the brand — never fill it with the make (handled separately below).
+    if (/\b(brand|manufacturer)\b/.test(n) && !/part/.test(n) && !/warrant/.test(n)) return part.make || null
     if (/make/.test(n)) return part.make || null
     if (/model/.test(n)) return part.model || null
     if (/year/.test(n)) return part.year ? String(part.year) : null
@@ -299,11 +322,29 @@ async function fillAspects(
       for (const s of specs) {
         if (aspects[s.name] || !s.required) continue
         const nlc = s.name.toLowerCase()
-        if (/\b(brand|manufacturer)\b/.test(nlc) && !/part/.test(nlc))
+        if (/\b(brand|manufacturer)\b/.test(nlc) && !/part/.test(nlc) && !/warrant/.test(nlc))
           aspects[s.name] = [s.allowed.length ? (inAllowedOf(s.allowed, 'Unbranded') || s.allowed[0]) : (part.make || 'Unbranded')]
         else if (/part\s*number|mpn/i.test(nlc)) aspects[s.name] = [part.part_number || 'Does Not Apply']
         else if (s.allowed.length) aspects[s.name] = [s.allowed.find((v: string) => NEUTRAL.includes(v.toLowerCase())) || s.allowed[0]]
         else aspects[s.name] = ['Unbranded']
+      }
+
+      // Warranty aspect(s) — a warranty PERIOD, set deterministically and never
+      // derived from the make/brand. Uses the store default (Settings → Listing
+      // Defaults) or "1 Month" when unset. Authoritative: overrides anything the
+      // passes above may have put here (e.g. a stray make value). For "choose one"
+      // aspects only a listed value is set (1 Month ≈ 30 Days), so eBay never gets
+      // an invalid term; otherwise the free-text value is written.
+      const warrantyVal = String(listingDefaults?.warranty || '').trim() || '1 Month'
+      for (const s of specs) {
+        if (!/warrant/i.test(s.name)) continue
+        if (s.selectionOnly && s.allowed.length) {
+          const m = inAllowedOf(s.allowed, warrantyVal)
+            || (/1\s*month|30\s*day/i.test(warrantyVal) ? s.allowed.find((v: string) => /1\s*month|30\s*day/i.test(v)) : undefined)
+          if (m) aspects[s.name] = [m] // else leave any valid value already set (never a make, per the derive/Pass-3 fixes)
+        } else {
+          aspects[s.name] = [warrantyVal]
+        }
       }
     }
   } catch (_) { /* best effort */ }
@@ -331,6 +372,52 @@ function buildDescription(part: any, _fitmentList: any[], footer: string): strin
   const esc = (s: string) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   const descBody = part.description || part.notes || part.title || ''
   return [descBody, footer].filter(Boolean).map((s: string) => esc(s).replace(/\n/g, '<br>')).join('<br><br>') || (part.title || part.sku || '')
+}
+
+// Fill blank make/model/year on the part from its linked donor car. Parts added
+// in the app already copy these from the car, but imported / older parts often
+// have them blank — and blank make+model means NO eBay Parts Compatibility gets
+// built (the donor can't be injected). Mutates `part` in place; best-effort.
+async function hydrateVehicleFromCar(sb: any, part: any): Promise<void> {
+  if (!part?.car_id) return
+  if (part.make && part.model && part.year) return
+  try {
+    const { data: car } = await sb.from('cars').select('make, model, year').eq('id', part.car_id).single()
+    if (car) {
+      if (!part.make)  part.make  = car.make
+      if (!part.model) part.model = car.model
+      if (!part.year)  part.year  = car.year
+    }
+  } catch (_) { /* best effort — leave part as-is */ }
+}
+
+// ── eBay category learning ("Part type (smart)") ───────────────────────────
+// When the user corrects a part's eBay category we remember it per store, keyed
+// by the internal Category+Subcategory. When the subcategory is generic ("Other"
+// or blank) we refine the key with a 1–2 word part-type token from the title so a
+// broad bucket (e.g. Brakes/Other) doesn't over-generalise. The key MUST be
+// computed identically for the learn-write and the lookup — hence one function.
+function partTypeToken(part: any): string {
+  let t = String(part.title || '').toLowerCase()
+  const pn = String(part.part_number || '').toLowerCase().trim()
+  if (pn) t = t.split(pn).join(' ')
+  t = t.replace(/\b\d{4}(\s*[-/]\s*\d{2,4})?\b/g, ' ').replace(/[^a-z0-9 ]+/g, ' ')
+  const strip = [part.make, part.model].filter(Boolean).join(' ').toLowerCase().split(/\s+/).filter(Boolean)
+  const FILLER = new Set<string>(['front', 'rear', 'back', 'left', 'right', 'lh', 'rh', 'driver', 'passenger', 'side', 'genuine', 'oem', 'used', 'pre', 'owned', 'the', 'for', 'with', 'and', 'assembly', 'assy', 'part', 'parts', 'spare', 'set', 'pair', 'kit', 'unit', 'complete', ...strip])
+  const words = t.split(/\s+/).filter((w) => w.length > 1 && !FILLER.has(w) && !/^\d+$/.test(w))
+  return words.slice(0, 2).sort().join(' ') // sorted → order-independent (Headlight Halogen == Halogen Headlight)
+}
+function categoryKeyFor(part: any): string {
+  const cat = String(part.category || '').trim().toLowerCase()
+  const sub = String(part.subcategory || '').trim().toLowerCase()
+  const base = `${cat}|${sub}`
+  return (!sub || sub === 'other') ? `${base}|${partTypeToken(part)}` : base
+}
+function learnedCategoryFor(settings: any, part: any): { id: string; name: string } | null {
+  const map = settings?.categoryLearning
+  if (!map || typeof map !== 'object') return null
+  const hit = map[categoryKeyFor(part)]
+  return hit && hit.id ? { id: String(hit.id), name: String(hit.name || '') } : null
 }
 
 // Resolve the package weight (grams) + dimensions (cm) exactly as publish does:
@@ -2823,7 +2910,9 @@ async function handleRequest(req: Request): Promise<Response> {
       const userClient = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: authHeader } } })
       const partIds: string[] = Array.isArray(body.partIds) ? body.partIds : []
       const setVals: Record<string, string> = body.set || {}   // { aspectName: value }  ('' = clear)
-      const pushLive = !!body.pushLive
+      // HARD BLOCK: never push to live listings, whatever the caller asks for.
+      // Local overrides still save and apply on the NEXT publish.
+      const pushLive = ALLOW_LIVE_EBAY_EDITS && !!body.pushLive
       if (!partIds.length) return json({ error: 'No parts selected' }, 400)
       if (!Object.keys(setVals).length) return json({ error: 'No specifics to set' }, 400)
 
@@ -2886,6 +2975,9 @@ async function handleRequest(req: Request): Promise<Response> {
       if (!partId) throw new Error('partId required')
       const { data: part, error: pErr } = await sb.from('parts').select('*').eq('id', partId).eq('store_id', storeId).single()
       if (pErr || !part) throw new Error('Part not found')
+      // Fill blank make/model/year from the donor car so fitment/compatibility
+      // work for imported parts (matches publish).
+      await hydrateVehicleFromCar(sb, part)
       // Reflect the editor's current (possibly unsaved) values so the preview
       // matches what's on screen — no need to save first.
       if (typeof body.title === 'string' && body.title) part.title = body.title
@@ -2906,29 +2998,45 @@ async function handleRequest(req: Request): Promise<Response> {
       const PREVIEW_CATEGORY_ID = await categoryMapFor(sb, mkt.mp)
       // Tree id per marketplace (US = eBay Motors tree 100 — its default tree has no vehicle parts).
       const categoryTreeId = mkt.treeId
+      // Store config (same as publish): footer, shipping, best offer, image mix,
+      // category learning. Loaded up front so category resolution can use it.
+      const { data: storeRow } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      const settings = storeRow?.settings || {}
+
+      // Category resolution priority: per-part override → learned (Part-type smart)
+      // → live eBay Taxonomy suggestion → internal-category map → hard fallback.
       const catQuery = [part.make, part.model, part.year, part.category, part.title].filter(Boolean).join(' ')
-      let categoryId = PREVIEW_CATEGORY_ID[part.category] || '9886'
+      const ovCat = part.ebay_overrides || {}
+      let categoryId = ''
       let categoryName = ''
-      try {
-        const r = await fetch(`https://api.ebay.com/commerce/taxonomy/v1/category_tree/${categoryTreeId}/get_category_suggestions?q=${encodeURIComponent(catQuery || 'car part')}`, { headers: ebayHeaders })
-        if (r.ok) {
-          const d = await r.json()
-          const sug = d.categorySuggestions?.[0]
-          if (sug?.category?.categoryId) {
-            categoryId = sug.category.categoryId
-            const anc = (sug.categoryTreeNodeAncestors || []).map((a: any) => a.categoryName).reverse()
-            categoryName = [...anc, sug.category.categoryName].filter(Boolean).join(' › ')
+      let categorySource = 'ai' // override | learned | ai | fallback
+      if (ovCat.categoryId) {
+        categoryId = String(ovCat.categoryId); categoryName = String(ovCat.categoryName || ''); categorySource = 'override'
+      }
+      if (!categoryId) {
+        const L = learnedCategoryFor(settings, part)
+        if (L) { categoryId = L.id; categoryName = L.name; categorySource = 'learned' }
+      }
+      if (!categoryId) {
+        categoryId = PREVIEW_CATEGORY_ID[part.category] || '9886'; categorySource = 'fallback'
+        try {
+          const r = await fetch(`https://api.ebay.com/commerce/taxonomy/v1/category_tree/${categoryTreeId}/get_category_suggestions?q=${encodeURIComponent(catQuery || 'car part')}`, { headers: ebayHeaders })
+          if (r.ok) {
+            const d = await r.json()
+            const sug = d.categorySuggestions?.[0]
+            if (sug?.category?.categoryId) {
+              categoryId = sug.category.categoryId
+              const anc = (sug.categoryTreeNodeAncestors || []).map((a: any) => a.categoryName).reverse()
+              categoryName = [...anc, sug.category.categoryName].filter(Boolean).join(' › ')
+              categorySource = 'ai'
+            }
           }
-        }
-      } catch (_) { /* fallback id */ }
+        } catch (_) { /* fallback id */ }
+      }
 
       const { data: phRows } = await sb.from('photos').select('url, ebay_url, is_primary, display_order').eq('parent_type', 'part').eq('parent_id', partId).order('is_primary', { ascending: false }).order('display_order', { ascending: true })
       let partUrls = (phRows || []).map((r: any) => r.url || r.ebay_url).filter(Boolean)
       if (!partUrls.length) partUrls = (part.photos || []).map((p: any) => { if (p && typeof p === 'object') return p.url || p.ebay_url; try { const o = JSON.parse(p); return o.url || o.ebay_url || p } catch { return p } }).filter(Boolean)
-
-      // Store config (same as publish): footer, shipping, best offer, image mix.
-      const { data: storeRow } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const settings = storeRow?.settings || {}
       const comp = settings.imageComposition || {}
       const carMax = comp.carMax ?? 5
       const marketingMax = comp.marketingMax ?? 5
@@ -2940,7 +3048,7 @@ async function handleRequest(req: Request): Promise<Response> {
       }
       const photos = [...new Set([...partUrls, ...carUrls, ...marketingImages.slice(0, marketingMax)])].slice(0, 24)
 
-      const { aspects, fitmentList, specs } = await fillAspects(part, categoryId, categoryTreeId, ebayHeaders, partUrls.slice(0, 6))
+      const { aspects, fitmentList, specs } = await fillAspects(part, categoryId, categoryTreeId, ebayHeaders, partUrls.slice(0, 4), settings.listingDefaults || {})
       // Show EVERY aspect eBay offers for this category, with our filled value
       // (or empty), so the user sees the full set and what's still blank.
       const ovSpec = (part.ebay_overrides && part.ebay_overrides.specifics) || {}
@@ -2963,14 +3071,176 @@ async function handleRequest(req: Request): Promise<Response> {
       const shipDefDims = shipping.defaultDimsCm || {}
       const { weightG, dimL, dimW, dimH } = resolveShipping(part, shipCats, shipDefW, shipDefDims)
 
+      const conditionDescription = String(part.condition_description || settings.listingDefaults?.conditionDescription || '').trim().slice(0, 1000)
+
       return json({
-        ok: true, categoryId, categoryName, specifics, fitment: fitmentList,
+        ok: true, categoryId, categoryName, categorySource, specifics, fitment: fitmentList,
         title: part.title, description, photos,
         price: +part.list_price || 0, condition: part.condition || 'Used – Good',
+        conditionDescription,
         hasFooter: !!(settings.footer && settings.footer.trim()),
         allowOffers: !!settings.allowOffers,
         weightG, dims: { l: dimL, w: dimW, h: dimH },
       })
+    }
+
+    // Search eBay's live category tree so the user can correct a wrong category.
+    if (action === 'category_suggestions') {
+      const q = String(body.query || '').trim()
+      if (!q) return json({ suggestions: [] })
+      const { token } = await getToken()
+      const mkt = await storeMarketplace(sb, storeId)
+      const headers = {
+        'Authorization': `Bearer ${token}`, 'Accept': 'application/json',
+        'Accept-Language': mkt.lang, 'Content-Language': mkt.lang, 'X-EBAY-C-MARKETPLACE-ID': mkt.mp,
+      }
+      try {
+        const r = await fetch(`https://api.ebay.com/commerce/taxonomy/v1/category_tree/${mkt.treeId}/get_category_suggestions?q=${encodeURIComponent(q)}`, { headers })
+        if (!r.ok) return json({ suggestions: [], error: `eBay ${r.status}` })
+        const d = await r.json()
+        const suggestions = (d.categorySuggestions || []).slice(0, 12).map((s: any) => {
+          const anc = (s.categoryTreeNodeAncestors || []).map((a: any) => a.categoryName).reverse()
+          return { id: s.category?.categoryId, name: [...anc, s.category?.categoryName].filter(Boolean).join(' › ') }
+        }).filter((s: any) => s.id)
+        return json({ suggestions })
+      } catch (e: any) { return json({ suggestions: [], error: String(e?.message || e) }) }
+    }
+
+    // Set (or clear) a part's eBay-category override and, when set, LEARN it for
+    // future parts of the same type ("Part type (smart)").
+    if (action === 'set_category') {
+      const authHeader = req.headers.get('Authorization') || ''
+      const userClient = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: authHeader } } })
+      const { data: allowedCat } = await userClient.rpc('has_permission', { p_store_id: storeId, p_capability: 'publish' })
+      if (!allowedCat) return json({ error: 'You do not have permission to change listing categories for this store' }, 403)
+
+      const partId = String(body.partId || '')
+      if (!partId) throw new Error('partId required')
+      const catId = String(body.categoryId || '').trim()
+      const catName = String(body.categoryName || '').trim()
+      const learn = body.learn !== false
+
+      const { data: part, error: pErr } = await sb.from('parts').select('id, category, subcategory, make, model, title, part_number, ebay_overrides').eq('id', partId).eq('store_id', storeId).single()
+      if (pErr || !part) throw new Error('Part not found')
+
+      // Per-part override: set, or clear (reset to AI) when no categoryId given.
+      const ov: any = { ...(part.ebay_overrides || {}) }
+      if (catId) { ov.categoryId = catId; ov.categoryName = catName } else { delete ov.categoryId; delete ov.categoryName }
+      await sb.from('parts').update({ ebay_overrides: ov }).eq('id', partId)
+
+      // Learn for future parts with the same category key (read-merge-write settings).
+      let learnedKey = ''
+      if (catId && learn) {
+        learnedKey = categoryKeyFor(part)
+        const { data: sRow } = await sb.from('stores').select('settings').eq('id', storeId).single()
+        const settings = sRow?.settings || {}
+        const map = { ...(settings.categoryLearning || {}) }
+        map[learnedKey] = { id: catId, name: catName, at: new Date().toISOString() }
+        await sb.from('stores').update({ settings: { ...settings, categoryLearning: map } }).eq('id', storeId)
+      }
+      return json({ ok: true, categoryId: catId, categoryName: catName, ebay_overrides: ov, learnedKey })
+    }
+
+    // ── SKU RECONCILE (eBay = source of truth) ─────────────────────────────
+    // Austin lists a batch with ONE placeholder custom label, then fixes each
+    // label on eBay when he shelves the item. Our sync SKIPS listings it already
+    // knows, so those corrections never landed — hence the drift + EB-<itemId>
+    // fallbacks. This re-reads the CURRENT label from eBay per live listing.
+    // READ-ONLY: fetches from eBay, writes NOTHING (here or on eBay). Paged, so
+    // the caller loops with nextOffset until hasMore is false, then classifies.
+    if (action === 'sku_reconcile_report') {
+      const { token, certId } = await getToken()
+      const offset = +body.offset || 0
+      const LIMIT = 30
+      const { data: ls, error: lErr } = await sb.from('listings')
+        .select('platform_listing_id, platform_sku, part_id')
+        .eq('store_id', storeId).eq('platform', 'ebay').eq('status', 'active')
+        .is('deleted_at', null)
+        .order('platform_listing_id', { ascending: true })
+        .range(offset, offset + LIMIT - 1)
+      if (lErr) throw lErr
+      const partIds = [...new Set((ls || []).map((l: any) => l.part_id).filter(Boolean))]
+      const { data: ps } = partIds.length
+        ? await sb.from('parts').select('id, sku, title, status').in('id', partIds)
+        : { data: [] as any[] }
+      const partById = new Map((ps || []).map((p: any) => [p.id, p]))
+
+      const rows: any[] = []
+      for (const l of (ls || [])) {
+        const part = partById.get(l.part_id)
+        if (!part) continue
+        let ebaySku = ''
+        let err = ''
+        try {
+          const xml = await trading(token, certId, 'GetItem', `<?xml version="1.0" encoding="utf-8"?>
+<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><ItemID>${l.platform_listing_id}</ItemID><DetailLevel>ReturnAll</DetailLevel></GetItemRequest>`)
+          if (getTag(xml, 'Ack') === 'Failure') err = getTag(xml, 'LongMessage') || 'GetItem failed'
+          else ebaySku = (getTag(xml, 'SKU') || '').trim()
+        } catch (e: any) { err = String(e?.message || e).slice(0, 120) }
+        rows.push({
+          partId: part.id, itemId: l.platform_listing_id, title: part.title,
+          currentSku: part.sku || '', ebaySku, storedPlatformSku: l.platform_sku || '', error: err,
+        })
+      }
+      const { count } = await sb.from('listings').select('id', { count: 'exact', head: true })
+        .eq('store_id', storeId).eq('platform', 'ebay').eq('status', 'active').is('deleted_at', null)
+      const nextOffset = offset + LIMIT
+      return json({ ok: true, version: EDGE_FN_VERSION, rows, total: count || 0, hasMore: nextOffset < (count || 0), nextOffset })
+    }
+
+    // Apply ONLY the rows the user reviewed. Local write to parts.sku (+ the
+    // listing's platform_sku mirror). NEVER touches eBay. Two-phase rename so a
+    // swap can't transiently violate parts_sku_store_unique; full rollback on
+    // failure. Every change is captured by the parts audit trigger (old→new).
+    if (action === 'sku_reconcile_apply') {
+      const authHeader = req.headers.get('Authorization') || ''
+      const userClient = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, { global: { headers: { Authorization: authHeader } } })
+      const { data: mayEdit } = await userClient.rpc('has_permission', { p_store_id: storeId, p_capability: 'publish' })
+      if (!mayEdit) return json({ error: 'You do not have permission to reconcile SKUs for this store' }, 403)
+
+      const updates: { partId: string; newSku: string }[] = Array.isArray(body.updates) ? body.updates : []
+      if (!updates.length) return json({ error: 'No updates supplied' }, 400)
+
+      // Guard: no blank targets, no duplicate targets within the batch.
+      const seen = new Set<string>()
+      for (const u of updates) {
+        const s = String(u.newSku || '').trim()
+        if (!s) return json({ error: `Blank target SKU for part ${u.partId} — refused` }, 400)
+        if (seen.has(s)) return json({ error: `Duplicate target SKU "${s}" in this batch — refused (Austin has not shelved these yet)` }, 400)
+        seen.add(s)
+      }
+      // Guard: a target already held by a part that is NOT being renamed here.
+      const ids = updates.map(u => u.partId)
+      const { data: holders } = await sb.from('parts').select('id, sku').eq('store_id', storeId).in('sku', [...seen])
+      const blocked = (holders || []).filter((h: any) => !ids.includes(h.id))
+      if (blocked.length) return json({ error: `Target SKU(s) already used by other parts: ${blocked.map((b: any) => b.sku).join(', ')}` }, 409)
+
+      const { data: before } = await sb.from('parts').select('id, sku').eq('store_id', storeId).in('id', ids)
+      const original = new Map((before || []).map((p: any) => [p.id, p.sku]))
+      const rollback = async () => {
+        for (const [id, sku] of original) await sb.from('parts').update({ sku }).eq('id', id).eq('store_id', storeId)
+      }
+      try {
+        // Phase 1 — park every row on a temp value so swaps can't collide.
+        for (const u of updates) {
+          const { error } = await sb.from('parts').update({ sku: `__pvtmp_${u.partId}` }).eq('id', u.partId).eq('store_id', storeId)
+          if (error) throw new Error(`temp rename failed for ${u.partId}: ${error.message}`)
+        }
+        // Phase 2 — set the real eBay label.
+        for (const u of updates) {
+          const { error } = await sb.from('parts').update({ sku: String(u.newSku).trim() }).eq('id', u.partId).eq('store_id', storeId)
+          if (error) throw new Error(`rename failed for ${u.partId}: ${error.message}`)
+        }
+      } catch (e: any) {
+        await rollback()
+        return json({ error: `Reconcile aborted and rolled back — nothing changed. ${String(e?.message || e)}` }, 500)
+      }
+      // Mirror onto the listing so the stored platform_sku stops being stale.
+      for (const u of updates) {
+        await sb.from('listings').update({ platform_sku: String(u.newSku).trim() })
+          .eq('store_id', storeId).eq('platform', 'ebay').eq('part_id', u.partId).eq('status', 'active')
+      }
+      return json({ ok: true, version: EDGE_FN_VERSION, updated: updates.length })
     }
 
     if (action === 'publish_listings') {
@@ -3074,6 +3344,20 @@ async function handleRequest(req: Request): Promise<Response> {
 
       for (const part of parts) {
         try {
+          // ══ HARD BLOCK ══ Never touch a listing that is already live on eBay.
+          // Checked BEFORE any eBay write (inventory replace / compatibility /
+          // offer update), so a re-publish can never alter a live listing.
+          if (!ALLOW_LIVE_EBAY_EDITS) {
+            const { data: liveL } = await sb.from('listings')
+              .select('platform_listing_id').eq('part_id', part.id)
+              .eq('platform', 'ebay').eq('status', 'active').limit(1)
+            if (liveL?.length) {
+              throw new Error(`BLOCKED — already live on eBay (item ${liveL[0].platform_listing_id}). Editing live listings is disabled in this build; nothing was sent to eBay.`)
+            }
+          }
+          // Fill blank make/model/year from the donor car BEFORE building fitment,
+          // so imported parts still get eBay Parts Compatibility.
+          await hydrateVehicleFromCar(sb, part)
           // Blocking SKU gate
           let sku = part.sku
           if (!sku || !String(sku).trim()) {
@@ -3087,7 +3371,11 @@ async function handleRequest(req: Request): Promise<Response> {
           // Bias the category lookup toward auto parts (make/model/category, not
           // just the title) so a vague title doesn't match a media category.
           const catQuery = [part.make, part.model, part.year, part.category, part.title].filter(Boolean).join(' ')
-          const categoryId = (await leafCategoryFor(catQuery)) || CATEGORY_ID[part.category] || '9886'
+          // Same priority as the preview: per-part override → learned (Part-type
+          // smart) → live Taxonomy suggestion → internal-category map → fallback.
+          const categoryId = String(part.ebay_overrides?.categoryId || '')
+            || learnedCategoryFor(storeRow?.settings, part)?.id
+            || (await leafCategoryFor(catQuery)) || CATEGORY_ID[part.category] || '9886'
           // Compose images: the part's own photos first (eBay's gallery image),
           // then up to carMax donor-car photos, then up to marketingMax store
           // marketing images. Deduped and capped at eBay's 24.
@@ -3103,14 +3391,20 @@ async function handleRequest(req: Request): Promise<Response> {
           const marketingUrls = marketingImages.slice(0, marketingMax)
           let imageUrls = [...new Set([...partUrls, ...carUrls, ...marketingUrls])].slice(0, EBAY_MAX_IMAGES)
           // Item specifics + confident fitment (shared with the preview action).
-          const aiPhotos = (partUrls.length ? partUrls : imageUrls).slice(0, 6)
-          const { aspects, fitmentList } = await fillAspects(part, categoryId, categoryTreeId, ebayHeaders, aiPhotos)
+          // Cap at 4 images — each costs ~1.5k Anthropic input tokens and the org
+          // rate limit is 10k/min; 4 keeps identification quality with headroom.
+          const aiPhotos = (partUrls.length ? partUrls : imageUrls).slice(0, 4)
+          const { aspects, fitmentList } = await fillAspects(part, categoryId, categoryTreeId, ebayHeaders, aiPhotos, storeRow?.settings?.listingDefaults || {})
 
           // Full listing description: the part's description (or notes) + the
           // store's standard footer from settings.
           const footer = storeRow?.settings?.footer || ''
           const fullDescription = buildDescription(part, fitmentList, footer)
           const allowOffers = !!storeRow?.settings?.allowOffers
+          // Condition description: per-part override, else the store's default
+          // blurb (Settings → Listing defaults). eBay accepts it for used /
+          // refurbished / for-parts items (max 1000 chars), not for NEW.
+          const condDesc = String(part.condition_description || storeRow?.settings?.listingDefaults?.conditionDescription || '').trim().slice(0, 1000)
           // Package weight (grams) + dimensions (cm) — shared with the preview.
           const { weightG, dimL, dimW, dimH } = resolveShipping(part, shipCats, shipDefW, shipDefDims)
 
@@ -3120,6 +3414,7 @@ async function handleRequest(req: Request): Promise<Response> {
             body: JSON.stringify({
               product: { title: part.title, description: fullDescription, aspects, ...(imageUrls.length ? { imageUrls } : {}) },
               condition,
+              ...(condDesc && condition !== 'NEW' ? { conditionDescription: condDesc } : {}),
               availability: { shipToLocationAvailability: { quantity: 1 } },
               packageWeightAndSize: {
                 weight: { value: weightG, unit: 'GRAM' },
@@ -3134,6 +3429,15 @@ async function handleRequest(req: Request): Promise<Response> {
           // 1b. eBay Parts Compatibility (the real "fits my vehicle" system).
           // Best-effort: many non-motors categories don't support it and invalid
           // catalogue entries are rejected — so we never let it block a publish.
+          // The outcome is captured (never silently swallowed) and returned per
+          // part, so an empty "fits my vehicle" list is diagnosable.
+          const compat: { vehicles: number; added: number; status: number; reason: string } =
+            { vehicles: fitmentList.length, added: 0, status: 0, reason: '' }
+          if (!fitmentList.length) {
+            compat.reason = (part.make && part.model)
+              ? 'No fitment produced (AI returned none; donor should have been injected — check make/model)'
+              : `Part has no make/model${part.car_id ? ' (and donor car had none)' : ''} — cannot build compatibility`
+          }
           if (fitmentList.length) {
             try {
               const compatibleProducts: any[] = []
@@ -3153,20 +3457,32 @@ async function handleRequest(req: Request): Promise<Response> {
                 }
                 if (compatibleProducts.length >= 200) break
               }
-              if (compatibleProducts.length) {
+              if (!compatibleProducts.length) {
+                compat.reason = 'Fitment entries all missing make/model'
+              } else {
                 const compatRes = await fetch(`https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}/product_compatibility`, {
                   method: 'PUT', headers: ebayHeaders, body: JSON.stringify({ compatibleProducts }),
                 })
-                if (!compatRes.ok && compatRes.status !== 204) {
-                  console.warn(`Parts compatibility skipped (${compatRes.status}) for ${sku}: ${(await compatRes.text()).slice(0, 200)}`)
+                compat.status = compatRes.status
+                if (compatRes.ok || compatRes.status === 204) {
+                  compat.added = compatibleProducts.length
+                } else {
+                  compat.reason = `eBay rejected compatibility (${compatRes.status}): ${(await compatRes.text()).slice(0, 240)}`
+                  console.warn(`Parts compatibility rejected for ${sku}: ${compat.reason}`)
                 }
               }
-            } catch (e) { console.warn('Parts compatibility error', e) }
+            } catch (e: any) {
+              compat.reason = `Compatibility error: ${String(e?.message || e).slice(0, 200)}`
+              console.warn('Parts compatibility error', e)
+            }
           }
 
           // 2. Create the offer — or reuse an existing one for this SKU
           const offerBody = {
             sku, marketplaceId: mkt.mp, format: 'FIXED_PRICE',
+            // Fixed-price Inventory API listings are always Good 'Til Cancelled;
+            // set it explicitly so the listing duration is never left ambiguous.
+            listingDuration: 'GTC',
             listingDescription: fullDescription,
             pricingSummary: { price: { value: String(part.list_price), currency: mkt.currency } },
             categoryId, merchantLocationKey,
@@ -3184,8 +3500,11 @@ async function handleRequest(req: Request): Promise<Response> {
               const getRes = await fetch(`https://api.ebay.com/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}&marketplace_id=${mkt.mp}`, { headers: ebayHeaders })
               offerId = (await getRes.json()).offers?.[0]?.offerId
               if (!offerId) throw new Error('Offer already exists but could not be retrieved')
-              // keep price/policies current on the existing offer
-              await fetch(`https://api.ebay.com/sell/inventory/v1/offer/${offerId}`, { method: 'PUT', headers: ebayHeaders, body: JSON.stringify(offerBody) })
+              // HARD BLOCK: an existing offer may back a LIVE listing — updating it
+              // would edit that listing. Disabled; reuse the offer as-is.
+              if (ALLOW_LIVE_EBAY_EDITS) {
+                await fetch(`https://api.ebay.com/sell/inventory/v1/offer/${offerId}`, { method: 'PUT', headers: ebayHeaders, body: JSON.stringify(offerBody) })
+              }
             } else {
               throw new Error(msg || `Offer error ${offerRes.status}`)
             }
@@ -3208,7 +3527,7 @@ async function handleRequest(req: Request): Promise<Response> {
           })
 
           published++
-          results.push({ partId: part.id, sku, listingId })
+          results.push({ partId: part.id, sku, listingId, compatibility: compat })
         } catch (e: any) {
           failed++
           errors.push({ partId: part.id, sku: part.sku, error: e.message })

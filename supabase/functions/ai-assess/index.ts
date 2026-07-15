@@ -150,11 +150,27 @@ serve(async (req) => {
     // zone, calling these from the help block threw a ReferenceError that was
     // swallowed into a generic error, so the assistant always fell back to
     // "Sorry, I couldn't answer that". Defining them first fixes it.
-    const callAnthropic = (payload: Record<string, unknown>) => fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': ANTHROPIC, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
+    // Retry on 429 (rate limit) and 529 (overloaded) so a burst of parts paces
+    // itself instead of failing — honours the `retry-after` header, capped so we
+    // never tie the function up too long. Plain fetch interface otherwise.
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+    const callAnthropic = async (payload: Record<string, unknown>, retries = 2): Promise<Response> => {
+      for (let attempt = 0; ; attempt++) {
+        const res = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'x-api-key': ANTHROPIC, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+        if ((res.status === 429 || res.status === 529) && attempt < retries) {
+          const ra = Number(res.headers.get('retry-after') || '')
+          const waitMs = Math.min(15000, ra > 0 ? ra * 1000 : 1500 * Math.pow(2, attempt))
+          try { await res.text() } catch (_) { /* drain */ }
+          await sleep(waitMs)
+          continue
+        }
+        return res
+      }
+    }
     const textOf = (data: any) => (data.content || []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('').trim()
     const parseJson = (raw: string) => { try { return JSON.parse(raw) } catch { const m = raw?.match(/\{[\s\S]*\}/); return m ? JSON.parse(m[0]) : null } }
 
@@ -349,8 +365,13 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
     // (angles, label close-ups, part-number stamps) plus the donor car's photos
     // and details as context for a more accurate assessment.
     const { photoBase64, photoBase64s, photoUrl, photoUrls, car, carId, categories, partId, existingTitle, existingPrice } = body
-    const urls = (Array.isArray(photoUrls) ? photoUrls : (photoUrl ? [photoUrl] : [])).filter(Boolean).slice(0, 8)
-    const b64s = (Array.isArray(photoBase64s) ? photoBase64s : (photoBase64 ? [photoBase64] : [])).filter(Boolean).slice(0, 8)
+    // Cap part photos at 4. Each image costs ~1.5k input tokens, and the org's
+    // Anthropic rate limit is 10k input tokens/min — 8 images could exceed it in
+    // a SINGLE call. 4 (main + a couple of close-ups) keeps quality while leaving
+    // headroom to assess several parts a minute. Total part images bounded to 4.
+    const MAX_PART_IMAGES = 4
+    const urls = (Array.isArray(photoUrls) ? photoUrls : (photoUrl ? [photoUrl] : [])).filter(Boolean).slice(0, MAX_PART_IMAGES)
+    const b64s = (Array.isArray(photoBase64s) ? photoBase64s : (photoBase64 ? [photoBase64] : [])).filter(Boolean).slice(0, Math.max(0, MAX_PART_IMAGES - urls.length))
     const partBlocks: any[] = [
       ...urls.map((u: string) => ({ type: 'image', source: { type: 'url', url: u } })),
       ...b64s.map((b: string) => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b } })),
@@ -402,7 +423,9 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
           const { data: ph } = await service.from('photos').select('url').eq('parent_type', 'car').eq('parent_id', carId).order('display_order').limit(4)
           let carPhotos: string[] = (ph || []).map((p: any) => p.url).filter(Boolean)
           if (!carPhotos.length && Array.isArray(c.photos)) carPhotos = c.photos.map(urlOf).filter(Boolean)
-          for (const u of carPhotos.slice(0, 3)) carBlocks.push({ type: 'image', source: { type: 'url', url: u } })
+          // 2 donor-car photos are enough context (make/model/variant) — more just
+          // burns input tokens against the rate limit without improving the assess.
+          for (const u of carPhotos.slice(0, 2)) carBlocks.push({ type: 'image', source: { type: 'url', url: u } })
         }
       } catch (_) { /* context is best-effort */ }
     }
@@ -471,7 +494,18 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
       messages: [{ role: 'user', content }],
     })
     const data = await aiRes.json()
-    if (data.error) { await clearPendingOnFail(); return json({ error: data.error.message || 'AI error' }, 400) }
+    if (data.error) {
+      await clearPendingOnFail()
+      const raw = data.error.message || 'AI error'
+      const isRate = data.error.type === 'rate_limit_error' || aiRes.status === 429 || /rate limit/i.test(raw)
+      if (isRate) {
+        // Background capture: degrade quietly (part stays editable, re-runnable
+        // from admin) — don't dump a scary rate-limit toast in the field app.
+        if (trusted && partId) return json({ ok: true, skipped: 'rate_limit', message: 'AI is busy — this part was saved and can be assessed again shortly.' })
+        return json({ error: 'AI is busy right now (rate limit reached). Please wait a minute and try again.', rateLimited: true }, 429)
+      }
+      return json({ error: raw }, 400)
+    }
     const parsed = parseJson(textOf(data))
     if (!parsed) { await clearPendingOnFail(); return json({ error: 'Could not parse AI response' }, 502) }
 

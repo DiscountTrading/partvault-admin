@@ -2,10 +2,12 @@ import { useState } from 'react'
 import { C, S } from '../lib/constants'
 import Publish from './Publish'
 import Delist from './Delist'
+import SkuReconcile from './SkuReconcile'
 
 const SUBS = [
   { id: 'list', label: 'List' },
   { id: 'delist', label: 'De-list' },
+  { id: 'skus', label: 'SKUs' },
 ]
 
 export default function Ebay({ storeId, onChanged }) {
@@ -26,6 +28,7 @@ export default function Ebay({ storeId, onChanged }) {
       </div>
       {sub === 'list' && <Publish storeId={storeId} onChanged={onChanged} />}
       {sub === 'delist' && <Delist storeId={storeId} onChanged={onChanged} />}
+      {sub === 'skus' && <SkuReconcile storeId={storeId} />}
     </div>
   )
 }

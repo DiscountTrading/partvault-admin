@@ -106,6 +106,9 @@ function StatCard({ label, value, color, sub }) {
 export default function Settings({ profile, storeId, onSignOut, refreshStores, onSettingsSaved }) {
   const [tab, setTab] = useState('account')
   const [footer, setFooter] = useState(DEFAULT_FOOTER)
+  // eBay listing defaults applied at publish time (warranty aspect + condition
+  // description blurb). Duration is always GTC for fixed-price listings.
+  const [listingDefaults, setListingDefaults] = useState({ warranty: '', conditionDescription: '' })
   const [aiSettings, setAiSettings] = useState(DEFAULT_AI_SETTINGS)
   const [captureAssess, setCaptureAssess] = useState({ category: true, price: true })
   const [costing, setCosting] = useState({ labourRate: 60, adminPct: 10, adminMin: 5, baseCostPct: 25, handlingFee: 2, postageDefaultG: 1000, postageTiers: DEFAULT_POSTAGE_TIERS, labourMode: 'fixed', adminMode: 'percent', adminMinMode: 'fixed', baseCostMode: 'percent' })
@@ -345,6 +348,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       }
       if (data?.settings) {
         if (data.settings.footer) setFooter(data.settings.footer)
+        if (data.settings.listingDefaults) setListingDefaults(s => ({ ...s, ...data.settings.listingDefaults }))
         if (data.settings.aiDescription) setAiSettings(s => ({ ...s, ...data.settings.aiDescription }))
         if (data.settings.captureAssess) setCaptureAssess(s => ({ ...s, ...data.settings.captureAssess }))
         if (data.settings.costing) setCosting(s => ({ ...s, ...data.settings.costing }))
@@ -387,7 +391,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     setSaving(true)
     try {
       const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const merged = { ...(current?.settings || {}), footer, aiDescription: aiSettings, captureAssess, costing, inventory, storage, warehouse, labels, timezone }
+      const merged = { ...(current?.settings || {}), footer, listingDefaults, aiDescription: aiSettings, captureAssess, costing, inventory, storage, warehouse, labels, timezone }
       await sb.from('stores').update({ settings: merged }).eq('id', storeId)
       onSettingsSaved?.(merged) // let the app refresh costing/inventory-driven views live
       setSaved(true)
@@ -2341,6 +2345,42 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
             <div style={{ marginTop: 16 }}>
               <label style={S.label}>Additional Notes for AI (optional)</label>
               <textarea style={{ ...S.textarea, minHeight: 70 }} placeholder="e.g. Always mention free returns. Avoid using the word 'used' — say 'pre-owned' instead." value={aiSettings.customPromptNotes} onChange={e => setAi('customPromptNotes', e.target.value)} />
+            </div>
+          </Section>
+
+          <Section title="🏷️ Listing Defaults">
+            <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
+              Applied to every eBay listing when you publish, unless a part overrides them.
+            </p>
+            <div style={{ marginBottom: 18 }}>
+              <label style={S.label}>Warranty period</label>
+              <input list="warranty-options" style={S.input} placeholder="1 Month (default if left blank)"
+                value={listingDefaults.warranty}
+                onChange={e => setListingDefaults(d => ({ ...d, warranty: e.target.value }))} />
+              <datalist id="warranty-options">
+                <option value="1 Month" />
+                <option value="3 Months" />
+                <option value="6 Months" />
+                <option value="1 Year" />
+                <option value="No Warranty" />
+              </datalist>
+              <p style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
+                Fills eBay's <strong>Warranty</strong> item specific (a time period, e.g. “1 Month”). Leave blank to default to <strong>1 Month</strong>.
+              </p>
+            </div>
+            <div style={{ marginBottom: 18 }}>
+              <label style={S.label}>Default condition description</label>
+              <textarea style={{ ...S.textarea, minHeight: 90, fontSize: 13, lineHeight: 1.6 }}
+                placeholder="e.g. In good used condition, removed from a low-kilometre vehicle. Fully tested and functional. See photos for exact item."
+                value={listingDefaults.conditionDescription}
+                onChange={e => setListingDefaults(d => ({ ...d, conditionDescription: e.target.value }))}
+                maxLength={1000} />
+              <p style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
+                Shown in eBay's <strong>Condition</strong> box below the photos. Keep it honest but positive — you're selling. {listingDefaults.conditionDescription.length}/1000
+              </p>
+            </div>
+            <div style={{ fontSize: 12, color: C.muted, padding: '8px 10px', background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 8 }}>
+              <strong>Listing duration:</strong> Good 'Til Cancelled (GTC) — eBay's only option for fixed-price listings, so every listing renews automatically until sold or ended.
             </div>
           </Section>
 

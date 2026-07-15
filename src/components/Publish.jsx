@@ -139,6 +139,20 @@ export default function Publish({ storeId, onChanged }) {
               {result.errors.map((e, i) => <li key={i}>{e.sku || e.partId}: {e.error}</li>)}
             </ul>
           )}
+          {(() => {
+            const noFit = (result.results || []).filter(r => r.compatibility && !r.compatibility.added)
+            if (!noFit.length) return null
+            return (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontSize: 12, color: '#b45309', fontWeight: 700 }}>
+                  ⚠ {noFit.length} listed without vehicle compatibility (“fits my vehicle”):
+                </div>
+                <ul style={{ margin: '4px 0 0', paddingLeft: 18, fontSize: 12, color: '#b45309' }}>
+                  {noFit.map((r, i) => <li key={i}>{r.sku || r.partId}: {r.compatibility.reason || 'no compatible vehicles built'}</li>)}
+                </ul>
+              </div>
+            )
+          })()}
         </div>
       )}
 

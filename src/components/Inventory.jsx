@@ -107,12 +107,15 @@ function urlFrom(v) {
 // Calls the ai-assess edge function (holds the platform Anthropic key as a
 // secret — no key in the browser). Pass all the part's photos so the AI can
 // assess across every angle / label / part-number close-up.
-async function analysePart({ photoBase64s, photoUrls, carId }, car, storeId) {
+async function analysePart({ photoBase64s, photoUrls, carId, partId }, car, storeId) {
   const { data: { session } } = await sb.auth.getSession()
   const res = await fetch('https://mtpektsxaklhedknincs.supabase.co/functions/v1/ai-assess', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-    body: JSON.stringify({ storeId, photoBase64s, photoUrls, car, carId, categories: CATEGORY_NAMES }),
+    // partId (optional) makes the server PERSIST the full assessment via service
+    // role — used by the background queue so results are saved without the editor
+    // being open. Interactive callers omit it (they apply to the form for review).
+    body: JSON.stringify({ storeId, photoBase64s, photoUrls, car, carId, partId, categories: CATEGORY_NAMES }),
   })
   const data = await res.json()
   if (!res.ok || data.error) throw new Error(data.error || 'AI assessment failed')
@@ -279,6 +282,12 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
   const [savingSpecs, setSavingSpecs] = useState(false)
   const [specsSaved, setSpecsSaved] = useState(false)
   const [previewSig, setPreviewSig] = useState('') // inputs the loaded preview was built from
+  // eBay category override picker (fix a wrong AI/taxonomy category + teach it)
+  const [catEditing, setCatEditing] = useState(false)
+  const [catQuery, setCatQuery] = useState('')
+  const [catSugs, setCatSugs] = useState([])
+  const [catSearching, setCatSearching] = useState(false)
+  const [catSaving, setCatSaving] = useState(false)
   const [market, setMarket] = useState(null)
   const [marketLoading, setMarketLoading] = useState(false)
   const [marketErr, setMarketErr] = useState('')
@@ -362,6 +371,44 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
       setSpecsSaved(true); setTimeout(() => setSpecsSaved(false), 2000)
     } catch (e) { setPreviewErr(e.message) }
     setSavingSpecs(false)
+  }
+  // eBay category correction: search the live tree, apply an override for this
+  // part, and (server-side) learn it for future parts of the same type.
+  const EBAY_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import'
+  const callEbay = async (payload) => {
+    const { data: { session } } = await sb.auth.getSession()
+    const res = await fetch(EBAY_FN, { method:'POST', headers:{ 'Content-Type':'application/json', Authorization:`Bearer ${session?.access_token}` }, body: JSON.stringify(payload) })
+    const d = await res.json()
+    if (!res.ok || d.error) throw new Error(d.error || 'Request failed')
+    return d
+  }
+  const openCatEditor = () => { setCatEditing(true); setCatSugs([]); setCatQuery(form.title || `${form.make||''} ${form.subcategory||form.category||''}`.trim()) }
+  const searchCats = async () => {
+    const q = catQuery.trim(); if (!q) return
+    setCatSearching(true); setPreviewErr('')
+    try { const d = await callEbay({ action:'category_suggestions', storeId, query:q }); setCatSugs(d.suggestions || []) }
+    catch (e) { setPreviewErr(e.message) }
+    setCatSearching(false)
+  }
+  const applyCat = async (sug) => {
+    setCatSaving(true); setPreviewErr('')
+    try {
+      const d = await callEbay({ action:'set_category', storeId, partId: part.id, categoryId: sug.id, categoryName: sug.name })
+      setForm(f => ({ ...f, ebayOverrides: d.ebay_overrides }))
+      setCatEditing(false); setCatSugs([]); setCatQuery('')
+      await loadPreview()
+    } catch (e) { setPreviewErr(e.message) }
+    setCatSaving(false)
+  }
+  const resetCat = async () => {
+    setCatSaving(true); setPreviewErr('')
+    try {
+      const d = await callEbay({ action:'set_category', storeId, partId: part.id, categoryId:'', categoryName:'' })
+      setForm(f => ({ ...f, ebayOverrides: d.ebay_overrides }))
+      setCatEditing(false)
+      await loadPreview()
+    } catch (e) { setPreviewErr(e.message) }
+    setCatSaving(false)
   }
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
   const setCost = (k, v) => setForm(f => ({ ...f, costs: { ...f.costs, [k]: +v||0 } }))
@@ -562,9 +609,43 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
                 <span style={{ color:C.muted }}>Ship: {formatWeight(preview.weightG||0)} · {preview.dims?.l}×{preview.dims?.w}×{preview.dims?.h}cm</span>
               </div>
               <div style={{ fontSize:13, marginBottom:12 }}>
-                <span style={{ color:C.muted }}>eBay category: </span>
-                <strong style={{ color:C.text }}>{preview.categoryName || preview.categoryId}</strong>
+                <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+                  <span style={{ color:C.muted }}>eBay category: </span>
+                  <strong style={{ color:C.text }}>{preview.categoryName || preview.categoryId}</strong>
+                  {preview.categorySource === 'override' && <span title="You set this" style={{ fontSize:11, color:'#1d4ed8', background:'#eff6ff', border:'1px solid #bfdbfe', borderRadius:6, padding:'1px 6px' }}>your choice</span>}
+                  {preview.categorySource === 'learned' && <span title="Learned from a previous correction" style={{ fontSize:11, color:'#7c3aed', background:'#f5f3ff', border:'1px solid #ddd6fe', borderRadius:6, padding:'1px 6px' }}>learned</span>}
+                  {!catEditing && <button onClick={openCatEditor} style={{ ...S.btn('secondary'), padding:'3px 10px', fontSize:12 }}>Change</button>}
+                  {!catEditing && preview.categorySource === 'override' && <button onClick={resetCat} disabled={catSaving} style={{ ...S.btn('secondary'), padding:'3px 10px', fontSize:12, opacity:catSaving?0.5:1 }}>Reset to AI</button>}
+                </div>
+                {catEditing && (
+                  <div style={{ marginTop:8, padding:10, background:'#f9f8f5', border:`1px solid ${C.border}`, borderRadius:8 }}>
+                    <div style={{ display:'flex', gap:6, marginBottom:8 }}>
+                      <input value={catQuery} onChange={e=>setCatQuery(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter'){ e.preventDefault(); searchCats() } }}
+                        placeholder="Search eBay categories, e.g. ABS pump" style={{ ...S.input, flex:1, marginBottom:0, fontSize:13 }} autoFocus />
+                      <button onClick={searchCats} disabled={catSearching||!catQuery.trim()} style={{ ...S.btn('primary'), padding:'6px 14px', fontSize:12, opacity:(catSearching||!catQuery.trim())?0.5:1 }}>{catSearching?'…':'Search'}</button>
+                      <button onClick={()=>{ setCatEditing(false); setCatSugs([]) }} style={{ ...S.btn('secondary'), padding:'6px 12px', fontSize:12 }}>Cancel</button>
+                    </div>
+                    {catSugs.length > 0 && (
+                      <div style={{ border:`1px solid ${C.border}`, borderRadius:8, overflow:'hidden', background:'#fff', maxHeight:260, overflowY:'auto' }}>
+                        {catSugs.map((s,i) => (
+                          <button key={s.id} onClick={()=>applyCat(s)} disabled={catSaving}
+                            style={{ display:'block', width:'100%', textAlign:'left', fontSize:12, padding:'7px 10px', background:i%2?'#fafafa':'#fff', border:'none', borderBottom:i<catSugs.length-1?`1px solid ${C.border}`:'none', cursor:'pointer', color:C.text, opacity:catSaving?0.5:1 }}>
+                            {s.name} <span style={{ color:C.muted }}>· {s.id}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {catSearching && <div style={{ fontSize:12, color:C.muted }}>Searching eBay…</div>}
+                    {!catSearching && catSugs.length === 0 && <div style={{ fontSize:11, color:C.muted }}>Type what the part is and press Search. Picking a category fixes this part and teaches PartVault for similar parts.</div>}
+                  </div>
+                )}
               </div>
+              {preview.conditionDescription && (
+                <div style={{ fontSize:12, marginBottom:12, padding:'8px 10px', background:'#f9f8f5', border:`1px solid ${C.border}`, borderRadius:8 }}>
+                  <span style={{ color:C.muted, fontWeight:700 }}>Condition description: </span>
+                  <span style={{ color:C.text }}>{preview.conditionDescription}</span>
+                </div>
+              )}
               <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6, flexWrap:'wrap', gap:8 }}>
                 <div style={{ fontSize:12, fontWeight:700, color:C.text }}>
                   eBay item specifics — {Object.values(specEdits).filter(Boolean).length} of {preview.specifics?.length||0} filled
@@ -1007,6 +1088,61 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
   const [carPage, setCarPage] = useState(0)
   const [carPageSize, setCarPageSize] = useState(25)
 
+  // ── Background AI assessment ────────────────────────────────────────────
+  // New/imported parts aren't assessed by the mobile capture flow, so they sit
+  // unassessed. This queue works through in-stock, un-assessed parts that have a
+  // photo — newest first — calling ai-assess with the partId so the SERVER saves
+  // the result (no editor needed). Sequential + the edge's 429 back-off keeps it
+  // within the Anthropic rate limit. Pausable; each part is tried once per load.
+  const [assessRunning, setAssessRunning] = useState(false)
+  const [assessDone, setAssessDone] = useState(0)
+  const [assessTotal, setAssessTotal] = useState(0)
+  const [assessPaused, setAssessPaused] = useState(() => { try { return localStorage.getItem('pv_assess_paused') === '1' } catch { return false } })
+  const assessBusy = useRef(false)
+  const assessAbort = useRef(false)
+  const assessTried = useRef(new Set())
+  const partUrlsOf = (p) => (p.photos || []).map(urlFrom).filter(Boolean)
+  const needAssess = useMemo(
+    () => parts.filter(p => p.status === 'in_stock' && !p.ai_assessed && partUrlsOf(p).length),
+    [parts])
+  const runAssessQueue = async () => {
+    if (assessBusy.current || assessPaused) return
+    const queue = needAssess
+      .filter(p => !assessTried.current.has(p.id))
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))) // newest first
+    if (!queue.length) return
+    assessBusy.current = true; assessAbort.current = false
+    setAssessRunning(true); setAssessTotal(queue.length); setAssessDone(0)
+    let n = 0
+    for (const p of queue) {
+      if (assessAbort.current) break
+      assessTried.current.add(p.id)
+      try {
+        const car = cars?.find(c => c.id === p.car_id)
+        await analysePart({ photoUrls: partUrlsOf(p).slice(0, 4), carId: car?.id, partId: p.id }, car || p, storeId)
+      } catch (_) { /* skip this part, keep going */ }
+      setAssessDone(++n)
+      if (n % 4 === 0) refetch?.() // surface ✅s progressively
+    }
+    assessBusy.current = false; setAssessRunning(false)
+    refetch?.()
+  }
+  // Auto-start when there are parts needing assessment (unless paused). The
+  // busy/tried guards stop it re-triggering itself as refetch updates `parts`.
+  useEffect(() => {
+    if (assessPaused || assessBusy.current) return
+    const pending = needAssess.some(p => !assessTried.current.has(p.id))
+    if (pending) runAssessQueue()
+  }, [needAssess, assessPaused, storeId])
+  // Reset the per-session "tried" set when the store changes.
+  useEffect(() => { assessTried.current = new Set(); assessAbort.current = true }, [storeId])
+  const toggleAssessPaused = () => setAssessPaused(v => {
+    const nv = !v
+    try { localStorage.setItem('pv_assess_paused', nv ? '1' : '0') } catch { /* ignore */ }
+    if (nv) assessAbort.current = true
+    return nv
+  })
+
   const makes = useMemo(() => [...new Set(parts.filter(p=>p.make).map(p=>p.make))].sort(), [parts])
   const models = useMemo(() => { const src=filterMake?parts.filter(p=>p.make===filterMake):parts; return [...new Set(src.filter(p=>p.model).map(p=>p.model))].sort() }, [parts, filterMake])
 
@@ -1125,6 +1261,21 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
       {viewMode==='bulk' && <BulkEdit storeId={storeId} parts={parts} onSaved={refetch} />}
 
       {viewMode!=='bulk' && <>
+      {(assessRunning || needAssess.length > 0) && (
+        <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap', marginBottom:14, padding:'10px 14px', borderRadius:10, background: assessRunning ? '#f5f3ff' : '#fffbeb', border:`1px solid ${assessRunning ? '#ddd6fe' : '#fcd34d'}` }}>
+          <span style={{ fontSize:16 }}>{assessRunning ? '🤖' : '⏳'}</span>
+          <div style={{ flex:1, minWidth:200, fontSize:13, color:C.text }}>
+            {assessRunning
+              ? <><strong>Assessing parts in the background…</strong> {assessDone}/{assessTotal} — you can keep working; results save automatically.</>
+              : assessPaused
+                ? <><strong>{needAssess.length}</strong> part{needAssess.length===1?'':'s'} need AI assessment (paused).</>
+                : <><strong>{needAssess.length}</strong> part{needAssess.length===1?'':'s'} waiting for AI assessment…</>}
+          </div>
+          <button onClick={toggleAssessPaused} style={{ ...S.btn('secondary'), padding:'5px 14px', fontSize:12 }}>
+            {assessPaused ? '▶ Resume' : '⏸ Pause'}
+          </button>
+        </div>
+      )}
       <div style={{ display:'flex', gap:12, marginBottom:14, flexWrap:'wrap' }}>
         {[['Stock Value',`$${totals.list.toFixed(0)}`,C.blue],['Total Cost',`$${totals.cost.toFixed(0)}`,C.red],['Est. Profit',`$${totals.profit.toFixed(0)}`,totals.profit>=0?C.green:C.red]].map(([l,v,col])=>(
           <div key={l} style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:8, padding:'8px 16px', borderTop:`3px solid ${col}` }}>
