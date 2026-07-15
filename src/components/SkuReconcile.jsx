@@ -24,7 +24,7 @@ export const isSuspectSku = (sku) => {
   return /^EBH?-\d{6,}$/i.test(s) || /-\d{10,}$/.test(s)
 }
 
-export default function SkuReconcile({ storeId, parts = [] }) {
+export default function SkuReconcile({ storeId, parts = [], onApplied }) {
   const [scanning, setScanning] = useState(false)
   const [progress, setProgress] = useState({ done: 0, total: 0 })
   const [rows, setRows] = useState(null)
@@ -51,8 +51,10 @@ export default function SkuReconcile({ storeId, parts = [] }) {
     () => parts.filter(p => p.status === 'listed' && isSuspectSku(p.sku)),
     [parts])
 
-  const scan = async () => {
-    setScanning(true); setErr(''); setRows(null); setApplied(0); setSkip(new Set())
+  // keepApplied: the re-scan after Apply must NOT wipe the success banner.
+  const scan = async ({ keepApplied = false } = {}) => {
+    setScanning(true); setErr(''); setRows(null); setSkip(new Set())
+    if (!keepApplied) setApplied(0)
     try {
       const ids = suspects.map(p => p.id)
       if (!ids.length) { setRows([]); setScanning(false); return }
@@ -96,7 +98,8 @@ export default function SkuReconcile({ storeId, parts = [] }) {
     try {
       const d = await call({ action: 'sku_reconcile_apply', updates: chosen.map(r => ({ partId: r.partId, newSku: r.ebaySku })) })
       setApplied(d.updated || 0)
-      await scan() // re-scan so the table reflects the new truth
+      onApplied?.()                      // refresh Inventory so the new SKUs show
+      await scan({ keepApplied: true })  // re-scan, but keep the success banner
     } catch (e) { setErr(e.message) }
     setApplying(false)
   }
@@ -124,7 +127,22 @@ export default function SkuReconcile({ storeId, parts = [] }) {
       </div>
 
       {err && <div style={{ fontSize: 12, color: C.red, marginBottom: 10 }}>{err}</div>}
-      {applied > 0 && <div style={{ fontSize: 13, color: C.green, fontWeight: 700, marginBottom: 10 }}>✓ Updated {applied} SKU{applied === 1 ? '' : 's'} to match eBay.</div>}
+
+      {applied > 0 && !scanning && (
+        <div style={{ padding: '12px 14px', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 8, marginBottom: 12 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.green }}>
+            ✓ Done — {applied} SKU{applied === 1 ? '' : 's'} now match eBay
+          </div>
+          <div style={{ fontSize: 12, color: C.text, marginTop: 5, lineHeight: 1.7 }}>
+            Updated in PartVault only — <strong>nothing was sent to eBay</strong>. Every change is in the activity log, so it can be undone.
+            <br />
+            <strong>What next:</strong>{' '}
+            {cls?.blocked?.length
+              ? <>the remaining <strong>{cls.blocked.length}</strong> listing{cls.blocked.length === 1 ? '' : 's'} still share a placeholder label on eBay — they're waiting to be shelved and relabelled. Come back and scan again once that's done and they'll drop in automatically.</>
+              : <>everything scanned is now in sync. Nothing else to do.</>}
+          </div>
+        </div>
+      )}
 
       {cls && (
         <>
@@ -177,7 +195,13 @@ export default function SkuReconcile({ storeId, parts = [] }) {
             </>
           )}
 
-          {cls.update.length === 0 && <div style={{ fontSize: 13, color: C.green, fontWeight: 600 }}>✓ Every live listing's SKU already matches eBay — nothing to do.</div>}
+          {cls.update.length === 0 && applied === 0 && (
+            <div style={{ fontSize: 13, color: C.text, lineHeight: 1.7 }}>
+              {cls.blocked.length
+                ? <>Nothing can be updated right now — the {cls.blocked.length} listing{cls.blocked.length === 1 ? '' : 's'} above still carry a shared placeholder label on eBay. Scan again once they've been shelved and relabelled.</>
+                : <span style={{ color: C.green, fontWeight: 600 }}>✓ Every scanned listing's SKU already matches eBay — nothing to do.</span>}
+            </div>
+          )}
         </>
       )}
     </div>

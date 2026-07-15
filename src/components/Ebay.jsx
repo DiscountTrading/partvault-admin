@@ -28,7 +28,7 @@ export default function Ebay({ storeId, onChanged, parts = [] }) {
       </div>
       {sub === 'list' && <Publish storeId={storeId} onChanged={onChanged} />}
       {sub === 'delist' && <Delist storeId={storeId} onChanged={onChanged} />}
-      {sub === 'skus' && <SkuReconcile storeId={storeId} parts={parts} />}
+      {sub === 'skus' && <SkuReconcile storeId={storeId} parts={parts} onApplied={onChanged} />}
     </div>
   )
 }
