@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.36.13'
+const EDGE_FN_VERSION         = '3.36.14'
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  HARD BLOCK — EDITING LIVE eBay LISTINGS IS DISABLED AT THE CODE LEVEL.
@@ -3159,7 +3159,7 @@ async function handleRequest(req: Request): Promise<Response> {
       if (!only.length) return json({ error: 'partIds required — refusing to scan every listing (eBay API quota)' }, 400)
       let lq = sb.from('listings')
         .select('platform_listing_id, platform_sku, part_id')
-        .eq('store_id', storeId).eq('platform', 'ebay').eq('status', 'active')
+        .eq('store_id', storeId).eq('platform', 'ebay').in('status', ['live', 'active'])
         .is('deleted_at', null)
         .in('part_id', only)
         .order('platform_listing_id', { ascending: true })
@@ -3190,7 +3190,7 @@ async function handleRequest(req: Request): Promise<Response> {
         })
       }
       const { count } = await sb.from('listings').select('id', { count: 'exact', head: true })
-        .eq('store_id', storeId).eq('platform', 'ebay').eq('status', 'active').is('deleted_at', null)
+        .eq('store_id', storeId).eq('platform', 'ebay').in('status', ['live', 'active']).is('deleted_at', null)
         .in('part_id', only)
       const nextOffset = offset + LIMIT
       return json({ ok: true, version: EDGE_FN_VERSION, rows, total: count || 0, hasMore: nextOffset < (count || 0), nextOffset })
@@ -3246,7 +3246,7 @@ async function handleRequest(req: Request): Promise<Response> {
       // Mirror onto the listing so the stored platform_sku stops being stale.
       for (const u of updates) {
         await sb.from('listings').update({ platform_sku: String(u.newSku).trim() })
-          .eq('store_id', storeId).eq('platform', 'ebay').eq('part_id', u.partId).eq('status', 'active')
+          .eq('store_id', storeId).eq('platform', 'ebay').eq('part_id', u.partId).in('status', ['live', 'active'])
       }
       return json({ ok: true, version: EDGE_FN_VERSION, updated: updates.length })
     }
@@ -3355,12 +3355,20 @@ async function handleRequest(req: Request): Promise<Response> {
           // ══ HARD BLOCK ══ Never touch a listing that is already live on eBay.
           // Checked BEFORE any eBay write (inventory replace / compatibility /
           // offer update), so a re-publish can never alter a live listing.
+          //
+          // ⚠ FAIL-CLOSED. The import writes status 'live'; publish writes
+          // 'active'. v3.36.11-12 only checked 'active', so the block silently
+          // never fired for imported listings. Anything that is NOT a known
+          // dead state therefore counts as live — a new/unknown status must
+          // block, never wave a write through.
           if (!ALLOW_LIVE_EBAY_EDITS) {
-            const { data: liveL } = await sb.from('listings')
-              .select('platform_listing_id').eq('part_id', part.id)
-              .eq('platform', 'ebay').eq('status', 'active').limit(1)
-            if (liveL?.length) {
-              throw new Error(`BLOCKED — already live on eBay (item ${liveL[0].platform_listing_id}). Editing live listings is disabled in this build; nothing was sent to eBay.`)
+            const DEAD = ['ended', 'sold', 'cancelled', 'canceled', 'deleted', 'draft', 'unsold']
+            const { data: anyL } = await sb.from('listings')
+              .select('platform_listing_id, status').eq('part_id', part.id)
+              .eq('platform', 'ebay').is('deleted_at', null)
+            const stillLive = (anyL || []).filter((l: any) => !DEAD.includes(String(l.status || '').toLowerCase()))
+            if (stillLive.length) {
+              throw new Error(`BLOCKED — already on eBay (item ${stillLive[0].platform_listing_id}, status "${stillLive[0].status}"). Editing live listings is disabled in this build; nothing was sent to eBay.`)
             }
           }
           // Fill blank make/model/year from the donor car BEFORE building fitment,
