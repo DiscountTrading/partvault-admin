@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.36.14'
+const EDGE_FN_VERSION         = '3.36.15'
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  HARD BLOCK — EDITING LIVE eBay LISTINGS IS DISABLED AT THE CODE LEVEL.
@@ -3532,15 +3532,21 @@ async function handleRequest(req: Request): Promise<Response> {
           if (!pubRes.ok) throw new Error(pubData.errors?.[0]?.message || `Publish error ${pubRes.status}`)
           const listingId = pubData.listingId
 
-          // 4. Record it — part now listed; listing 'active' (matches reconcile/import)
+          // 4. Record it — part now listed; listing status MUST be 'live': the
+          // listings_status_check constraint rejects 'active' (see the import at
+          // ~L837). This insert previously used 'active' AND ignored its error,
+          // so every publish silently failed to record its listing row — which
+          // also blinded the live-listing guard until the next sync. Error is
+          // now surfaced rather than swallowed.
           await sb.from('parts').update({ status: 'listed' }).eq('id', part.id)
           await sb.from('listings').delete().eq('part_id', part.id).eq('platform', 'ebay').neq('status', 'sold')
-          await sb.from('listings').insert({
+          const { error: lIns } = await sb.from('listings').insert({
             store_id: storeId, part_id: part.id, platform: 'ebay',
-            platform_listing_id: listingId, platform_sku: sku, status: 'active',
+            platform_listing_id: listingId, platform_sku: sku, status: 'live',
             list_price: part.list_price, listed_at: new Date().toISOString(),
             platform_data: { offerId, listingId, sku }, photos: part.photos || [], photos_archived: false,
           })
+          if (lIns) throw new Error(`Listed on eBay (item ${listingId}) but recording it here failed: ${lIns.message}`)
 
           published++
           results.push({ partId: part.id, sku, listingId, compatibility: compat })
