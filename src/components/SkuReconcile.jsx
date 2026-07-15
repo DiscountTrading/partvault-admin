@@ -13,7 +13,18 @@ const EBAY_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-impo
 // from every live listing and copies it down.
 //
 // Scan is READ-ONLY. Nothing is ever written to eBay — data flows eBay → PartVault.
-export default function SkuReconcile({ storeId }) {
+// A SKU we generated as a last resort rather than one of Austin's real labels:
+//   EB-<itemId> / EBH-<itemId>  — the import's collision fallback
+//   <anything>-<10+ digits>     — a generated base with the eBay item id appended
+// Only these are worth asking eBay about; re-checking thousands of correct
+// listings would burn the Trading API daily quota for nothing.
+export const isSuspectSku = (sku) => {
+  const s = String(sku || '').trim()
+  if (!s) return true
+  return /^EBH?-\d{6,}$/i.test(s) || /-\d{10,}$/.test(s)
+}
+
+export default function SkuReconcile({ storeId, parts = [] }) {
   const [scanning, setScanning] = useState(false)
   const [progress, setProgress] = useState({ done: 0, total: 0 })
   const [rows, setRows] = useState(null)
@@ -34,13 +45,21 @@ export default function SkuReconcile({ storeId }) {
     return d
   }
 
+  // Only listed parts whose SKU we clearly generated ourselves. Sold/history
+  // (EBH-) parts are deliberately left alone — they need no shelf location.
+  const suspects = useMemo(
+    () => parts.filter(p => p.status === 'listed' && isSuspectSku(p.sku)),
+    [parts])
+
   const scan = async () => {
     setScanning(true); setErr(''); setRows(null); setApplied(0); setSkip(new Set())
     try {
+      const ids = suspects.map(p => p.id)
+      if (!ids.length) { setRows([]); setScanning(false); return }
       const all = []
       let offset = 0
       for (;;) {
-        const d = await call({ action: 'sku_reconcile_report', offset })
+        const d = await call({ action: 'sku_reconcile_report', offset, partIds: ids })
         all.push(...(d.rows || []))
         setProgress({ done: all.length, total: d.total || 0 })
         if (!d.hasMore) break
@@ -93,12 +112,14 @@ export default function SkuReconcile({ storeId }) {
         <div style={{ flex: 1, minWidth: 260 }}>
           <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>🔄 Reconcile SKUs from eBay</div>
           <div style={{ fontSize: 12, color: C.muted, marginTop: 3, lineHeight: 1.6 }}>
-            eBay is the source of truth. This reads the <strong>current</strong> custom label from every live listing and copies it into PartVault.
+            eBay is the source of truth. This asks eBay for the <strong>current</strong> custom label on the{' '}
+            <strong>{suspects.length}</strong> listed part{suspects.length === 1 ? '' : 's'} whose SKU we generated ourselves
+            (<code>EB-…</code> / item-id suffixed) and copies the real label back in.
             Scanning is read-only, and <strong>nothing is ever written to eBay</strong>.
           </div>
         </div>
-        <button onClick={scan} disabled={scanning} style={{ ...S.btn('primary'), opacity: scanning ? 0.5 : 1 }}>
-          {scanning ? `Scanning ${progress.done}/${progress.total || '…'}` : '🔍 Scan eBay'}
+        <button onClick={scan} disabled={scanning || !suspects.length} style={{ ...S.btn('primary'), opacity: (scanning || !suspects.length) ? 0.5 : 1 }}>
+          {scanning ? `Scanning ${progress.done}/${progress.total || '…'}` : `🔍 Scan ${suspects.length || ''} on eBay`}
         </button>
       </div>
 

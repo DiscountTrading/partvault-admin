@@ -10,7 +10,7 @@ const SUBS = [
   { id: 'skus', label: 'SKUs' },
 ]
 
-export default function Ebay({ storeId, onChanged }) {
+export default function Ebay({ storeId, onChanged, parts = [] }) {
   const [sub, setSub] = useState('list')
   return (
     <div>
@@ -28,7 +28,7 @@ export default function Ebay({ storeId, onChanged }) {
       </div>
       {sub === 'list' && <Publish storeId={storeId} onChanged={onChanged} />}
       {sub === 'delist' && <Delist storeId={storeId} onChanged={onChanged} />}
-      {sub === 'skus' && <SkuReconcile storeId={storeId} />}
+      {sub === 'skus' && <SkuReconcile storeId={storeId} parts={parts} />}
     </div>
   )
 }

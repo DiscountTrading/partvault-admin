@@ -296,7 +296,7 @@ export default function App() {
             aiSettings={aiSettings} footer={footer} costing={costingFull} labels={labels} warehouse={warehouse} refetch={smartRefetch}
           />
         )}
-        {tab === 'ebay' && <Ebay storeId={storeId} onChanged={smartRefetch} />}
+        {tab === 'ebay' && <Ebay storeId={storeId} onChanged={smartRefetch} parts={parts} />}
         {tab === 'analytics' && <Analytics storeId={storeId} initial={insightsInit} parts={parts} cars={cars} sales={sales} costing={costingFull}
           onVehiclesChanged={() => { refetch(); sb.from('cars').select('*').eq('store_id', storeId).is('deleted_at', null).order('created_at', { ascending: false }).then(({ data }) => setCars(data || [])) }} />}
         {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores}

@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.36.12'
+const EDGE_FN_VERSION         = '3.36.13'
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  HARD BLOCK — EDITING LIVE eBay LISTINGS IS DISABLED AT THE CODE LEVEL.
@@ -3152,12 +3152,19 @@ async function handleRequest(req: Request): Promise<Response> {
       const { token, certId } = await getToken()
       const offset = +body.offset || 0
       const LIMIT = 30
-      const { data: ls, error: lErr } = await sb.from('listings')
+      // The caller passes ONLY the parts whose SKU looks auto-generated — one
+      // eBay GetItem per listing burns the Trading API daily quota, so we never
+      // re-check the thousands of listings that are already correct.
+      const only: string[] = Array.isArray(body.partIds) ? body.partIds : []
+      if (!only.length) return json({ error: 'partIds required — refusing to scan every listing (eBay API quota)' }, 400)
+      let lq = sb.from('listings')
         .select('platform_listing_id, platform_sku, part_id')
         .eq('store_id', storeId).eq('platform', 'ebay').eq('status', 'active')
         .is('deleted_at', null)
+        .in('part_id', only)
         .order('platform_listing_id', { ascending: true })
         .range(offset, offset + LIMIT - 1)
+      const { data: ls, error: lErr } = await lq
       if (lErr) throw lErr
       const partIds = [...new Set((ls || []).map((l: any) => l.part_id).filter(Boolean))]
       const { data: ps } = partIds.length
@@ -3184,6 +3191,7 @@ async function handleRequest(req: Request): Promise<Response> {
       }
       const { count } = await sb.from('listings').select('id', { count: 'exact', head: true })
         .eq('store_id', storeId).eq('platform', 'ebay').eq('status', 'active').is('deleted_at', null)
+        .in('part_id', only)
       const nextOffset = offset + LIMIT
       return json({ ok: true, version: EDGE_FN_VERSION, rows, total: count || 0, hasMore: nextOffset < (count || 0), nextOffset })
     }
