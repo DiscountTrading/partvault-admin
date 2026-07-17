@@ -21,7 +21,9 @@ const EBAY_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-impo
 export const isSuspectSku = (sku) => {
   const s = String(sku || '').trim()
   if (!s) return true
-  return /^EBH?-\d{6,}$/i.test(s) || /-\d{10,}$/.test(s)
+  // NEW-<n> is our "captured, not yet shelved" placeholder — once Austin shelves
+  // the item and labels it on eBay, reconcile should pull that real label in.
+  return /^EBH?-\d{6,}$/i.test(s) || /-\d{10,}$/.test(s) || /^NEW-/i.test(s)
 }
 
 export default function SkuReconcile({ storeId, parts = [], onApplied }) {
