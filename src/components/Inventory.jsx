@@ -14,21 +14,31 @@ function Field({ label, children }) {
 // Direct link to a part's live listing on the store's eBay marketplace.
 export const ebayItmUrl = (itemId) => `https://www.${getActiveMarketplace()?.ebayDomain || 'ebay.com.au'}/itm/${itemId}`
 
-// Status pill — a click-through to the live eBay listing when the part is listed
-// and we know its eBay item id, otherwise a plain pill.
+// Compact eBay wordmark (the four brand colours) — used as a small icon, no image.
+function EbayLogo() {
+  return (
+    <span style={{ fontWeight:800, fontSize:11, fontFamily:'Arial,Helvetica,sans-serif', letterSpacing:'-0.4px', lineHeight:1 }}>
+      <span style={{ color:'#e53238' }}>e</span><span style={{ color:'#0064d2' }}>b</span><span style={{ color:'#f5af02' }}>a</span><span style={{ color:'#86b817' }}>y</span>
+    </span>
+  )
+}
+// Small eBay-logo link button (icon only) — opens the live listing in a new tab.
+function EbayLink({ part, style }) {
+  if (!(part.status === 'listed' && part.ebayItemId)) return null
+  return (
+    <a href={ebayItmUrl(part.ebayItemId)} target="_blank" rel="noreferrer" title="View this listing on eBay"
+       style={{ display:'inline-flex', alignItems:'center', textDecoration:'none', cursor:'pointer', ...style }}>
+      <EbayLogo />
+    </a>
+  )
+}
+
+// Status pill. The click-through to eBay lives on the dedicated eBay icon in the
+// action column, so this stays a plain pill (keeps the busy list uncluttered).
 function StatusPill({ part, fontSize = 11, padding }) {
   const col = STATUS_COLORS[part.status] || C.muted
   const label = STATUS_LABELS[part.status] || part.status
-  const pill = { ...S.pill(col), fontSize, ...(padding ? { padding } : {}) }
-  if (part.status === 'listed' && part.ebayItemId) {
-    return (
-      <a href={ebayItmUrl(part.ebayItemId)} target="_blank" rel="noreferrer"
-         title="View this listing on eBay" style={{ textDecoration: 'none' }}>
-        <span style={pill}>{label} ↗</span>
-      </a>
-    )
-  }
-  return <span style={pill}>{label}</span>
+  return <span style={{ ...S.pill(col), fontSize, ...(padding ? { padding } : {}) }}>{label}</span>
 }
 
 // eBay-style accent + section card (mirrors eBay's "Create your listing" layout)
@@ -1428,7 +1438,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                               <td style={{ padding:'8px 12px', whiteSpace:'nowrap' }}>
                                 <button onClick={()=>{setEditingPart(p);setShowForm(true)}} style={{ ...S.btn('secondary'), padding:'3px 10px', fontSize:11, marginRight:6 }}>Edit</button>
                                 {p.sku && <button onClick={()=>printLabels(p, labels)} title="Print stock label" style={{ ...S.btn('secondary'), padding:'3px 8px', fontSize:11, marginRight:6 }}>🏷️</button>}
-                                {p.status==='listed' && p.ebayItemId && <a href={ebayItmUrl(p.ebayItemId)} target="_blank" rel="noreferrer" title="View this listing on eBay" style={{ ...S.btn('secondary'), padding:'3px 8px', fontSize:11, marginRight:6, textDecoration:'none', color:EBAY_BLUE, borderColor:`${EBAY_BLUE}66`, fontWeight:700 }}>eBay ↗</a>}
+                                <EbayLink part={p} style={{ ...S.btn('secondary'), padding:'3px 8px', marginRight:6 }} />
                                 <button onClick={()=>setDeleteTarget(p)} style={{ ...S.btn('danger'), padding:'3px 8px', fontSize:11 }}>🗑</button>
                               </td>
                             </tr>
@@ -1480,7 +1490,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                       <td style={{ padding:'4px 6px', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}` }}>
                         <button onClick={()=>{setEditingPart(p);setShowForm(true)}} style={{ fontSize:11, padding:'2px 8px', background:'#eff6ff', color:C.blue, border:`1px solid ${C.blue}44`, borderRadius:4, cursor:'pointer', marginRight:4 }}>Edit</button>
                         {p.sku && <button onClick={()=>printLabels(p, labels)} title="Print stock label" style={{ fontSize:11, padding:'2px 6px', background:'#fff', color:C.text, border:`1px solid ${C.border}`, borderRadius:4, cursor:'pointer' }}>🏷️</button>}
-                        {p.status==='listed' && p.ebayItemId && <a href={ebayItmUrl(p.ebayItemId)} target="_blank" rel="noreferrer" title="View this listing on eBay" style={{ fontSize:11, padding:'2px 6px', background:'#eef2ff', color:EBAY_BLUE, border:`1px solid ${EBAY_BLUE}44`, borderRadius:4, cursor:'pointer', textDecoration:'none', fontWeight:700, marginLeft:4 }}>eBay ↗</a>}
+                        <EbayLink part={p} style={{ padding:'2px 6px', background:'#fff', border:`1px solid ${C.border}`, borderRadius:4, marginLeft:4 }} />
                       </td>
                       {td(p.sku)}{td(p.title)}{td(p.make)}{td(p.model)}{td(p.year)}{td(p.subcategory||p.category)}
                       <td style={{ padding:'4px 8px', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}` }}>
