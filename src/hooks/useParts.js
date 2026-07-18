@@ -30,7 +30,9 @@ const mapRow = r => ({
 })
 
 const mapToRow = p => ({
-  sku: p.sku, title: p.title, category: p.category, subcategory: p.subcategory,
+  // Empty/whitespace SKU → null ("no SKU yet"), never ''. NULLs are distinct
+  // under the unique index, so two un-SKU'd parts don't collide; '' would.
+  sku: (p.sku ?? '').trim() || null, title: p.title, category: p.category, subcategory: p.subcategory,
   make: p.make, model: p.model, year: p.year, condition: p.condition,
   description: p.description, status: p.status, costs: p.costs,
   list_price: +p.listPrice||+p.list_price||0,
