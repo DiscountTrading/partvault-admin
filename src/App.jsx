@@ -172,13 +172,13 @@ function AssessBadge({ assess }) {
   const { running, done, total, paused, togglePaused, remaining } = assess || {}
   if (!running && !remaining) return null
   const label = running
-    ? `Assessing ${done}/${total}`
+    ? `Preparing ${done}/${total}`
     : paused
-      ? `${remaining} to assess · paused`
-      : `${remaining} to assess`
+      ? `${remaining} to prepare · paused`
+      : `${remaining} to prepare`
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, padding: '4px 8px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.9)' }}
-          title="Background AI assessment of new parts">
+          title="Background: AI assessment + eBay item specifics for new parts">
       <span style={running ? { animation: 'spin 1s linear infinite', display: 'inline-block' } : undefined}>{running ? '🧠' : paused ? '⏸' : '🧠'}</span>
       {label}
       <button onClick={togglePaused} title={paused ? 'Resume background assessment' : 'Pause background assessment'}

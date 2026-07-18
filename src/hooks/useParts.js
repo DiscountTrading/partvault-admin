@@ -27,6 +27,7 @@ const mapRow = r => ({
   marketCount: r.market_count ?? null,
   marketCheckedAt: r.market_checked_at || null,
   shippingCharged: r.shipping_charged ?? null,
+  ebaySpecifics: r.ebay_specifics || null,   // background-generated eBay specifics/fitment snapshot
   ebayItemId: null,   // live eBay item id, attached from the listings table in fetch()
 })
 

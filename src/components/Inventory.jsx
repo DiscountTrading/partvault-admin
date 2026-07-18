@@ -344,8 +344,20 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
 
   // Read-only preview of the exact eBay category + item specifics + fitment that
   // a publish would send, generated from the part's photos (one AI call).
-  const loadPreview = async () => {
+  const hydratePreview = (d) => {
+    setPreview(d)
+    const base = {}; (d.specifics || []).forEach(s => { base[s.name] = s.value || '' })
+    setSpecBaseline(base); setSpecEdits(base)
+    const fit = (d.fitment || []).map(f => ({ make:f.make||'', model:f.model||'', yearFrom:f.yearFrom||'', yearTo:f.yearTo||'', trim:f.trim||'' }))
+    setFitEdits(fit); setFitBaseline(JSON.stringify(fit))
+    setPreviewSig(previewInputSig())
+  }
+  const loadPreview = async ({ force = false } = {}) => {
     if (!part?.id) return
+    // Instant hydrate from the background-generated snapshot when it still matches
+    // the current inputs — no AI call, and it's already listing-ready.
+    const cached = part?.ebaySpecifics
+    if (!force && cached && cached.sig === previewInputSig()) { hydratePreview(cached); return }
     setPreviewLoading(true); setPreviewErr('')
     try {
       const { data: { session } } = await sb.auth.getSession()
@@ -356,12 +368,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
       })
       const d = await res.json()
       if (!res.ok || d.error) throw new Error(d.error || 'Preview failed')
-      setPreview(d)
-      const base = {}; (d.specifics || []).forEach(s => { base[s.name] = s.value || '' })
-      setSpecBaseline(base); setSpecEdits(base)
-      const fit = (d.fitment || []).map(f => ({ make:f.make||'', model:f.model||'', yearFrom:f.yearFrom||'', yearTo:f.yearTo||'', trim:f.trim||'' }))
-      setFitEdits(fit); setFitBaseline(JSON.stringify(fit))
-      setPreviewSig(previewInputSig())
+      hydratePreview(d)
     } catch (e) { setPreviewErr(e.message) }
     setPreviewLoading(false)
   }
@@ -1247,10 +1254,10 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
           <span style={{ fontSize:16 }}>{assessRunning ? '🤖' : '⏳'}</span>
           <div style={{ flex:1, minWidth:200, fontSize:13, color:C.text }}>
             {assessRunning
-              ? <><strong>Assessing parts in the background…</strong> {assessDone}/{assessTotal} — you can keep working; results save automatically.</>
+              ? <><strong>Preparing parts for eBay in the background…</strong> {assessDone}/{assessTotal} — AI assessment + item specifics; you can keep working, results save automatically.</>
               : assessPaused
-                ? <><strong>{assessRemaining}</strong> part{assessRemaining===1?'':'s'} need AI assessment (paused).</>
-                : <><strong>{assessRemaining}</strong> part{assessRemaining===1?'':'s'} waiting for AI assessment…</>}
+                ? <><strong>{assessRemaining}</strong> part{assessRemaining===1?'':'s'} to prepare (paused).</>
+                : <><strong>{assessRemaining}</strong> part{assessRemaining===1?'':'s'} waiting to be prepared for eBay…</>}
           </div>
           <button onClick={toggleAssessPaused} style={{ ...S.btn('secondary'), padding:'5px 14px', fontSize:12 }}>
             {assessPaused ? '▶ Resume' : '⏸ Pause'}

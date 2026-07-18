@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.36.22'
+const EDGE_FN_VERSION         = '3.36.23'
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  HARD BLOCK — EDITING LIVE eBay LISTINGS IS DISABLED AT THE CODE LEVEL.
@@ -3073,7 +3073,7 @@ async function handleRequest(req: Request): Promise<Response> {
 
       const conditionDescription = String(part.condition_description || settings.listingDefaults?.conditionDescription || '').trim().slice(0, 1000)
 
-      return json({
+      const result: any = {
         ok: true, categoryId, categoryName, categorySource, specifics, fitment: fitmentList,
         title: part.title, description, photos,
         price: +part.list_price || 0, condition: part.condition || 'Used – Good',
@@ -3081,7 +3081,19 @@ async function handleRequest(req: Request): Promise<Response> {
         hasFooter: !!(settings.footer && settings.footer.trim()),
         allowOffers: !!settings.allowOffers,
         weightG, dims: { l: dimL, w: dimW, h: dimH },
-      })
+      }
+
+      // Persist the FULL preview when the background queue asks (persist:true), so
+      // the preview panel hydrates instantly and the part reads as "eBay-ready".
+      // sig fingerprints the saved inputs the snapshot was built from — the panel
+      // only trusts the cache while its inputs still match. Generated baseline
+      // only; ebay_overrides (user corrections) still win at publish.
+      if (body.persist) {
+        const sig = JSON.stringify({ t: part.title || '', p: +part.list_price || 0, c: part.condition || '', d: part.description || '', ov: part.ebay_overrides || null })
+        try { await sb.from('parts').update({ ebay_specifics: { ...result, sig, generated_at: new Date().toISOString() } }).eq('id', partId).eq('store_id', storeId) } catch (_) { /* best effort */ }
+      }
+
+      return json(result)
     }
 
     // Search eBay's live category tree so the user can correct a wrong category.

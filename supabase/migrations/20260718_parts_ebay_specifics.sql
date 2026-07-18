@@ -1,0 +1,15 @@
+-- ============================================================================
+-- Cache the AI-generated eBay item specifics + fitment on the part, so the
+-- background queue can pre-generate them (right after AI assessment) and the
+-- eBay preview panel shows them INSTANTLY instead of making a fresh AI call
+-- every time it's opened. This is the generated BASELINE — user corrections
+-- still live separately in ebay_overrides and win at publish time.
+--
+-- Shape: { specifics:[{name,value,required}], fitment:[...], categoryId,
+--          categoryName, sig, generated_at }
+-- `sig` fingerprints the part inputs the snapshot was built from, so the panel
+-- knows whether the cache still matches (else it regenerates on demand).
+--
+-- Idempotent. Apply via the Supabase SQL editor.
+-- ============================================================================
+alter table public.parts add column if not exists ebay_specifics jsonb;
