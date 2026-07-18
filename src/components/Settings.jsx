@@ -194,6 +194,20 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       setTzSaved(true); setTimeout(() => setTzSaved(false), 2000)
     } catch (e) { console.error('Timezone save failed', e) }
   }
+  // Auto-sync interval (hours) — how often the full eBay sync runs. 24 = nightly
+  // (default); minimum 3h to stay well within eBay's API limits.
+  const [syncInterval, setSyncInterval] = useState(24)
+  const [siSaved, setSiSaved] = useState(false)
+  const saveSyncInterval = async (h) => {
+    const v = +h || 24
+    setSyncInterval(v)
+    if (!storeId) return
+    try {
+      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      await sb.from('stores').update({ settings: { ...(current?.settings || {}), syncIntervalHours: v } }).eq('id', storeId)
+      setSiSaved(true); setTimeout(() => setSiSaved(false), 2000)
+    } catch (e) { console.error('Sync interval save failed', e) }
+  }
   // Subscription plan + this month's AI usage (usage metered server-side).
   const [plan, setPlan] = useState(() => planState(null))
   const [aiUsage, setAiUsage] = useState(null)
@@ -367,6 +381,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         // nightly sync runs at THIS store's local midnight rather than a default.
         if (data.settings.timezone) setTimezone(data.settings.timezone)
         else saveTimezone(browserTz)
+        if (data.settings.syncIntervalHours) setSyncInterval(+data.settings.syncIntervalHours)
         setMarketplace(data.settings.marketplace || 'EBAY_AU')
       }
       // Marketplace locks once the store has any part (DB-enforced too).
@@ -2041,8 +2056,20 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                   {(() => {
                     let local = ''
                     try { local = new Date().toLocaleString('en-AU', { timeZone: timezone, hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' }) } catch { /* invalid tz */ }
-                    return `Nightly sync runs at midnight here${local ? ` · local time now ${local}` : ''}. Auto-detected from your browser — edit if it's wrong (e.g. on a VPN).`
+                    return `Sync windows are anchored to midnight here${local ? ` · local time now ${local}` : ''}. Auto-detected from your browser — edit if it's wrong (e.g. on a VPN).`
                   })()}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.border}` }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>🔄 Auto-sync every</span>
+                  <select value={syncInterval} onChange={e => saveSyncInterval(e.target.value)}
+                    style={{ border: `1px solid ${C.border}`, borderRadius: 6, padding: '4px 8px', fontSize: 12, background: '#fff' }}>
+                    <option value={3}>3 hours</option>
+                    <option value={6}>6 hours</option>
+                    <option value={12}>12 hours</option>
+                    <option value={24}>24 hours (nightly)</option>
+                  </select>
+                  {siSaved && <span style={{ fontSize: 12, color: C.green }}>✓ saved</span>}
+                  <span style={{ fontSize: 11, color: C.muted }}>How often the full eBay sync runs (import + sold orders + reconcile). More frequent = ended/sold statuses clear faster.</span>
                 </div>
               </div>
 

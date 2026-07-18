@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.36.27'
+const EDGE_FN_VERSION         = '3.36.28'
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  HARD BLOCK — EDITING LIVE eBay LISTINGS IS DISABLED AT THE CODE LEVEL.
@@ -1237,9 +1237,22 @@ async function handleRequest(req: Request): Promise<Response> {
       // one-per-local-day; fall back to UTC date for manual/legacy calls.
       const runDate = (typeof body.runDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.runDate))
         ? body.runDate : new Date().toISOString().slice(0, 10)
-      let { data: run } = await sb.from('sync_runs').select('*').eq('store_id', storeId).eq('run_date', runDate).maybeSingle()
+      // Configurable interval means >1 run per local day, keyed by run_slot (the
+      // local hour the window started). Manual runs use slot 0. Column-error
+      // fallback keeps this working if the run_slot migration hasn't run yet.
+      const runSlot = Number.isInteger(body.runSlot) ? body.runSlot : 0
+      let useSlot = true
+      let run: any = null
+      {
+        const sel = await sb.from('sync_runs').select('*').eq('store_id', storeId).eq('run_date', runDate).eq('run_slot', runSlot).maybeSingle()
+        if (sel.error && /run_slot|column|schema/i.test(sel.error.message || '')) {
+          useSlot = false
+          run = (await sb.from('sync_runs').select('*').eq('store_id', storeId).eq('run_date', runDate).maybeSingle()).data
+        } else run = sel.data
+      }
       if (!run) {
-        const { data: ins } = await sb.from('sync_runs').insert({ store_id: storeId, run_date: runDate, phase: 'import' }).select().single()
+        const row: Record<string, unknown> = { store_id: storeId, run_date: runDate, phase: 'import', ...(useSlot ? { run_slot: runSlot } : {}) }
+        const { data: ins } = await sb.from('sync_runs').insert(row).select().single()
         run = ins
       } else if (manual && run.done) {
         // Explicit manual re-run: reset today's finished run to the top. Subsequent
