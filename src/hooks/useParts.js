@@ -27,6 +27,7 @@ const mapRow = r => ({
   marketCount: r.market_count ?? null,
   marketCheckedAt: r.market_checked_at || null,
   shippingCharged: r.shipping_charged ?? null,
+  ebayItemId: null,   // live eBay item id, attached from the listings table in fetch()
 })
 
 const mapToRow = p => ({
@@ -101,7 +102,22 @@ export function useParts(storeId) {
       }
       if (data) allRows.push(...data)
     }
-    setParts(allRows.map(mapRow))
+    // Attach each part's live eBay item id (for the "view on eBay" link). It lives
+    // on the listings table keyed by part_id — a relisted part can have several, so
+    // prefer a live/active one. Best-effort: a failure here just omits the links.
+    const itemMap = new Map()
+    const { data: lst } = await sb
+      .from('listings')
+      .select('part_id, platform_listing_id, status')
+      .eq('store_id', storeId)
+      .not('platform_listing_id', 'is', null)
+    const rank = s => (s === 'live' || s === 'active' || s === 'listed') ? 2 : 1
+    for (const l of lst || []) {
+      const prev = itemMap.get(l.part_id)
+      const r = rank(l.status)
+      if (!prev || r > prev.r) itemMap.set(l.part_id, { id: l.platform_listing_id, r })
+    }
+    setParts(allRows.map(r => ({ ...mapRow(r), ebayItemId: itemMap.get(r.id)?.id || null })))
     setSyncStatus('live')
     setLoading(false)
   }, [storeId])
@@ -164,7 +180,8 @@ export function useParts(storeId) {
         continue
       }
       if (!data || !data.length) { const e = new Error('Part was changed by someone else'); e.code = 'STALE'; throw e }
-      setParts(ps => ps.map(x => x.id===p.id ? mapRow(data[0]) : x))
+      // Preserve the listing-derived item id (mapRow can't know it — it's not a parts column).
+      setParts(ps => ps.map(x => x.id===p.id ? { ...mapRow(data[0]), ebayItemId: x.ebayItemId } : x))
       return
     }
     throw new Error('Save failed')

@@ -11,6 +11,26 @@ function Field({ label, children }) {
   return <div style={{ marginBottom: 12 }}><label style={S.label}>{label}</label>{children}</div>
 }
 
+// Direct link to a part's live listing on the store's eBay marketplace.
+export const ebayItmUrl = (itemId) => `https://www.${getActiveMarketplace()?.ebayDomain || 'ebay.com.au'}/itm/${itemId}`
+
+// Status pill — a click-through to the live eBay listing when the part is listed
+// and we know its eBay item id, otherwise a plain pill.
+function StatusPill({ part, fontSize = 11, padding }) {
+  const col = STATUS_COLORS[part.status] || C.muted
+  const label = STATUS_LABELS[part.status] || part.status
+  const pill = { ...S.pill(col), fontSize, ...(padding ? { padding } : {}) }
+  if (part.status === 'listed' && part.ebayItemId) {
+    return (
+      <a href={ebayItmUrl(part.ebayItemId)} target="_blank" rel="noreferrer"
+         title="View this listing on eBay" style={{ textDecoration: 'none' }}>
+        <span style={pill}>{label} ↗</span>
+      </a>
+    )
+  }
+  return <span style={pill}>{label}</span>
+}
+
 // eBay-style accent + section card (mirrors eBay's "Create your listing" layout)
 const EBAY_BLUE = '#3665f3'
 function Section({ title, hint, action, children, accent }) {
@@ -1005,6 +1025,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
         <span style={{ fontSize:12, color:C.muted, marginRight:'auto' }}>Saved as draft — not published to eBay until you list it.</span>
         <button style={ebayBtn('secondary')} onClick={onCancel}>Cancel</button>
         {part && form.sku && <button style={ebayBtn('secondary')} title="Print a stock label for this part" onClick={() => printLabels({ id: part.id, sku: form.sku, title: form.title, make: form.make, model: form.model, year: form.year, listPrice: form.listPrice }, labels)}>🏷️ Label</button>}
+        {part?.status === 'listed' && part?.ebayItemId && <a href={ebayItmUrl(part.ebayItemId)} target="_blank" rel="noreferrer" style={{ ...ebayBtn('secondary'), textDecoration:'none', display:'inline-flex', alignItems:'center' }} title="Open this listing on eBay">🔗 View on eBay ↗</a>}
         {!part && <button style={ebayBtn('secondary')} onClick={handleSaveAndAdd}>Save & add another</button>}
         <button style={ebayBtn('primary')} onClick={handleSave}>{part ? 'Save changes' : 'Save draft'}</button>
       </div>
@@ -1391,7 +1412,6 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                       <tbody>
                         {g.parts.map((p,i)=>{
                           const cost=totalCost(p),lp=+p.list_price||0,pr=lp-cost
-                          const stCol=STATUS_COLORS[p.status]||C.muted
                           return (
                             <tr key={p.id} style={{ background:i%2===0?'white':'#faf9f7', borderBottom:`1px solid ${C.border}` }}>
                               <td style={{ padding:'8px 12px', maxWidth:260, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
@@ -1400,7 +1420,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                               </td>
                               <td style={{ padding:'8px 12px', fontSize:12, color:C.muted, whiteSpace:'nowrap' }}>{p.subcategory||p.category}</td>
                               <td style={{ padding:'8px 12px', fontSize:12, color:C.muted, whiteSpace:'nowrap' }}>{p.condition}</td>
-                              <td style={{ padding:'8px 12px' }}><span style={{ ...S.pill(stCol), fontSize:11 }}>{STATUS_LABELS[p.status]||p.status}</span></td>
+                              <td style={{ padding:'8px 12px' }}><StatusPill part={p} /></td>
                               <td style={{ padding:'8px 12px', textAlign:'center' }}><span title={p.ai_assessed?'AI Assessed':'Needs AI'}>{p.ai_assessed?'✅':'⬜'}</span></td>
                               <td style={{ padding:'8px 12px', fontWeight:700, whiteSpace:'nowrap' }}>${lp.toFixed(0)}</td>
                               <td style={{ padding:'8px 12px', color:C.red, whiteSpace:'nowrap' }}>${cost.toFixed(0)}</td>
@@ -1452,7 +1472,6 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
               <tbody>
                 {paged.map((p,i)=>{
                   const cost=totalCost(p),lp=+p.list_price||0,pr=lp-cost
-                  const stCol=STATUS_COLORS[p.status]||C.muted
                   const bg=p.deletedAt?'#fff5f5':p.status==='sold'?'#f0fdf4':i%2===0?'#ffffff':'#faf9f7'
                   const td=(v,col,bold)=><td style={{ padding:'4px 8px', fontSize:12, color:col||C.text, fontWeight:bold?700:400, borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`, overflow:'hidden', whiteSpace:'nowrap', textOverflow:'ellipsis', maxWidth:260 }} title={String(v||'')}>{v||<span style={{color:C.border}}>—</span>}</td>
                   return (
@@ -1463,7 +1482,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                       </td>
                       {td(p.sku)}{td(p.title)}{td(p.make)}{td(p.model)}{td(p.year)}{td(p.subcategory||p.category)}
                       <td style={{ padding:'4px 8px', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}` }}>
-                        <span style={{ ...S.pill(stCol), fontSize:10, padding:'1px 6px' }}>{STATUS_LABELS[p.status]||p.status}</span>
+                        <StatusPill part={p} fontSize={10} padding="1px 6px" />
                       </td>
                       <td style={{ padding:'4px 8px', textAlign:'center', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}` }}>
                         <span title={p.ai_assessed?'AI Assessed':'Needs AI'}>{p.ai_assessed?'✅':'⬜'}</span>
