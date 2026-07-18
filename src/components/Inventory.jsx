@@ -133,6 +133,8 @@ function urlFrom(v) {
   if (typeof v === 'object') return v.url || v.ebay_url || null
   try { const o = JSON.parse(v); return o.url || o.ebay_url || v } catch { return v }
 }
+// AI assessment is photo-based — a part with no photo can't be auto-assessed.
+const partHasPhoto = (p) => (p.photos || []).some(v => !!urlFrom(v))
 
 // Calls the ai-assess edge function (holds the platform Anthropic key as a
 // secret — no key in the browser). Pass all the part's photos so the AI can
@@ -1388,7 +1390,9 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                               <td style={{ padding:'8px 12px', fontSize:12, color:C.muted, whiteSpace:'nowrap' }}>{p.subcategory||p.category}</td>
                               <td style={{ padding:'8px 12px', fontSize:12, color:C.muted, whiteSpace:'nowrap' }}>{p.condition}</td>
                               <td style={{ padding:'8px 12px' }}><StatusPill part={p} /></td>
-                              <td style={{ padding:'8px 12px', textAlign:'center' }}><span title={p.ai_assessed?'AI Assessed':'Needs AI'}>{p.ai_assessed?'✅':'⬜'}</span></td>
+                              <td style={{ padding:'8px 12px', textAlign:'center' }}>{!partHasPhoto(p)
+                                ? <span title="Add a photo — AI assessment needs one">📷</span>
+                                : <span title={p.ai_assessed?'AI Assessed':'Needs AI'}>{p.ai_assessed?'✅':'⬜'}</span>}</td>
                               <td style={{ padding:'8px 12px', fontWeight:700, whiteSpace:'nowrap' }}>${lp.toFixed(0)}</td>
                               <td style={{ padding:'8px 12px', color:C.red, whiteSpace:'nowrap' }}>${cost.toFixed(0)}</td>
                               <td style={{ padding:'8px 12px', fontWeight:600, color:pr>=0?C.green:C.red, whiteSpace:'nowrap' }}>${pr.toFixed(0)}</td>
@@ -1432,7 +1436,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
             <table style={{ borderCollapse:'collapse', fontSize:13, minWidth:1000, width:'100%' }}>
               <thead style={{ position:'sticky', top:0, zIndex:10 }}>
                 <tr style={{ background:'#f5f4f0' }}>
-                  {[['Edit',60],['SKU',80],['Title',260],['Make',80],['Model',90],['Year',65],['Category',150],['Status',85],['AI',40],['List$',72],['Cost',72],['Profit',72],['Del',50]].map(([h,w])=>(
+                  {[['Edit',124],['SKU',80],['Title',260],['Make',80],['Model',90],['Year',65],['Category',150],['Status',85],['AI',40],['List$',72],['Cost',72],['Profit',72],['Del',50]].map(([h,w])=>(
                     <th key={h} style={{ padding:'8px 8px', textAlign:'left', fontSize:10, fontWeight:700, textTransform:'uppercase', color:C.muted, background:'#f5f4f0', borderBottom:`2px solid ${C.accent}`, borderRight:`1px solid ${C.border}`, minWidth:w, whiteSpace:'nowrap' }}>{h}</th>
                   ))}
                 </tr>
@@ -1444,7 +1448,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                   const td=(v,col,bold)=><td style={{ padding:'4px 8px', fontSize:12, color:col||C.text, fontWeight:bold?700:400, borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`, overflow:'hidden', whiteSpace:'nowrap', textOverflow:'ellipsis', maxWidth:260 }} title={String(v||'')}>{v||<span style={{color:C.border}}>—</span>}</td>
                   return (
                     <tr key={p.id} style={{ background:bg }}>
-                      <td style={{ padding:'4px 6px', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}` }}>
+                      <td style={{ padding:'4px 6px', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`, whiteSpace:'nowrap' }}>
                         <button onClick={()=>{setEditingPart(p);setShowForm(true)}} style={{ fontSize:11, padding:'2px 8px', background:'#eff6ff', color:C.blue, border:`1px solid ${C.blue}44`, borderRadius:4, cursor:'pointer', marginRight:4 }}>Edit</button>
                         {p.sku && <button onClick={()=>printLabels(p, labels)} title="Print stock label" style={{ fontSize:11, padding:'2px 6px', background:'#fff', color:C.text, border:`1px solid ${C.border}`, borderRadius:4, cursor:'pointer' }}>🏷️</button>}
                         <EbayLink part={p} style={{ padding:'2px 6px', background:'#fff', border:`1px solid ${C.border}`, borderRadius:4, marginLeft:4 }} />
@@ -1454,7 +1458,9 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                         <StatusPill part={p} fontSize={10} padding="1px 6px" />
                       </td>
                       <td style={{ padding:'4px 8px', textAlign:'center', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}` }}>
-                        <span title={p.ai_assessed?'AI Assessed':'Needs AI'}>{p.ai_assessed?'✅':'⬜'}</span>
+                        {!partHasPhoto(p)
+                          ? <span title="Add a photo — AI assessment needs one">📷</span>
+                          : <span title={p.ai_assessed?'AI Assessed':'Needs AI'}>{p.ai_assessed?'✅':'⬜'}</span>}
                       </td>
                       {td(lp>0?`$${lp.toFixed(0)}`:'',C.text,true)}
                       {td(`$${cost.toFixed(0)}`,C.red)}

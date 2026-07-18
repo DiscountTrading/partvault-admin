@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, Fragment } from 'react'
 import { C, S, fmt, partEffectiveCost, estimateCostBasis, storageCostFor, storageConfigured, FEE_COST_KEYS } from '../lib/constants'
 import { printLabels } from '../lib/labels'
 import { hasGridLoc, gridLocShort } from '../lib/warehouse'
@@ -490,140 +490,45 @@ function StagePill({ label, done, locked, onClick, tip }) {
   )
 }
 
-// Fulfilment pipeline: every order sold in the last 30 days that isn't marked
-// Delivered yet. Walks it Collected → Packed → Posted → Delivered, plus a
-// feedback follow-up. Posted comes from eBay (fulfillment_status); the rest are
-// our own toggles persisted in sale_workflow, shared live with the mobile
-// "Collect" pick-list.
-const FULFIL_DAYS = 30
-// Selectable headings to focus the queue on orders missing a given stage.
-const STAGE_FILTERS = [
-  { id: 'all', label: 'All' },
-  { id: 'collect', label: 'To collect', test: (s, w) => !w.collected_at },
-  { id: 'pack', label: 'To pack', test: (s, w) => !w.packed_at },
-  { id: 'post', label: 'To post', test: (s, w) => s.fulfillmentStatus !== 'FULFILLED' && !w.posted_at },
-  { id: 'deliver', label: 'To deliver', test: (s, w) => !w.delivered_at },
-]
-function FulfilmentQueue({ sales, partById, wf, setStage, now }) {
-  const cutoff = now - FULFIL_DAYS * 86400000
-  // Every order in the fulfilment window (sold recently), oldest first. Kept LIVE
-  // so new sales appear and every stage click (incl. Delivered) shows in place and
-  // is reversible — nothing vanishes mid-edit.
-  const inWindow = useMemo(() =>
-    sales.filter(s => !s.cancelled && !s.refunded && s.soldAt && new Date(s.soldAt).getTime() > cutoff)
-      .sort((a, b) => new Date(a.soldAt) - new Date(b.soldAt)),
-    [sales, cutoff])
-
-  // Delivered orders only leave the queue when the user hits Refresh — so a
-  // mis-click can be undone first. Refresh sweeps the currently-delivered ones out.
-  const [cleared, setCleared] = useState(() => new Set())
-  const rows = inWindow.filter(s => !cleared.has(s.id))
-  if (!rows.length) return null
-
-  const deliveredShown = rows.filter(s => wf[s.id]?.delivered_at).length
-  const collectedCount = rows.filter(s => wf[s.id]?.collected_at).length
-  const refresh = () => setCleared(prev => {
-    const next = new Set(prev)
-    for (const s of inWindow) if (wf[s.id]?.delivered_at) next.add(s.id)
-    return next
-  })
-
-  // Focus the list on orders still missing a chosen stage.
-  const [stageFilter, setStageFilter] = useState('all')
-  const count = f => f.id === 'all' ? rows.length : rows.filter(s => f.test(s, wf[s.id] || {})).length
-  const activeFilter = STAGE_FILTERS.find(f => f.id === stageFilter) || STAGE_FILTERS[0]
-  const filtered = stageFilter === 'all' ? rows : rows.filter(s => activeFilter.test(s, wf[s.id] || {}))
-
+// Per-sale fulfilment actions — revealed when a sales row is expanded. Walks the
+// order Collected → Packed → Posted → Delivered (toggles persisted in
+// sale_workflow, shared live with the mobile "Collect" pick-list), plus packing
+// slip, SKU reprint, eBay order link and feedback. Posted comes from eBay
+// (fulfillment_status) and locks once eBay confirms.
+function SaleActions({ s, p, wf, setStage }) {
+  const w = wf[s.id] || {}
   const ebayDomain = getActiveMarketplace().ebayDomain
-  const stamp = (saleId, key, cur) => setStage(saleId, { [key]: cur ? null : new Date().toISOString() })
-  const orderUrl = s => `https://www.${ebayDomain}/mesh/ord/details?orderid=${encodeURIComponent(s.orderId)}`
-  // Feedback is a DELIBERATE mark you set only once you've actually left feedback
-  // on eBay — decoupled from the "leave feedback" link (opening the link no longer
-  // ticks it) and guarded by a confirm before clearing, so it can't flip by accident.
-  // eBay's API exposes no feedback status, so this stays user-asserted.
-  const markFeedback = (saleId, cur) => {
-    if (cur && !window.confirm('Clear the “feedback left” mark for this order?')) return
-    stamp(saleId, 'feedback_at', cur)
-  }
-
+  const orderUrl = `https://www.${ebayDomain}/mesh/ord/details?orderid=${encodeURIComponent(s.orderId)}`
+  const postedByEbay = s.fulfillmentStatus === 'FULFILLED'
+  const posted = postedByEbay || !!w.posted_at
+  const delivered = !!w.delivered_at
+  const stamp = (key, cur) => setStage(s.id, { [key]: cur ? null : new Date().toISOString() })
+  const markFeedback = () => { if (w.feedback_at && !window.confirm('Clear the “feedback left” mark for this order?')) return; stamp('feedback_at', w.feedback_at) }
+  const act = { ...S.btn('secondary'), padding: '5px 10px', fontSize: 11, textDecoration: 'none', display: 'inline-block' }
   return (
-    <div style={{ background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 12, padding: '12px 16px', marginBottom: 16 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-        <div style={{ fontSize: 14, fontWeight: 800, color: C.text, flex: 1, minWidth: 0 }}>
-          📦 Fulfilment — {rows.length} order{rows.length === 1 ? '' : 's'}
-          <span style={{ fontWeight: 500, color: C.muted, fontSize: 12 }}> · sold in the last {FULFIL_DAYS} days · {collectedCount} collected</span>
-        </div>
-        <button onClick={refresh} disabled={!deliveredShown}
-          title={deliveredShown ? 'Clear the delivered orders from this list' : 'Nothing marked delivered to clear'}
-          style={{ ...S.btn('secondary'), padding: '6px 12px', fontSize: 12, flexShrink: 0, opacity: deliveredShown ? 1 : 0.5 }}>
-          ↻ Refresh{deliveredShown ? ` (${deliveredShown} done)` : ''}
-        </button>
-      </div>
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
-        {STAGE_FILTERS.map(f => (
-          <button key={f.id} onClick={() => setStageFilter(f.id)} style={{ ...pillStyle(stageFilter === f.id), padding: '5px 11px', fontSize: 12 }}>
-            {f.label} ({count(f)})
-          </button>
-        ))}
-      </div>
-      {filtered.length === 0 && (
-        <div style={{ fontSize: 12.5, color: C.muted, padding: '14px 2px' }}>No orders {stageFilter === 'all' ? 'in the queue' : `left ${activeFilter.label.toLowerCase()}`} — nice work. 🎉</div>
-      )}
-      {filtered.map(s => {
-        const w = wf[s.id] || {}
-        const p = s.partId ? partById.get(s.partId) : null
-        const thumb = p?.photos?.[0]?.url
-        // Posted is done when eBay says FULFILLED OR we marked it shipped in-app.
-        // eBay's status is authoritative: once it lands, the pill locks.
-        const postedByEbay = s.fulfillmentStatus === 'FULFILLED'
-        const posted = postedByEbay || !!w.posted_at
-        const delivered = !!w.delivered_at
-        const days = Math.floor((now - new Date(s.soldAt).getTime()) / 86400000)
-        return (
-          <div key={s.id} style={{ padding: '10px 0', borderTop: '1px solid #fde68a', opacity: delivered ? 0.55 : 1 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              {thumb
-                ? <img src={thumb} alt="" style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 8, flexShrink: 0 }} />
-                : <div style={{ width: 44, height: 44, borderRadius: 8, background: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>📦</div>}
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p?.title || s.title}</span>
-                  {p && hasGridLoc(p) && <span title="Warehouse grid location" style={{ flexShrink: 0, background: '#fff7ed', border: `1px solid ${C.accent}66`, color: C.accent, fontSize: 11, fontWeight: 700, borderRadius: 6, padding: '1px 7px' }}>🗺️ {gridLocShort(p)}</span>}
-                  {p?.location && <span title="Storage location" style={{ flexShrink: 0, background: '#fef3c7', border: '1px solid #fcd34d', color: '#92400e', fontSize: 11, fontWeight: 700, borderRadius: 6, padding: '1px 7px' }}>📍 {p.location}</span>}
-                </div>
-                <div style={{ fontSize: 11, color: C.muted }}>
-                  {p?.sku || s.sku || 'no SKU'} · {fmt(s.soldPrice)}{s.shipping > 0 ? ` + ${fmt(s.shipping)} post` : ''} · sold {fmtDate(s.soldAt)}
-                  {!posted && !delivered && days >= 2 && <span style={{ color: C.red, fontWeight: 700 }}> · {days} days, not posted</span>}
-                  {s.buyer ? ` · ${s.buyer}` : ''}{s.shipTo?.city ? ` · ${s.shipTo.city}${s.shipTo.state ? ' ' + s.shipTo.state : ''}` : ''}
-                </div>
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
-              <StagePill label="Collected" done={!!w.collected_at} onClick={() => stamp(s.id, 'collected_at', w.collected_at)} tip="Pulled from inventory — click to toggle" />
-              <StagePill label="Packed" done={!!w.packed_at} onClick={() => stamp(s.id, 'packed_at', w.packed_at)} tip="Boxed and ready to post — click to toggle" />
-              <StagePill label="Posted" done={posted} locked={postedByEbay}
-                onClick={postedByEbay ? undefined : () => stamp(s.id, 'posted_at', w.posted_at)}
-                tip={postedByEbay ? 'Marked shipped on eBay — confirmed' : (w.posted_at ? 'Marked shipped in-app — eBay hasn’t confirmed yet. Click to undo.' : 'Not yet shipped on eBay — click to mark it shipped now, before eBay catches up')} />
-              <StagePill label="Delivered" done={delivered} onClick={() => stamp(s.id, 'delivered_at', w.delivered_at)} tip="Confirmed arrived — click to toggle. Refresh clears delivered orders." />
-              <div style={{ flex: 1 }} />
-              <button title="Print a packing slip with the ship-to address" onClick={() => printPackingSlip(s, p)} style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 11 }}>🖨 Slip</button>
-              {p && <button title="Reprint this part's SKU sticker" onClick={() => printLabels([p])} style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 11 }}>🏷 SKU</button>}
-              <a href={orderUrl(s)} target="_blank" rel="noreferrer" title="Open the order on eBay to buy the postage label" style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 11, textDecoration: 'none', display: 'inline-block' }}>eBay ↗</a>
-              <a href={orderUrl(s)} target="_blank" rel="noreferrer" title="Open the order on eBay to leave feedback for the buyer — this does NOT tick the box"
-                style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 11, textDecoration: 'none', display: 'inline-block' }}>★ Leave feedback ↗</a>
-              <button title={w.feedback_at ? 'Marked as feedback left — click to undo (asks first)' : "Tick this only once you've actually left feedback on eBay"}
-                onClick={() => markFeedback(s.id, w.feedback_at)}
-                style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 11, color: w.feedback_at ? C.green : C.muted, borderColor: w.feedback_at ? C.green : undefined, fontWeight: w.feedback_at ? 700 : 600 }}>
-                {w.feedback_at ? '✓ Feedback left' : '○ Mark feedback left'}
-              </button>
-            </div>
-          </div>
-        )
-      })}
-      <div style={{ fontSize: 10.5, color: C.muted, marginTop: 10 }}>Orders sold in the last {FULFIL_DAYS} days. Every stage is a toggle — click to set or undo. <strong>Posted</strong> ticks automatically once you mark the order shipped on eBay. Marking <strong>Delivered</strong> dims the row; hit <strong>↻ Refresh</strong> when you're ready to clear the delivered ones.</div>
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', padding: '4px 2px' }}>
+      <StagePill label="Collected" done={!!w.collected_at} onClick={() => stamp('collected_at', w.collected_at)} tip="Pulled from inventory — click to toggle" />
+      <StagePill label="Packed" done={!!w.packed_at} onClick={() => stamp('packed_at', w.packed_at)} tip="Boxed and ready to post — click to toggle" />
+      <StagePill label="Posted" done={posted} locked={postedByEbay}
+        onClick={postedByEbay ? undefined : () => stamp('posted_at', w.posted_at)}
+        tip={postedByEbay ? 'Marked shipped on eBay — confirmed' : (w.posted_at ? 'Marked shipped in-app — eBay hasn’t confirmed yet. Click to undo.' : 'Not yet shipped on eBay — click to mark it shipped now')} />
+      <StagePill label="Delivered" done={delivered} onClick={() => stamp('delivered_at', w.delivered_at)} tip="Confirmed arrived — click to toggle" />
+      {p && hasGridLoc(p) && <span title="Warehouse grid location" style={{ background: '#fff7ed', border: `1px solid ${C.accent}66`, color: C.accent, fontSize: 11, fontWeight: 700, borderRadius: 6, padding: '3px 8px' }}>🗺️ {gridLocShort(p)}</span>}
+      {p?.location && <span title="Storage location" style={{ background: '#fef3c7', border: '1px solid #fcd34d', color: '#92400e', fontSize: 11, fontWeight: 700, borderRadius: 6, padding: '3px 8px' }}>📍 {p.location}</span>}
+      <div style={{ flex: 1 }} />
+      <button title="Print a packing slip with the ship-to address" onClick={() => printPackingSlip(s, p)} style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 11 }}>🖨 Slip</button>
+      {p && <button title="Reprint this part's SKU sticker" onClick={() => printLabels([p])} style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 11 }}>🏷 SKU</button>}
+      <a href={orderUrl} target="_blank" rel="noreferrer" title="Open the order on eBay to buy the postage label" style={act}>eBay ↗</a>
+      <a href={orderUrl} target="_blank" rel="noreferrer" title="Open the order on eBay to leave feedback for the buyer — this does NOT tick the box" style={act}>★ Leave feedback ↗</a>
+      <button title={w.feedback_at ? 'Marked as feedback left — click to undo (asks first)' : "Tick this only once you've actually left feedback on eBay"}
+        onClick={markFeedback}
+        style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 11, color: w.feedback_at ? C.green : C.muted, borderColor: w.feedback_at ? C.green : undefined, fontWeight: w.feedback_at ? 700 : 600 }}>
+        {w.feedback_at ? '✓ Feedback left' : '○ Mark feedback left'}
+      </button>
     </div>
   )
 }
+
 
 export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, setStage = () => {} }) {
   const [period, setPeriod] = useState(90)
@@ -631,6 +536,8 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
   const [detail, setDetail] = useState(null) // sale whose cost breakdown is open
   const [limit, setLimit] = useState(RENDER_CAP)
   const [now] = useState(() => Date.now()) // one clock read per mount — keeps render pure
+  const [expanded, setExpanded] = useState(() => new Set()) // sale rows showing their fulfilment actions
+  const toggleRow = (id) => setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
 
   const partById = useMemo(() => new Map(parts.filter(p => !p.deletedAt).map(p => [p.id, p])), [parts])
 
@@ -862,8 +769,6 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
 
       <PromotedPanel promo={promo} periodLabel={range.custom ? `${fmtDate(range.fromMs)} – ${fmtDate(range.toMs)}` : periodTitle} />
 
-      <FulfilmentQueue sales={sales} partById={partById} wf={wf} setStage={setStage} now={now} />
-
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
         <div style={{ fontSize: 13, color: C.muted, fontWeight: 600 }}>{periodTitle} · {rows.length} sale{rows.length === 1 ? '' : 's'}</div>
         <div style={{ flex: 1 }} />
@@ -886,6 +791,7 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
         <table style={{ width: '100%', minWidth: 1000, borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr style={{ borderBottom: `2px solid ${C.border}` }}>
+              <th style={{ ...th, width: 34 }} title="Expand a row for its fulfilment actions"></th>
               <th style={th}>Date</th>
               <th style={th}>Item</th>
               <th style={th}>SKU</th>
@@ -900,7 +806,7 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
           </thead>
           <tbody>
             {rows.length === 0 ? (
-              <tr><td colSpan={10} style={{ padding: 24, textAlign: 'center', color: C.muted }}>No sales in this period.</td></tr>
+              <tr><td colSpan={11} style={{ padding: 24, textAlign: 'center', color: C.muted }}>No sales in this period.</td></tr>
             ) : shown.map(s => {
               const d = deriveSale(s, partById, costing)
               const p = d.p
@@ -909,8 +815,16 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
               // rather than passing it off as one of our records.
               const title = p ? (p.title || '—') : (s.title || '—')
               const sku = p ? (p.sku || '—') : (s.sku || '—')
+              const isOpen = expanded.has(s.id)
               return (
-                <tr key={s.id} style={{ borderBottom: `1px solid ${C.border}` }}>
+                <Fragment key={s.id}>
+                <tr style={{ borderBottom: isOpen ? 'none' : `1px solid ${C.border}`, background: isOpen ? '#fafaf9' : undefined }}>
+                  <td style={{ ...td(), textAlign: 'center' }}>
+                    <button onClick={() => toggleRow(s.id)} title={isOpen ? 'Hide fulfilment actions' : 'Show fulfilment actions (collect, pack, post, slip, SKU, eBay)'}
+                      style={{ width: 22, height: 22, textAlign: 'center', border: `1px solid ${C.border}`, borderRadius: 5, background: '#fff', color: C.text, cursor: 'pointer', fontSize: 14, fontWeight: 700, padding: 0, lineHeight: '18px' }}>
+                      {isOpen ? '−' : '+'}
+                    </button>
+                  </td>
                   <td style={td()}>{fmtDate(s.soldAt)}</td>
                   <td style={{ ...td(), maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis' }} title={title}>
                     {title}
@@ -933,6 +847,14 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
                   </td>
                   <td style={{ ...td('right'), color: d.profit == null ? '#bbb' : d.profit >= 0 ? C.green : C.red }}>{d.profit == null ? '—' : fmt(d.profit)}</td>
                 </tr>
+                {isOpen && (
+                  <tr style={{ borderBottom: `1px solid ${C.border}`, background: '#fafaf9' }}>
+                    <td colSpan={11} style={{ padding: '0 12px 12px 42px' }}>
+                      <SaleActions s={s} p={p} wf={wf} setStage={setStage} />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               )
             })}
           </tbody>
