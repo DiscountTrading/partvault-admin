@@ -832,7 +832,19 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
                   </td>
                   <td style={{ ...td(), color: p ? C.text : C.muted }}>{sku}</td>
                   <td style={td('right')}>{s.quantity}</td>
-                  <td style={td('right')}>{fmt(s.soldPrice)}</td>
+                  <td style={{ ...td('right'), cursor: 'pointer', textDecoration: 'underline dotted' }}
+                      title="Click for the price breakdown"
+                      onClick={() => setDetail({
+                        title, sub: `${sku} · ${fmtDate(s.soldAt)}`,
+                        rows: [
+                          { label: 'Item price', val: +s.soldPrice || 0, sign: '+', color: C.text },
+                          ...(s.shipping ? [{ label: 'Shipping charged to buyer', val: +s.shipping || 0, sign: '+', color: C.text }] : []),
+                        ],
+                        totalLabel: 'Buyer paid', totalValue: (+s.soldPrice || 0) + (+s.shipping || 0), totalSign: '+', totalColor: C.text,
+                        note: 'This is the final price eBay recorded. A seller promotion or markdown applied at checkout isn’t itemised in the stored order data — showing full-price vs discounted needs it captured from the eBay order sync.',
+                      })}>
+                    {fmt(s.soldPrice)}
+                  </td>
                   <td style={td('right')}>{s.shipping ? fmt(s.shipping) : '—'}</td>
                   <td style={{ ...td('right'), color: C.red, cursor: d.fee ? 'pointer' : 'default', textDecoration: d.fee ? 'underline dotted' : 'none' }}
                       title={d.fee ? 'Click for breakdown' : ''}
@@ -845,7 +857,22 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
                       onClick={() => d.cost != null && setDetail({ title, sub: `${sku} · ${fmtDate(s.soldAt)}${p ? '' : ' · cost from imported snapshot'}`, entries: d.breakdown || {}, totalLabel: 'Total cost', totalValue: d.cost || 0 })}>
                     {d.cost == null ? '—' : '−' + fmt(d.cost)}
                   </td>
-                  <td style={{ ...td('right'), color: d.profit == null ? '#bbb' : d.profit >= 0 ? C.green : C.red }}>{d.profit == null ? '—' : fmt(d.profit)}</td>
+                  <td style={{ ...td('right'), color: d.profit == null ? '#bbb' : d.profit >= 0 ? C.green : C.red, cursor: d.profit == null ? 'default' : 'pointer', textDecoration: d.profit == null ? 'none' : 'underline dotted' }}
+                      title={d.profit == null ? '' : 'Click for how profit was calculated'}
+                      onClick={() => d.profit != null && setDetail({
+                        title, sub: `${sku} · ${fmtDate(s.soldAt)}`,
+                        rows: [
+                          { label: 'Item sold price', val: +s.soldPrice || 0, sign: '+', color: C.text },
+                          ...(s.shipping ? [{ label: 'Shipping charged to buyer', val: +s.shipping || 0, sign: '+', color: C.text }] : []),
+                          ...(s.refund ? [{ label: 'Refund', val: +s.refund || 0, sign: '−', color: C.red }] : []),
+                          ...(d.fee ? [{ label: 'eBay fees', val: d.fee, sign: '−', color: C.red }] : []),
+                          ...(d.cost != null ? [{ label: 'Item cost (incl. postage)', val: d.cost, sign: '−', color: C.red }] : []),
+                        ],
+                        totalLabel: 'Profit', totalValue: d.profit, totalSign: d.profit >= 0 ? '+' : '−', totalColor: d.profit >= 0 ? C.green : C.red,
+                        note: '“Shipping charged to buyer” is income; the postage you paid is inside “Item cost” — opposite sides of the ledger, not counted twice. Click the Cost figure for its line items.',
+                      })}>
+                    {d.profit == null ? '—' : fmt(d.profit)}
+                  </td>
                 </tr>
                 {isOpen && (
                   <tr style={{ borderBottom: `1px solid ${C.border}`, background: '#fafaf9' }}>
@@ -883,14 +910,17 @@ function BRow({ label, val, sign = '−', strong, color, top, doubleBottom }) {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 24, padding: '5px 0', borderTop: top ? `1px solid ${C.border}` : 'none', borderBottom: doubleBottom ? `3px double ${C.border}` : 'none', fontWeight: strong ? 700 : 400, color: color || C.text }}>
       <span>{label}</span>
-      <span>{val < 0 ? `(${fmt(Math.abs(val))})` : `${sign === '+' ? '' : sign}${fmt(val)}`}</span>
+      <span>{val < 0 ? `(${fmt(Math.abs(val))})` : `${sign === '+' ? '+' : sign === '−' ? '−' : ''}${fmt(val)}`}</span>
     </div>
   )
 }
 
-// Generic breakdown popup: lists named line items and a ruled-off total. Used for
-// both the cost breakdown and the eBay-fee breakdown.
+// Generic breakdown popup. Two shapes:
+//  • detail.entries {label:value} — a flat list of same-signed costs (fee/cost).
+//  • detail.rows [{label,val,sign,color,top}] — a signed waterfall (profit / sale
+//    price) where income (+) and costs (−) sit side by side.
 function BreakdownModal({ detail, onClose }) {
+  const rows = detail.rows
   const entries = Object.entries(detail.entries || {})
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
@@ -901,9 +931,16 @@ function BreakdownModal({ detail, onClose }) {
         </div>
         <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>{detail.sub}</div>
         <div style={{ fontSize: 13 }}>
-          {entries.length === 0 && <div style={{ color: C.muted, padding: '4px 0' }}>No itemised detail recorded for this sale.</div>}
-          {entries.map(([k, v]) => <BRow key={k} label={k} val={+v || 0} color={C.red} />)}
-          <BRow label={detail.totalLabel} val={detail.totalValue || 0} strong top doubleBottom color={C.red} />
+          {rows ? (<>
+            {rows.length === 0 && <div style={{ color: C.muted, padding: '4px 0' }}>No detail for this sale.</div>}
+            {rows.map((r, i) => <BRow key={i} label={r.label} val={+r.val || 0} sign={r.sign || '−'} color={r.color} top={r.top} strong={r.strong} />)}
+            <BRow label={detail.totalLabel} val={detail.totalValue || 0} sign={detail.totalSign || '+'} strong top doubleBottom color={detail.totalColor || C.text} />
+          </>) : (<>
+            {entries.length === 0 && <div style={{ color: C.muted, padding: '4px 0' }}>No itemised detail recorded for this sale.</div>}
+            {entries.map(([k, v]) => <BRow key={k} label={k} val={+v || 0} color={C.red} />)}
+            <BRow label={detail.totalLabel} val={detail.totalValue || 0} strong top doubleBottom color={C.red} />
+          </>)}
+          {detail.note && <div style={{ fontSize: 11, color: C.muted, marginTop: 10, lineHeight: 1.5 }}>{detail.note}</div>}
         </div>
       </div>
     </div>
