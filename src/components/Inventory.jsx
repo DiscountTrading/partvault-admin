@@ -1428,6 +1428,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                               <td style={{ padding:'8px 12px', whiteSpace:'nowrap' }}>
                                 <button onClick={()=>{setEditingPart(p);setShowForm(true)}} style={{ ...S.btn('secondary'), padding:'3px 10px', fontSize:11, marginRight:6 }}>Edit</button>
                                 {p.sku && <button onClick={()=>printLabels(p, labels)} title="Print stock label" style={{ ...S.btn('secondary'), padding:'3px 8px', fontSize:11, marginRight:6 }}>🏷️</button>}
+                                {p.status==='listed' && p.ebayItemId && <a href={ebayItmUrl(p.ebayItemId)} target="_blank" rel="noreferrer" title="View this listing on eBay" style={{ ...S.btn('secondary'), padding:'3px 8px', fontSize:11, marginRight:6, textDecoration:'none', color:EBAY_BLUE, borderColor:`${EBAY_BLUE}66`, fontWeight:700 }}>eBay ↗</a>}
                                 <button onClick={()=>setDeleteTarget(p)} style={{ ...S.btn('danger'), padding:'3px 8px', fontSize:11 }}>🗑</button>
                               </td>
                             </tr>
@@ -1479,6 +1480,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                       <td style={{ padding:'4px 6px', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}` }}>
                         <button onClick={()=>{setEditingPart(p);setShowForm(true)}} style={{ fontSize:11, padding:'2px 8px', background:'#eff6ff', color:C.blue, border:`1px solid ${C.blue}44`, borderRadius:4, cursor:'pointer', marginRight:4 }}>Edit</button>
                         {p.sku && <button onClick={()=>printLabels(p, labels)} title="Print stock label" style={{ fontSize:11, padding:'2px 6px', background:'#fff', color:C.text, border:`1px solid ${C.border}`, borderRadius:4, cursor:'pointer' }}>🏷️</button>}
+                        {p.status==='listed' && p.ebayItemId && <a href={ebayItmUrl(p.ebayItemId)} target="_blank" rel="noreferrer" title="View this listing on eBay" style={{ fontSize:11, padding:'2px 6px', background:'#eef2ff', color:EBAY_BLUE, border:`1px solid ${EBAY_BLUE}44`, borderRadius:4, cursor:'pointer', textDecoration:'none', fontWeight:700, marginLeft:4 }}>eBay ↗</a>}
                       </td>
                       {td(p.sku)}{td(p.title)}{td(p.make)}{td(p.model)}{td(p.year)}{td(p.subcategory||p.category)}
                       <td style={{ padding:'4px 8px', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}` }}>
