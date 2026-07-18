@@ -1091,7 +1091,7 @@ function BulkAIPanel({ group, onComplete, aiSettings, footer, storeId }) {
 }
 
 // ─── Main Inventory ────────────────────────────────────────────────────────
-export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDeleteCar, onAddCar, storeId, aiSettings, footer, costing, labels = DEFAULT_LABELS, warehouse = WAREHOUSE_DEFAULTS, refetch }) {
+export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDeleteCar, onAddCar, storeId, aiSettings, footer, costing, labels = DEFAULT_LABELS, warehouse = WAREHOUSE_DEFAULTS, refetch, assess }) {
   const [viewMode, setViewMode] = useState('parts')
   const [search, setSearch] = useState('')
   const [filterMake, setFilterMake] = useState('')
@@ -1119,60 +1119,10 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
   const [carPage, setCarPage] = useState(0)
   const [carPageSize, setCarPageSize] = useState(25)
 
-  // ── Background AI assessment ────────────────────────────────────────────
-  // New/imported parts aren't assessed by the mobile capture flow, so they sit
-  // unassessed. This queue works through in-stock, un-assessed parts that have a
-  // photo — newest first — calling ai-assess with the partId so the SERVER saves
-  // the result (no editor needed). Sequential + the edge's 429 back-off keeps it
-  // within the Anthropic rate limit. Pausable; each part is tried once per load.
-  const [assessRunning, setAssessRunning] = useState(false)
-  const [assessDone, setAssessDone] = useState(0)
-  const [assessTotal, setAssessTotal] = useState(0)
-  const [assessPaused, setAssessPaused] = useState(() => { try { return localStorage.getItem('pv_assess_paused') === '1' } catch { return false } })
-  const assessBusy = useRef(false)
-  const assessAbort = useRef(false)
-  const assessTried = useRef(new Set())
-  const partUrlsOf = (p) => (p.photos || []).map(urlFrom).filter(Boolean)
-  const needAssess = useMemo(
-    () => parts.filter(p => p.status === 'in_stock' && !p.ai_assessed && partUrlsOf(p).length),
-    [parts])
-  const runAssessQueue = async () => {
-    if (assessBusy.current || assessPaused) return
-    const queue = needAssess
-      .filter(p => !assessTried.current.has(p.id))
-      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))) // newest first
-    if (!queue.length) return
-    assessBusy.current = true; assessAbort.current = false
-    setAssessRunning(true); setAssessTotal(queue.length); setAssessDone(0)
-    let n = 0
-    for (const p of queue) {
-      if (assessAbort.current) break
-      assessTried.current.add(p.id)
-      try {
-        const car = cars?.find(c => c.id === p.car_id)
-        await analysePart({ photoUrls: partUrlsOf(p).slice(0, 4), carId: car?.id, partId: p.id }, car || p, storeId)
-      } catch (_) { /* skip this part, keep going */ }
-      setAssessDone(++n)
-      if (n % 4 === 0) refetch?.() // surface ✅s progressively
-    }
-    assessBusy.current = false; setAssessRunning(false)
-    refetch?.()
-  }
-  // Auto-start when there are parts needing assessment (unless paused). The
-  // busy/tried guards stop it re-triggering itself as refetch updates `parts`.
-  useEffect(() => {
-    if (assessPaused || assessBusy.current) return
-    const pending = needAssess.some(p => !assessTried.current.has(p.id))
-    if (pending) runAssessQueue()
-  }, [needAssess, assessPaused, storeId])
-  // Reset the per-session "tried" set when the store changes.
-  useEffect(() => { assessTried.current = new Set(); assessAbort.current = true }, [storeId])
-  const toggleAssessPaused = () => setAssessPaused(v => {
-    const nv = !v
-    try { localStorage.setItem('pv_assess_paused', nv ? '1' : '0') } catch { /* ignore */ }
-    if (nv) assessAbort.current = true
-    return nv
-  })
+  // Background AI assessment now runs app-wide (useAssessQueue in App.jsx) so it
+  // continues on any tab, not just while Inventory is open. We read its state here
+  // for the richer in-page banner below.
+  const { running: assessRunning = false, done: assessDone = 0, total: assessTotal = 0, paused: assessPaused = false, togglePaused: toggleAssessPaused = () => {}, remaining: assessRemaining = 0 } = assess || {}
 
   const makes = useMemo(() => [...new Set(parts.filter(p=>p.make).map(p=>p.make))].sort(), [parts])
   const models = useMemo(() => { const src=filterMake?parts.filter(p=>p.make===filterMake):parts; return [...new Set(src.filter(p=>p.model).map(p=>p.model))].sort() }, [parts, filterMake])
@@ -1292,15 +1242,15 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
       {viewMode==='bulk' && <BulkEdit storeId={storeId} parts={parts} onSaved={refetch} />}
 
       {viewMode!=='bulk' && <>
-      {(assessRunning || needAssess.length > 0) && (
+      {(assessRunning || assessRemaining > 0) && (
         <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap', marginBottom:14, padding:'10px 14px', borderRadius:10, background: assessRunning ? '#f5f3ff' : '#fffbeb', border:`1px solid ${assessRunning ? '#ddd6fe' : '#fcd34d'}` }}>
           <span style={{ fontSize:16 }}>{assessRunning ? '🤖' : '⏳'}</span>
           <div style={{ flex:1, minWidth:200, fontSize:13, color:C.text }}>
             {assessRunning
               ? <><strong>Assessing parts in the background…</strong> {assessDone}/{assessTotal} — you can keep working; results save automatically.</>
               : assessPaused
-                ? <><strong>{needAssess.length}</strong> part{needAssess.length===1?'':'s'} need AI assessment (paused).</>
-                : <><strong>{needAssess.length}</strong> part{needAssess.length===1?'':'s'} waiting for AI assessment…</>}
+                ? <><strong>{assessRemaining}</strong> part{assessRemaining===1?'':'s'} need AI assessment (paused).</>
+                : <><strong>{assessRemaining}</strong> part{assessRemaining===1?'':'s'} waiting for AI assessment…</>}
           </div>
           <button onClick={toggleAssessPaused} style={{ ...S.btn('secondary'), padding:'5px 14px', fontSize:12 }}>
             {assessPaused ? '▶ Resume' : '⏸ Pause'}

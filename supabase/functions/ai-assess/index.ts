@@ -261,7 +261,7 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
       const optionCount = Math.min(Math.max(Math.round(+body.options || 1), 1), 6)
       if (optionCount > 1) {
         const aiRes = await callAnthropic({
-          model: 'claude-sonnet-4-6', max_tokens: 1800,
+          model: 'claude-sonnet-5', max_tokens: 2400, thinking: { type: 'disabled' },
           messages: [{ role: 'user', content: `${prompt}\n\nProvide ${optionCount} DISTINCT description options, ranked best/most-likely first — genuinely vary the angle, emphasis and wording (not trivially reworded). If the part's side/position is uncertain (left vs right, driver vs passenger, front vs rear, upper vs lower), you MUST include options for BOTH sides — best guess first, the opposite side as another option. Return JSON only: {"descriptions":["...","..."]}` }],
         })
         const data = await aiRes.json()
@@ -272,7 +272,7 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
         return json({ ok: true, descriptions })
       }
       const aiRes = await callAnthropic({
-        model: 'claude-sonnet-4-6', max_tokens: 1000,
+        model: 'claude-sonnet-5', max_tokens: 4000, thinking: { type: 'adaptive' }, output_config: { effort: 'medium' },
         messages: [{ role: 'user', content: prompt }],
       })
       const data = await aiRes.json()
@@ -293,7 +293,7 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
       meterLightAI(url, body.storeId)
       const mkCar = marketWords(await storeMarketplaceId(url, body.storeId))
       const aiRes = await callAnthropic({
-        model: 'claude-sonnet-4-6', max_tokens: 200,
+        model: 'claude-sonnet-5', max_tokens: 300, thinking: { type: 'disabled' },
         system: `You identify ${mkCar.market}-market vehicles from photos. Return JSON only: {"make":"","model":"","year":"","confidence":"high|medium|low"}. Use the badges, body shape, lights and any visible build plate. year is the model year or a short range if unsure. Only fill a field if reasonably confident; leave "" otherwise.`,
         messages: [{ role: 'user', content: [...blocks, { type: 'text', text: `Identify this vehicle (${mkCar.market} market).` }] }],
       })
@@ -490,7 +490,11 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
       return json({ error: aiLimitMsg(meter) }, 429)
     }
     const aiRes = await callAnthropic({
-      model: 'claude-sonnet-4-6', max_tokens: 1500, temperature: 0, system: sys,
+      // Sonnet 5 with adaptive thinking for the deep part assessment. temperature
+      // is omitted (non-default values 400 on Sonnet 5); max_tokens is raised to
+      // leave room for thinking tokens + the new tokenizer. textOf() ignores the
+      // thinking blocks, so JSON parsing is unaffected.
+      model: 'claude-sonnet-5', max_tokens: 6000, thinking: { type: 'adaptive' }, output_config: { effort: 'medium' }, system: sys,
       messages: [{ role: 'user', content }],
     })
     const data = await aiRes.json()

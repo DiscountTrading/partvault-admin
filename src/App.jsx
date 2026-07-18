@@ -3,6 +3,7 @@ import { useAuth } from './hooks/useAuth'
 import { useParts } from './hooks/useParts'
 import { useSales } from './hooks/useSales'
 import { useSaleWorkflow } from './hooks/useSaleWorkflow'
+import { useAssessQueue } from './hooks/useAssessQueue'
 import { sb } from './lib/supabase'
 import { C, S, APP_VERSION, rentPerDay } from './lib/constants'
 import { MARKETPLACE_LIST, guessMarketplace, setActiveMarketplace } from './lib/marketplaces'
@@ -164,6 +165,30 @@ function StoreSwitcher({ stores, activeStoreId, setActiveStore, refreshStores })
   )
 }
 
+// Compact background-assessment indicator for the nav bar. Shows live progress
+// while the queue runs, a paused state, and a pause/resume toggle. Hidden when
+// there's nothing to assess and nothing running.
+function AssessBadge({ assess }) {
+  const { running, done, total, paused, togglePaused, remaining } = assess || {}
+  if (!running && !remaining) return null
+  const label = running
+    ? `Assessing ${done}/${total}`
+    : paused
+      ? `${remaining} to assess · paused`
+      : `${remaining} to assess`
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, padding: '4px 8px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.9)' }}
+          title="Background AI assessment of new parts">
+      <span style={running ? { animation: 'spin 1s linear infinite', display: 'inline-block' } : undefined}>{running ? '🧠' : paused ? '⏸' : '🧠'}</span>
+      {label}
+      <button onClick={togglePaused} title={paused ? 'Resume background assessment' : 'Pause background assessment'}
+              style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.85)', cursor: 'pointer', fontSize: 12, padding: 0, marginLeft: 2 }}>
+        {paused ? '▶' : '⏸'}
+      </button>
+    </span>
+  )
+}
+
 export default function App() {
   const { session, profile, storeId, stores, activeStoreId, setActiveStore, refreshStores, authReady, signOut } = useAuth()
   const { parts, loading, syncStatus, totalCount, addPart, editPart, softDelete, softDeleteCar, refetch } = useParts(storeId)
@@ -190,6 +215,10 @@ export default function App() {
   const [cars, setCars] = useState([])
   const [marketplaceId, setMarketplaceId] = useState('EBAY_AU') // re-render trigger for currency
   const [plan, setPlan] = useState(() => planState(null)) // store's subscription plan (defaults open)
+
+  // App-level background AI assessment — runs on any tab so parts created in the
+  // admin form / mobile / import get assessed silently. Counter lives in the nav.
+  const assess = useAssessQueue({ storeId, parts, cars, refetch: smartRefetch })
 
   // Enrich costing with the storage-facility config (rent normalised to /day) and
   // the per-category shipping box dims, so partEffectiveCost can compute storage.
@@ -268,6 +297,7 @@ export default function App() {
         })}
         <div style={{ marginLeft: 'auto', padding: '0 18px', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: 'rgba(255,255,255,0.55)' }}>
           {loading ? <span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>⏳</span> : null}
+          <AssessBadge assess={assess} />
           v{APP_VERSION} · {totalCount} parts
           <SyncBadge status={syncStatus} />
           <a href="https://app.partvault.app" target="partvault-app" style={{ background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.9)', borderRadius: 6, padding: '6px 12px', cursor: 'pointer', fontSize: 13, fontWeight: 600, textDecoration: 'none' }}>📱 Field App ↗</a>
@@ -294,6 +324,7 @@ export default function App() {
             onAdd={handleAdd} onEdit={handleEdit} onDelete={handleDel}
             onDeleteCar={softDeleteCar} onAddCar={handleAddCar}
             aiSettings={aiSettings} footer={footer} costing={costingFull} labels={labels} warehouse={warehouse} refetch={smartRefetch}
+            assess={assess}
           />
         )}
         {tab === 'ebay' && <Ebay storeId={storeId} onChanged={smartRefetch} parts={parts} />}
