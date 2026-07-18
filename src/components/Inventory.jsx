@@ -1131,7 +1131,8 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
   // Background AI assessment now runs app-wide (useAssessQueue in App.jsx) so it
   // continues on any tab, not just while Inventory is open. We read its state here
   // for the richer in-page banner below.
-  const { running: assessRunning = false, done: assessDone = 0, total: assessTotal = 0, paused: assessPaused = false, togglePaused: toggleAssessPaused = () => {}, remaining: assessRemaining = 0 } = assess || {}
+  const { running: assessRunning = false, done: assessDone = 0, total: assessTotal = 0, paused: assessPaused = false, togglePaused: toggleAssessPaused = () => {}, remaining: assessRemaining = 0, etaMs: assessEta = null, retrySec: assessRetry = null, blocked: assessBlocked = null } = assess || {}
+  const assessEtaTxt = assessEta && assessEta > 0 ? (assessEta < 60000 ? `~${Math.round(assessEta/1000)}s left` : `~${Math.round(assessEta/60000)} min left`) : ''
 
   const makes = useMemo(() => [...new Set(parts.filter(p=>p.make).map(p=>p.make))].sort(), [parts])
   const models = useMemo(() => { const src=filterMake?parts.filter(p=>p.make===filterMake):parts; return [...new Set(src.filter(p=>p.model).map(p=>p.model))].sort() }, [parts, filterMake])
@@ -1252,14 +1253,18 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
 
       {viewMode!=='bulk' && <>
       {(assessRunning || assessRemaining > 0) && (
-        <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap', marginBottom:14, padding:'10px 14px', borderRadius:10, background: assessRunning ? '#f5f3ff' : '#fffbeb', border:`1px solid ${assessRunning ? '#ddd6fe' : '#fcd34d'}` }}>
-          <span style={{ fontSize:16 }}>{assessRunning ? '🤖' : '⏳'}</span>
+        <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap', marginBottom:14, padding:'10px 14px', borderRadius:10, background: assessBlocked ? '#fffbeb' : assessRunning ? '#f5f3ff' : '#fffbeb', border:`1px solid ${assessBlocked ? '#f59e0b' : assessRunning ? '#ddd6fe' : '#fcd34d'}` }}>
+          <span style={{ fontSize:16 }}>{assessBlocked ? '⚠️' : assessRunning ? '🤖' : '⏳'}</span>
           <div style={{ flex:1, minWidth:200, fontSize:13, color:C.text }}>
             {assessRunning
-              ? <><strong>Preparing parts for eBay in the background…</strong> {assessDone}/{assessTotal} — AI assessment + item specifics; you can keep working, results save automatically.</>
-              : assessPaused
-                ? <><strong>{assessRemaining}</strong> part{assessRemaining===1?'':'s'} to prepare (paused).</>
-                : <><strong>{assessRemaining}</strong> part{assessRemaining===1?'':'s'} waiting to be prepared for eBay…</>}
+              ? <><strong>Preparing parts for eBay in the background…</strong> {assessDone}/{assessTotal}{assessEtaTxt?` · ${assessEtaTxt}`:''} — AI assessment + item specifics; you can keep working, results save automatically.</>
+              : assessBlocked === 'ebay-specifics'
+                ? <><strong>{assessRemaining}</strong> part{assessRemaining===1?'':'s'} can’t finish — the eBay-specifics step can’t save. Run migration <code>20260718_parts_ebay_specifics.sql</code> then reload.</>
+                : assessPaused
+                  ? <><strong>{assessRemaining}</strong> part{assessRemaining===1?'':'s'} to prepare (paused).</>
+                  : assessRetry != null
+                    ? <><strong>{assessRemaining}</strong> part{assessRemaining===1?'':'s'} waiting — retrying in {assessRetry}s (AI/eBay was busy).</>
+                    : <><strong>{assessRemaining}</strong> part{assessRemaining===1?'':'s'} waiting to be prepared for eBay…</>}
           </div>
           <button onClick={toggleAssessPaused} style={{ ...S.btn('secondary'), padding:'5px 14px', fontSize:12 }}>
             {assessPaused ? '▶ Resume' : '⏸ Pause'}

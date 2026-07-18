@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.36.26'
+const EDGE_FN_VERSION         = '3.36.27'
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  HARD BLOCK — EDITING LIVE eBay LISTINGS IS DISABLED AT THE CODE LEVEL.
@@ -3098,7 +3098,12 @@ async function handleRequest(req: Request): Promise<Response> {
       // only; ebay_overrides (user corrections) still win at publish.
       if (body.persist) {
         const sig = JSON.stringify({ t: part.title || '', p: +part.list_price || 0, c: part.condition || '', d: part.description || '', ov: part.ebay_overrides || null })
-        try { await sb.from('parts').update({ ebay_specifics: { ...result, sig, generated_at: new Date().toISOString() } }).eq('id', partId).eq('store_id', storeId) } catch (_) { /* best effort */ }
+        // Report whether the save actually landed — a missing ebay_specifics column
+        // (migration not yet run) surfaces as persisted:false so the background queue
+        // can stop retrying and tell the user to run the migration instead of spinning.
+        const { error: persErr } = await sb.from('parts').update({ ebay_specifics: { ...result, sig, generated_at: new Date().toISOString() } }).eq('id', partId).eq('store_id', storeId)
+        result.persisted = !persErr
+        if (persErr) result.persistError = persErr.message
       }
 
       return json(result)

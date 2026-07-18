@@ -165,23 +165,37 @@ function StoreSwitcher({ stores, activeStoreId, setActiveStore, refreshStores })
   )
 }
 
-// Compact background-assessment indicator for the nav bar. Shows live progress
-// while the queue runs, a paused state, and a pause/resume toggle. Hidden when
-// there's nothing to assess and nothing running.
+// Rough ETA text from a millisecond estimate.
+const fmtEta = (ms) => { if (ms == null || ms <= 0) return ''; const s = Math.round(ms / 1000); return s < 60 ? `~${s}s left` : `~${Math.round(s / 60)} min left` }
+
+// Compact background-assessment indicator for the nav bar. Shows live progress +
+// ETA while the queue runs, the auto-retry countdown when it's waiting, a blocked
+// state (migration needed), a paused state, and a pause/resume toggle. Hidden when
+// there's nothing to prepare and nothing running.
 function AssessBadge({ assess }) {
-  const { running, done, total, paused, togglePaused, remaining } = assess || {}
+  const { running, done, total, paused, togglePaused, remaining, etaMs, retrySec, blocked } = assess || {}
   if (!running && !remaining) return null
+  const blockedMsg = blocked === 'ebay-specifics'
   const label = running
-    ? `Preparing ${done}/${total}`
-    : paused
-      ? `${remaining} to prepare · paused`
-      : `${remaining} to prepare`
+    ? `Preparing ${done}/${total}${fmtEta(etaMs) ? ' · ' + fmtEta(etaMs) : ''}`
+    : blockedMsg
+      ? `${remaining} waiting · needs migration`
+      : paused
+        ? `${remaining} to prepare · paused`
+        : retrySec != null
+          ? `${remaining} waiting · retry in ${retrySec}s`
+          : `${remaining} to prepare`
+  const icon = running ? '🧠' : blockedMsg ? '⚠' : paused ? '⏸' : '🧠'
+  const bg = blockedMsg ? 'rgba(245,158,11,0.22)' : 'rgba(255,255,255,0.12)'
+  const border = blockedMsg ? 'rgba(245,158,11,0.5)' : 'rgba(255,255,255,0.2)'
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, padding: '4px 8px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.9)' }}
-          title="Background: AI assessment + eBay item specifics for new parts">
-      <span style={running ? { animation: 'spin 1s linear infinite', display: 'inline-block' } : undefined}>{running ? '🧠' : paused ? '⏸' : '🧠'}</span>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: bg, border: `1px solid ${border}`, borderRadius: 6, padding: '4px 8px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.92)' }}
+          title={blockedMsg
+            ? 'eBay specifics can’t be saved — run migration 20260718_parts_ebay_specifics.sql, then reload.'
+            : 'Background: AI assessment + eBay item specifics for new parts'}>
+      <span style={running ? { animation: 'spin 1s linear infinite', display: 'inline-block' } : undefined}>{icon}</span>
       {label}
-      <button onClick={togglePaused} title={paused ? 'Resume background assessment' : 'Pause background assessment'}
+      <button onClick={togglePaused} title={paused ? 'Resume background preparation' : 'Pause background preparation'}
               style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.85)', cursor: 'pointer', fontSize: 12, padding: 0, marginLeft: 2 }}>
         {paused ? '▶' : '⏸'}
       </button>
