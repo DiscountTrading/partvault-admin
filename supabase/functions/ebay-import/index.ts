@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.36.25'
+const EDGE_FN_VERSION         = '3.36.26'
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  HARD BLOCK — EDITING LIVE eBay LISTINGS IS DISABLED AT THE CODE LEVEL.
@@ -1778,6 +1778,14 @@ async function handleRequest(req: Request): Promise<Response> {
               const lineItemId: string = li.lineItemId || legacyId || `${orderId}-${lineItems}`
               const qty = +li.quantity || 1
               const price = +li.lineItemCost?.value || +li.total?.value || 0
+              // Line-level promotions/discounts. lineItemCost (= sold_price) is the
+              // PRE-discount price; appliedPromotions are the reductions off it, so
+              // the buyer actually paid (price − discount) for the item.
+              const promos = Array.isArray(li.appliedPromotions) ? li.appliedPromotions : []
+              const promoRows = promos
+                .map((pr: any) => ({ desc: String(pr.description || pr.promotionId || 'Promotion'), amount: Math.round((+pr.discountAmount?.value || 0) * 100) / 100 }))
+                .filter((x: any) => x.amount > 0)
+              const discount = Math.round(promoRows.reduce((a: number, x: any) => a + x.amount, 0) * 100) / 100
 
               // Best-effort link to an inventory part (by listing item id, then SKU).
               let partId: string | null = null
@@ -1799,7 +1807,7 @@ async function handleRequest(req: Request): Promise<Response> {
                 updated_at: new Date().toISOString(),
               }
               let { error: upErr } = await sb.from('ebay_sales').upsert(
-                { ...baseRow, fulfillment_status: fulfillment, buyer, ship_to: shipTo },
+                { ...baseRow, fulfillment_status: fulfillment, buyer, ship_to: shipTo, discount: discount || null, applied_promotions: promoRows.length ? promoRows : null },
                 { onConflict: 'store_id,order_id,line_item_id' })
               // Dispatch columns are additive — if their migration hasn't run yet,
               // fall back so the live sales sync never breaks.

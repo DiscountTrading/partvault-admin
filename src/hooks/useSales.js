@@ -18,6 +18,8 @@ const mapRow = r => ({
   fees: +r.fees || 0,
   refund: +r.refund || 0,
   shipCost: +r.ship_cost || 0,
+  discount: +r.discount || 0,               // line-level eBay promotion off the full price
+  appliedPromotions: r.applied_promotions || null, // [{ desc, amount }]
   refunded: !!r.refunded,
   soldAt: r.sold_at || null,
   cancelled: !!r.cancelled,

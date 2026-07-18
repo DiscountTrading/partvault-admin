@@ -834,15 +834,26 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
                   <td style={td('right')}>{s.quantity}</td>
                   <td style={{ ...td('right'), cursor: 'pointer', textDecoration: 'underline dotted' }}
                       title="Click for the price breakdown"
-                      onClick={() => setDetail({
-                        title, sub: `${sku} · ${fmtDate(s.soldAt)}`,
-                        rows: [
-                          { label: 'Item price', val: +s.soldPrice || 0, sign: '+', color: C.text },
-                          ...(s.shipping ? [{ label: 'Shipping charged to buyer', val: +s.shipping || 0, sign: '+', color: C.text }] : []),
-                        ],
-                        totalLabel: 'Buyer paid', totalValue: (+s.soldPrice || 0) + (+s.shipping || 0), totalSign: '+', totalColor: C.text,
-                        note: 'This is the final price eBay recorded. A seller promotion or markdown applied at checkout isn’t itemised in the stored order data — showing full-price vs discounted needs it captured from the eBay order sync.',
-                      })}>
+                      onClick={() => {
+                        const disc = +s.discount || 0
+                        const promoRows = disc > 0
+                          ? (Array.isArray(s.appliedPromotions) && s.appliedPromotions.length
+                              ? s.appliedPromotions.map(pr => ({ label: pr.desc || 'Promotion', val: +pr.amount || 0, sign: '−', color: C.red }))
+                              : [{ label: 'Promotion / discount', val: disc, sign: '−', color: C.red }])
+                          : []
+                        setDetail({
+                          title, sub: `${sku} · ${fmtDate(s.soldAt)}`,
+                          rows: [
+                            { label: disc > 0 ? 'Item full price' : 'Item price', val: +s.soldPrice || 0, sign: '+', color: C.text },
+                            ...promoRows,
+                            ...(s.shipping ? [{ label: 'Shipping charged to buyer', val: +s.shipping || 0, sign: '+', color: C.text }] : []),
+                          ],
+                          totalLabel: 'Buyer paid', totalValue: (+s.soldPrice || 0) - disc + (+s.shipping || 0), totalSign: '+', totalColor: C.text,
+                          note: disc > 0
+                            ? 'The Sale column shows the full pre-discount price; the buyer paid the “Buyer paid” amount after the promotion. Note: revenue/profit currently use the full price — say the word if you want the promotion netted off.'
+                            : 'No eBay promotion recorded on this order. (Promotion capture applies to orders synced from now on; older imported orders have no promotion detail.)',
+                        })
+                      }}>
                     {fmt(s.soldPrice)}
                   </td>
                   <td style={td('right')}>{s.shipping ? fmt(s.shipping) : '—'}</td>
