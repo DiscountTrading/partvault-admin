@@ -572,7 +572,21 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
       if (existingTitle) update.title = existingTitle
       else if (parsed.title) update.title = parsed.title
       if (parsed.category) update.category = parsed.category
-      const { error: upErr } = await service.from('parts').update(update).eq('id', partId).eq('store_id', storeId)
+      // Resilient save: PostgREST returns "Could not find the 'X' column …" when a
+      // column the frontend/edge writes hasn't been migrated on this DB (e.g.
+      // removal_minutes). Drop that column and retry so a missing/optional column
+      // can never block the whole assessment from saving (mirrors useParts).
+      let row: Record<string, unknown> = update
+      let upErr: any = null
+      for (let attempt = 0; attempt < 6; attempt++) {
+        const res = await service.from('parts').update(row).eq('id', partId).eq('store_id', storeId)
+        upErr = res.error
+        if (!upErr) break
+        const m = /Could not find the '([^']+)' column/.exec(upErr.message || '')
+        if (!m || !(m[1] in row)) break
+        const { [m[1]]: _drop, ...rest } = row
+        row = rest
+      }
       if (upErr) { await logAssessFail(`save failed: ${upErr.message}`); return json({ error: `AI ran but saving failed: ${upErr.message}`, result: parsed }, 500) }
       applied = true
     }
