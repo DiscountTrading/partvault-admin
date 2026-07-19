@@ -1258,13 +1258,15 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
           <div style={{ flex:1, minWidth:200, fontSize:13, color:C.text }}>
             {assessRunning
               ? <><strong>Preparing parts for eBay in the background…</strong> {assessDone}/{assessTotal}{assessEtaTxt?` · ${assessEtaTxt}`:''} — AI assessment + item specifics; you can keep working, results save automatically.</>
-              : assessBlocked === 'ebay-specifics'
-                ? <><strong>{assessRemaining}</strong> part{assessRemaining===1?'':'s'} can’t finish — the eBay-specifics step can’t save. Run migration <code>20260718_parts_ebay_specifics.sql</code> then reload.</>
-                : assessPaused
-                  ? <><strong>{assessRemaining}</strong> part{assessRemaining===1?'':'s'} to prepare (paused).</>
-                  : assessRetry != null
-                    ? <><strong>{assessRemaining}</strong> part{assessRemaining===1?'':'s'} waiting — retrying in {assessRetry}s (AI/eBay was busy).</>
-                    : <><strong>{assessRemaining}</strong> part{assessRemaining===1?'':'s'} waiting to be prepared for eBay…</>}
+              : assessBlocked === 'ai-credit'
+                ? <><strong>{assessRemaining}</strong> part{assessRemaining===1?'':'s'} paused — <strong>AI credit is exhausted</strong>. Top up billing at <code>console.anthropic.com</code> → Settings → Billing, then reload.</>
+                : assessBlocked === 'ebay-specifics'
+                  ? <><strong>{assessRemaining}</strong> part{assessRemaining===1?'':'s'} can’t finish — the eBay-specifics step can’t save. Run migration <code>20260718_parts_ebay_specifics.sql</code> then reload.</>
+                  : assessPaused
+                    ? <><strong>{assessRemaining}</strong> part{assessRemaining===1?'':'s'} to prepare (paused).</>
+                    : assessRetry != null
+                      ? <><strong>{assessRemaining}</strong> part{assessRemaining===1?'':'s'} waiting — retrying in {assessRetry}s (AI/eBay was busy).</>
+                      : <><strong>{assessRemaining}</strong> part{assessRemaining===1?'':'s'} waiting to be prepared for eBay…</>}
           </div>
           <button onClick={toggleAssessPaused} style={{ ...S.btn('secondary'), padding:'5px 14px', fontSize:12 }}>
             {assessPaused ? '▶ Resume' : '⏸ Pause'}

@@ -175,24 +175,28 @@ const fmtEta = (ms) => { if (ms == null || ms <= 0) return ''; const s = Math.ro
 function AssessBadge({ assess }) {
   const { running, done, total, paused, togglePaused, remaining, etaMs, retrySec, blocked } = assess || {}
   if (!running && !remaining) return null
-  const blockedMsg = blocked === 'ebay-specifics'
+  const isBlocked = blocked === 'ebay-specifics' || blocked === 'ai-credit'
   const label = running
     ? `Preparing ${done}/${total}${fmtEta(etaMs) ? ' · ' + fmtEta(etaMs) : ''}`
-    : blockedMsg
-      ? `${remaining} waiting · needs migration`
-      : paused
-        ? `${remaining} to prepare · paused`
-        : retrySec != null
-          ? `${remaining} waiting · retry in ${retrySec}s`
-          : `${remaining} to prepare`
-  const icon = running ? '🧠' : blockedMsg ? '⚠' : paused ? '⏸' : '🧠'
-  const bg = blockedMsg ? 'rgba(245,158,11,0.22)' : 'rgba(255,255,255,0.12)'
-  const border = blockedMsg ? 'rgba(245,158,11,0.5)' : 'rgba(255,255,255,0.2)'
+    : blocked === 'ai-credit'
+      ? `${remaining} paused · AI credit`
+      : blocked === 'ebay-specifics'
+        ? `${remaining} waiting · needs migration`
+        : paused
+          ? `${remaining} to prepare · paused`
+          : retrySec != null
+            ? `${remaining} waiting · retry in ${retrySec}s`
+            : `${remaining} to prepare`
+  const icon = running ? '🧠' : isBlocked ? '⚠' : paused ? '⏸' : '🧠'
+  const bg = isBlocked ? 'rgba(245,158,11,0.22)' : 'rgba(255,255,255,0.12)'
+  const border = isBlocked ? 'rgba(245,158,11,0.5)' : 'rgba(255,255,255,0.2)'
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: bg, border: `1px solid ${border}`, borderRadius: 6, padding: '4px 8px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.92)' }}
-          title={blockedMsg
-            ? 'eBay specifics can’t be saved — run migration 20260718_parts_ebay_specifics.sql, then reload.'
-            : 'Background: AI assessment + eBay item specifics for new parts'}>
+          title={blocked === 'ai-credit'
+            ? 'Anthropic AI credit is exhausted — top up billing at console.anthropic.com, then reload.'
+            : blocked === 'ebay-specifics'
+              ? 'eBay specifics can’t be saved — run migration 20260718_parts_ebay_specifics.sql, then reload.'
+              : 'Background: AI assessment + eBay item specifics for new parts'}>
       <span style={running ? { animation: 'spin 1s linear infinite', display: 'inline-block' } : undefined}>{icon}</span>
       {label}
       <button onClick={togglePaused} title={paused ? 'Resume background preparation' : 'Pause background preparation'}

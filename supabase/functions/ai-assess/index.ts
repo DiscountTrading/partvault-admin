@@ -498,7 +498,18 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
       messages: [{ role: 'user', content }],
     })
     const data = await aiRes.json()
+    // Record assessment failures so they're diagnosable (the queue swallows them).
+    const logAssessFail = async (msg: string) => {
+      try {
+        await createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!).from('ai_usage_log').insert({
+          store_id: storeId, part_id: partId || null, operation: 'assess', model: 'claude-sonnet-5',
+          input_tokens: 0, output_tokens: 0, cost_usd: 0, success: false,
+          error_message: `HTTP ${aiRes.status}: ${String(msg).slice(0, 400)}`,
+        })
+      } catch (_) { /* ignore */ }
+    }
     if (data.error) {
+      await logAssessFail(data.error.message || JSON.stringify(data.error))
       await clearPendingOnFail()
       const raw = data.error.message || 'AI error'
       const isRate = data.error.type === 'rate_limit_error' || aiRes.status === 429 || /rate limit/i.test(raw)
@@ -511,7 +522,7 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
       return json({ error: raw }, 400)
     }
     const parsed = parseJson(textOf(data))
-    if (!parsed) { await clearPendingOnFail(); return json({ error: 'Could not parse AI response' }, 502) }
+    if (!parsed) { await logAssessFail(`unparseable response: ${textOf(data).slice(0, 200)}`); await clearPendingOnFail(); return json({ error: 'Could not parse AI response' }, 502) }
 
     // ── Learn from your own pricing history ─────────────────────────────────
     // Reuse the price you actually used/sold for the same part: match on OEM
@@ -562,7 +573,7 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
       else if (parsed.title) update.title = parsed.title
       if (parsed.category) update.category = parsed.category
       const { error: upErr } = await service.from('parts').update(update).eq('id', partId).eq('store_id', storeId)
-      if (upErr) return json({ error: `AI ran but saving failed: ${upErr.message}`, result: parsed }, 500)
+      if (upErr) { await logAssessFail(`save failed: ${upErr.message}`); return json({ error: `AI ran but saving failed: ${upErr.message}`, result: parsed }, 500) }
       applied = true
     }
     return json({ ok: true, result: parsed, applied, learnedPrice, learnedFrom })

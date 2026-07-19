@@ -88,7 +88,10 @@ export function useAssessQueue({ storeId, parts, cars, refetch }) {
     if (!queue.length) return
     busy.current = true; abort.current = false
     setRunning(true); setTotal(queue.length); setDone(0); setEtaMs(Math.round(queue.length * avgMs()))
-    let n = 0, incomplete = 0, sawBlock = false
+    let n = 0, incomplete = 0, sawBlock = false, sawBilling = false
+    // Permanent failures (Anthropic out of credit, bad/again-limited key) — no point
+    // retrying; stop and surface a clear message.
+    const isBilling = (m) => /credit balance|purchase credits|too low|billing|insufficient|payment|402|401|invalid x-api-key|authentication/i.test(String(m || ''))
     for (const p of queue) {
       if (abort.current) break
       tried.current.add(p.id)
@@ -99,7 +102,7 @@ export function useAssessQueue({ storeId, parts, cars, refetch }) {
           const car = cars?.find(c => c.id === p.car_id)
           await analysePart({ photoUrls: partUrlsOf(p).slice(0, 4), carId: car?.id, partId: p.id }, car || p, storeId)
           assessedOk = true
-        } catch (_) { /* transient — retried next round */ }
+        } catch (e) { if (isBilling(e?.message)) { sawBilling = true; break } /* else transient — retried */ }
       }
       let specificsOk = !!p.ebaySpecifics
       if (assessedOk && !specificsOk && !abort.current) {
@@ -119,6 +122,7 @@ export function useAssessQueue({ storeId, parts, cars, refetch }) {
     refetch?.()
 
     if (abort.current) return
+    if (sawBilling) { setBlocked('ai-credit'); return }     // Anthropic out of credit — stop; top-up needed
     if (sawBlock) { setBlocked('ebay-specifics'); return }  // stop — retrying won't help until the migration runs
     setBlocked(null)
     // Work still left over (transient failures) → schedule an auto-retry with back-off.
