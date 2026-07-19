@@ -1117,6 +1117,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
   const [showDeleted, setShowDeleted] = useState(false)
   const [newOnly, setNewOnly] = useState(false)
   const [newWindow, setNewWindow] = useState(24) // hours; default last 24h
+  const [showFilters, setShowFilters] = useState(false) // collapse the advanced filter row to save space
   const [showForm, setShowForm] = useState(false)
   const [editingPart, setEditingPart] = useState(null)
   // Switching stores must close any open part editor — the part belongs to the
@@ -1293,21 +1294,27 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
           </button>
         </div>
       )}
-      <div style={{ display:'flex', gap:12, marginBottom:14, flexWrap:'wrap' }}>
-        {[['Stock Value',`$${totals.list.toFixed(0)}`,C.blue],['Total Cost',`$${totals.cost.toFixed(0)}`,C.red],['Est. Profit',`$${totals.profit.toFixed(0)}`,totals.profit>=0?C.green:C.red]].map(([l,v,col])=>(
-          <div key={l} style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:8, padding:'8px 16px', borderTop:`3px solid ${col}` }}>
-            <div style={{ fontSize:10, color:C.muted, textTransform:'uppercase', letterSpacing:'0.5px' }}>{l}</div>
-            <div style={{ fontSize:20, fontWeight:800, color:col }}>{v}</div>
+      {(() => { const activeFilters = [filterMake, filterModel, filterYear, filterCat, filterStatus, filterCond].filter(Boolean).length + (hideSold?1:0) + (newOnly?1:0); return (
+      <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', marginBottom:12 }}>
+        {/* Slim inventory-value chips */}
+        {[['Stock Value',`$${totals.list.toFixed(0)}`,C.blue],['Cost',`$${totals.cost.toFixed(0)}`,C.red],['Est. Profit',`$${totals.profit.toFixed(0)}`,totals.profit>=0?C.green:C.red]].map(([l,v,col])=>(
+          <div key={l} style={{ display:'flex', alignItems:'baseline', gap:7, background:C.card, border:`1px solid ${C.border}`, borderLeft:`3px solid ${col}`, borderRadius:8, padding:'5px 12px' }}>
+            <span style={{ fontSize:10, color:C.muted, textTransform:'uppercase', letterSpacing:'0.5px' }}>{l}</span>
+            <span style={{ fontSize:16, fontWeight:800, color:col }}>{v}</span>
           </div>
         ))}
+        <div style={{ width:1, height:22, background:C.border, margin:'0 2px' }} />
+        <input style={{ ...inputSm, flex:2, minWidth:180 }} placeholder="🔍 Search everything..." value={search} onChange={e => { setSearch(e.target.value); setPage(0) }} />
+        <button onClick={() => setShowFilters(v=>!v)} title="Make, model, year, category, status, condition…" style={{ ...S.btn('secondary'), padding:'0 12px', height:30, fontSize:12, display:'flex', alignItems:'center', gap:6 }}>
+          ⚙ Filters{activeFilters?<span style={{ background:C.accent, color:'#fff', borderRadius:10, padding:'0 6px', fontSize:11, fontWeight:700 }}>{activeFilters}</span>:null} <span style={{ fontSize:10 }}>{showFilters?'▲':'▼'}</span>
+        </button>
+        {(activeFilters>0||search) && <button onClick={() => { clearFilters(); }} title="Clear search + all filters" style={{ ...S.btn('secondary'), padding:'0 12px', height:30, fontSize:12 }}>Clear</button>}
+        <span style={{ fontSize:12, color:C.muted }}>{filtered.length} matching</span>
       </div>
+      )})()}
 
+      {showFilters && (
       <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:'12px 16px', marginBottom:14 }}>
-        <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:8, flexWrap:'wrap' }}>
-          <input style={{ ...inputSm, flex:2, minWidth:200 }} placeholder="🔍 Search everything..." value={search} onChange={e => { setSearch(e.target.value); setPage(0) }} />
-          <button onClick={clearFilters} title="Clear all filters" style={{ ...S.btn('secondary'), padding:'0 12px', height:30, fontSize:12 }}>Clear</button>
-          <span style={{ fontSize:12, color:C.muted }}>{filtered.length} matching</span>
-        </div>
         <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
           <select style={{ ...selSm, minWidth:110 }} value={filterMake} onChange={e => { setFilterMake(e.target.value); setFilterModel(''); setPage(0) }}>
             <option value="">All Makes</option>{makes.map(m=><option key={m}>{m}</option>)}
@@ -1353,6 +1360,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
           )}
         </div>
       </div>
+      )}
       </>}
 
       {viewMode==='car' && (

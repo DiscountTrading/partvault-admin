@@ -724,6 +724,9 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
       <h2 style={{ ...S.h1, marginBottom: 4 }}>Recent Sales</h2>
       <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>Every eBay sale, newest first — what each item made after fees. Item &amp; SKU come from your inventory record (matched by eBay item number); sales with no inventory match are tagged <strong>eBay only</strong>.</div>
 
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px, 440px) 1fr', gap: 16, alignItems: 'start' }}>
+      {/* LEFT — performance graph, promoted listings, and the period totals */}
+      <div>
       {/* Performance overview — trend + comparison against the previous period (compact). Always at the top. */}
       <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12, padding: '14px 16px', marginBottom: 16 }}>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
@@ -771,22 +774,25 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
 
       <PromotedPanel promo={promo} periodLabel={range.custom ? `${fmtDate(range.fromMs)} – ${fmtDate(range.toMs)}` : periodTitle} />
 
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
-        <div style={{ fontSize: 13, color: C.muted, fontWeight: 600 }}>{periodTitle} · {rows.length} sale{rows.length === 1 ? '' : 's'}</div>
-        <div style={{ flex: 1 }} />
-        <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search item or SKU…"
-          style={{ ...S.input, marginBottom: 0, padding: '7px 12px', width: 220 }} />
-        <button onClick={exportCsv} disabled={!rows.length} title="Download the filtered sales as a CSV (opens in Excel)"
-          style={{ ...S.btn('secondary'), padding: '7px 12px', fontSize: 12, opacity: rows.length ? 1 : 0.5 }}>⤓ Export CSV</button>
-      </div>
-
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 4 }}>
         <Stat label="Sold" value={rows.length} />
         <Stat label="Gross sales" value={fmt(totals.gross)} color={C.accent} />
         <Stat label="Refunds" value={totals.refunds > 0 ? '−' + fmt(totals.refunds) : fmt(0)} color={totals.refunds > 0 ? C.red : C.muted} />
         <Stat label="eBay fees" value={totals.fees > 0 ? '−' + fmt(totals.fees) : fmt(0)} color={C.red} />
         <Stat label="Net sales" value={fmt(totals.net)} color={C.green} />
         <Stat label="Profit" value={fmt(totals.net - totals.cogs)} sub={`${totals.matched}/${rows.length} cost-linked`} color={(totals.net - totals.cogs) >= 0 ? C.green : C.red} />
+      </div>
+      </div>{/* /LEFT */}
+
+      {/* RIGHT — the full sales table; it fills the height and scrolls on its own */}
+      <div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+        <div style={{ fontSize: 13, color: C.muted, fontWeight: 600 }}>{periodTitle} · {rows.length} sale{rows.length === 1 ? '' : 's'}</div>
+        <div style={{ flex: 1 }} />
+        <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search item or SKU…"
+          style={{ ...S.input, marginBottom: 0, padding: '7px 12px', width: 200 }} />
+        <button onClick={exportCsv} disabled={!rows.length} title="Download the filtered sales as a CSV (opens in Excel)"
+          style={{ ...S.btn('secondary'), padding: '7px 12px', fontSize: 12, opacity: rows.length ? 1 : 0.5 }}>⤓ Export CSV</button>
       </div>
 
       <div ref={tableRef} style={{ overflowX: 'scroll', overflowY: 'auto', maxHeight: tableH || '60vh', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>
@@ -912,6 +918,8 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
       <div style={{ marginTop: 6, fontSize: 12, color: C.muted }}>
         Net sales = Gross sales − refunds − eBay fees. Profit = Net sales − Cost. Click a <strong>Fee</strong> or <strong>Cost</strong> figure for its breakdown (— when there's no detail).
       </div>
+      </div>{/* /RIGHT */}
+      </div>{/* /two-column grid */}
 
       {detail && <BreakdownModal detail={detail} onClose={() => setDetail(null)} />}
     </div>

@@ -48,10 +48,12 @@ function FunnelIcon({ active }) {
 
 function Card({ label, value, sub }) {
   return (
-    <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12, padding: '14px 18px', flex: '1 1 160px', minWidth: 150 }}>
-      <div style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 800, color: C.text, marginTop: 4 }}>{value}</div>
-      {sub && <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{sub}</div>}
+    <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 10, padding: '7px 14px', flex: '1 1 150px', minWidth: 130 }}>
+      <div style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>{label}</div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 18, fontWeight: 800, color: C.text }}>{value}</span>
+        {sub && <span style={{ fontSize: 10, color: C.muted }}>{sub}</span>}
+      </div>
     </div>
   )
 }
@@ -283,7 +285,7 @@ export default function Insights({ storeId, initial }) {
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
         <Card label="Stock on hand" value={money(summary.stockValue)} sub={`${summary.unsoldCount} unsold parts`} />
         <Card label="Avg margin (unsold)" value={summary.avgMargin == null ? '—' : `${summary.avgMargin}%`} />
         <Card label="Avg days to sell" value={summary.avgDts != null ? `${summary.avgDts}d` : '—'} />

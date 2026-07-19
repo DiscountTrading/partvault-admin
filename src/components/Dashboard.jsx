@@ -3,10 +3,10 @@ import { C, S, fmt, pct, totalCost, postageCostFor, estimatePostage, partEffecti
 
 function StatCard({ label, value, sub, color }) {
   return (
-    <div style={{ ...S.card, borderTop:`3px solid ${color||C.accent}` }}>
+    <div style={{ background:C.card, border:`1px solid ${C.border}`, borderTop:`3px solid ${color||C.accent}`, borderRadius:10, padding:'8px 14px' }}>
       <div style={S.statLbl}>{label}</div>
-      <div style={{ ...S.statVal, color:color||C.accent }}>{value}</div>
-      {sub && <div style={{ fontSize:13, color:C.muted, marginTop:2 }}>{sub}</div>}
+      <div style={{ ...S.statVal, color:color||C.accent, fontSize:20, lineHeight:1.15 }}>{value}</div>
+      {sub && <div style={{ fontSize:11, color:C.muted, marginTop:1 }}>{sub}</div>}
     </div>
   )
 }
@@ -105,8 +105,8 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
 
   return (
     <div>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12, paddingBottom:10, borderBottom:`1px solid ${C.border}` }}>
-        <h2 style={{ ...S.h1 }}>📊 Dashboard</h2>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10, paddingBottom:8, borderBottom:`1px solid ${C.border}` }}>
+        <h2 style={{ ...S.h1, margin:0 }}>📊 Dashboard</h2>
         <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
           <label style={{ display:'inline-flex', alignItems:'center', gap:6, fontSize:12, color:C.muted, cursor:'pointer' }} title="Imported historical sales use estimated (snapshot) costs.">
             <input type="checkbox" checked={includeHistory} onChange={e=>setIncludeHistory(e.target.checked)} />
@@ -130,9 +130,9 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
         <StatCard label="Net sales" value={fmt(netSales)} color={C.green} sub={`after refunds & fees · ${periodLabel}`} />
         <StatCard label="Profit" value={fmt(profit)} color={margin>30?C.green:C.yellow} sub={pct(margin)+' margin'+(cogsEstimated?' · incl. est. cost':'')} />
       </div>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, marginBottom:12 }}>
-        <div style={{ ...S.card, padding:18 }}>
-          <h2 style={{ ...S.h2, marginBottom:10 }}>Stock by Category</h2>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, marginBottom:14 }}>
+        <div style={{ ...S.card, padding:14 }}>
+          <h2 style={{ ...S.h2, marginBottom:8 }}>Stock by Category</h2>
           {catBreak.map(({cat,count})=>{
             const drill = () => onDrill?.({ partIds: active.filter(p=>p.category===cat).map(p=>p.id), label:cat })
             return (
@@ -146,8 +146,8 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
           {!catBreak.length && <p style={{ color:C.muted, fontSize:12 }}>No parts yet.</p>}
           {!!catBreak.length && <div style={{ fontSize:11, color:C.muted, marginTop:6 }}>Click a category to see those parts in Insights.</div>}
         </div>
-        <div style={{ ...S.card, padding:18 }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:14 }}>
+        <div style={{ ...S.card, padding:14 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:10 }}>
             <h2 style={{ ...S.h2, margin:0 }}>Aged Stock</h2>
             <span style={{ fontSize:12, color:C.muted }}>{aged.length.toLocaleString()} items &gt;{agedThreshold}d · {fmt(agedValue)} listed</span>
           </div>
@@ -194,49 +194,51 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
           </div>
         </div>
       </div>
-      <div style={{ ...S.card, padding:18 }}>
-        <h2 style={{ ...S.h2, marginBottom:10 }}>P&L Summary <span style={{ fontWeight:400, fontSize:12, color:C.muted }}>· {periodLabel}{cogsEstimated?' · cost incl. estimates':''}</span></h2>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:20, rowGap:14 }}>
-          {[
-            ['Gross sales',fmt(grossSales),C.text],
-            ['Refunds',refundTotal>0?('−'+fmt(refundTotal)):fmt(0),refundTotal>0?C.red:C.muted],
-            ['eBay fees',ebayFees>0?('−'+fmt(ebayFees)):fmt(0),ebayFees>0?C.red:C.muted],
-            ['Net sales',fmt(netSales),C.text],
-            ['COGS',soldCogs>0?('−'+fmt(soldCogs)):fmt(0),soldCogs>0?C.red:C.muted],
-            ['Profit',fmt(profit),profit>=0?C.green:C.red],
-            ['Margin',pct(margin),margin>30?C.green:C.yellow],
-          ].map(([l,v,col])=>(
-            <div key={l}>
-              <div style={{ ...S.statLbl, marginBottom:4 }}>{l}</div>
-              <div style={{ fontSize:22, fontWeight:700, color:col }}>{v}</div>
-            </div>
-          ))}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, alignItems:'start' }}>
+        <div style={{ ...S.card, padding:14 }}>
+          <h2 style={{ ...S.h2, marginBottom:8 }}>P&L Summary <span style={{ fontWeight:400, fontSize:12, color:C.muted }}>· {periodLabel}{cogsEstimated?' · cost incl. estimates':''}</span></h2>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:12, rowGap:10 }}>
+            {[
+              ['Gross sales',fmt(grossSales),C.text],
+              ['Refunds',refundTotal>0?('−'+fmt(refundTotal)):fmt(0),refundTotal>0?C.red:C.muted],
+              ['eBay fees',ebayFees>0?('−'+fmt(ebayFees)):fmt(0),ebayFees>0?C.red:C.muted],
+              ['Net sales',fmt(netSales),C.text],
+              ['COGS',soldCogs>0?('−'+fmt(soldCogs)):fmt(0),soldCogs>0?C.red:C.muted],
+              ['Profit',fmt(profit),profit>=0?C.green:C.red],
+              ['Margin',pct(margin),margin>30?C.green:C.yellow],
+            ].map(([l,v,col])=>(
+              <div key={l}>
+                <div style={{ ...S.statLbl, marginBottom:2 }}>{l}</div>
+                <div style={{ fontSize:18, fontWeight:700, color:col }}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize:11, color:C.muted, marginTop:8 }}>Gross − Refunds − eBay fees = Net sales. Net − COGS (part cost, postage &amp; admin) = Profit.</div>
         </div>
-        <div style={{ fontSize:11, color:C.muted, marginTop:8 }}>Gross sales − Refunds − eBay fees = Net sales (matches eBay's report). Net sales − COGS (part cost, postage &amp; admin) = Profit.</div>
-      </div>
 
-      {/* Recent sales — last few, click through to the full Sales tab */}
-      <div style={{ ...S.card, padding:18, marginTop:18 }}>
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
-          <h2 style={{ ...S.h2, margin:0 }}>Recent Sales</h2>
-          <button onClick={onSeeSales} style={{ background:'none', border:'none', color:C.accent, cursor:'pointer', fontSize:13, fontWeight:600 }}>View all sales →</button>
+        {/* Recent sales — last few, click through to the full Sales tab */}
+        <div style={{ ...S.card, padding:14 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+            <h2 style={{ ...S.h2, margin:0 }}>Recent Sales</h2>
+            <button onClick={onSeeSales} style={{ background:'none', border:'none', color:C.accent, cursor:'pointer', fontSize:13, fontWeight:600 }}>View all sales →</button>
+          </div>
+          {(() => {
+            const recent = [...sales].filter(s=>!s.cancelled && s.soldAt).sort((a,b)=>new Date(b.soldAt)-new Date(a.soldAt)).slice(0,7)
+            if (recent.length === 0) return <div style={{ fontSize:13, color:C.muted, padding:'8px 0' }}>No sales recorded yet.</div>
+            const net = s => (+s.soldPrice||0)+(+s.shipping||0)-(+s.refund||0)-(+s.fees||0)
+            return (
+              <div style={{ display:'flex', flexDirection:'column' }}>
+                {recent.map(s => (
+                  <div key={s.id} onClick={onSeeSales} style={{ display:'flex', alignItems:'center', gap:12, padding:'5px 0', borderBottom:`1px solid ${C.border}`, cursor:'pointer' }}>
+                    <span style={{ fontSize:12, color:C.muted, flexShrink:0, width:56 }}>{s.soldAt ? new Date(s.soldAt).toLocaleDateString('en-AU',{day:'numeric',month:'short'}) : '—'}</span>
+                    <span style={{ flex:1, minWidth:0, fontSize:13, color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={s.title}>{s.title || s.sku || 'eBay sale'}</span>
+                    <span style={{ fontSize:13, fontWeight:700, color:C.green, flexShrink:0 }}>{fmt(net(s))}</span>
+                  </div>
+                ))}
+              </div>
+            )
+          })()}
         </div>
-        {(() => {
-          const recent = [...sales].filter(s=>!s.cancelled && s.soldAt).sort((a,b)=>new Date(b.soldAt)-new Date(a.soldAt)).slice(0,8)
-          if (recent.length === 0) return <div style={{ fontSize:13, color:C.muted, padding:'8px 0' }}>No sales recorded yet.</div>
-          const net = s => (+s.soldPrice||0)+(+s.shipping||0)-(+s.refund||0)-(+s.fees||0)
-          return (
-            <div style={{ display:'flex', flexDirection:'column' }}>
-              {recent.map(s => (
-                <div key={s.id} onClick={onSeeSales} style={{ display:'flex', alignItems:'center', gap:12, padding:'8px 0', borderBottom:`1px solid ${C.border}`, cursor:'pointer' }}>
-                  <span style={{ fontSize:12, color:C.muted, flexShrink:0, width:64 }}>{s.soldAt ? new Date(s.soldAt).toLocaleDateString('en-AU',{day:'numeric',month:'short'}) : '—'}</span>
-                  <span style={{ flex:1, minWidth:0, fontSize:13, color:C.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={s.title}>{s.title || s.sku || 'eBay sale'}</span>
-                  <span style={{ fontSize:13, fontWeight:700, color:C.green, flexShrink:0 }}>{fmt(net(s))}</span>
-                </div>
-              ))}
-            </div>
-          )
-        })()}
       </div>
     </div>
   )

@@ -38,22 +38,22 @@ export default function Analytics({ storeId, initial, parts, cars, sales, costin
 
   return (
     <div>
-      <h2 style={{ ...S.h1, marginBottom: 4 }}>Analytics</h2>
-      <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>{meta.sub}</div>
-
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 4 }}>
+        <h2 style={{ ...S.h1, margin: 0 }}>Analytics</h2>
+        <div style={{ width: 1, height: 22, background: C.border, margin: '0 4px' }} />
         {PIVOTS.map(p => (
-          <button key={p.id} onClick={() => setPivot(p.id)}
-            style={{ padding: '8px 16px', borderRadius: 22, border: `1.5px solid ${pivot === p.id ? C.accent : C.border}`, background: pivot === p.id ? C.accent : '#fff', color: pivot === p.id ? '#fff' : C.text, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+          <button key={p.id} onClick={() => setPivot(p.id)} title={p.sub}
+            style={{ padding: '5px 14px', borderRadius: 20, border: `1.5px solid ${pivot === p.id ? C.accent : C.border}`, background: pivot === p.id ? C.accent : '#fff', color: pivot === p.id ? '#fff' : C.text, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
             {p.label}
           </button>
         ))}
         <div style={{ flex: 1 }} />
         <button onClick={() => setTidyOpen(o => !o)}
-          style={{ padding: '8px 14px', borderRadius: 22, border: `1.5px solid ${tidyOpen ? C.accent : C.border}`, background: tidyOpen ? '#fff4ef' : '#fff', color: C.text, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+          style={{ padding: '5px 14px', borderRadius: 20, border: `1.5px solid ${tidyOpen ? C.accent : C.border}`, background: tidyOpen ? '#fff4ef' : '#fff', color: C.text, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
           🧹 Tidy spellings
         </button>
       </div>
+      <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>{meta.sub}</div>
 
       {tidyOpen && <SpellingCleanup storeId={storeId} parts={parts} cars={cars} onApplied={onVehiclesChanged} />}
 

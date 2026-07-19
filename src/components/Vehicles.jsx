@@ -444,10 +444,12 @@ export default function Vehicles({ parts = [], cars = [], sales = [], costing = 
 
 function Card({ label, value, sub, color }) {
   return (
-    <div style={{ ...S.card, borderTop: `3px solid ${color || C.accent}`, flex: '1 1 180px', minWidth: 160, padding: 18 }}>
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `3px solid ${color || C.accent}`, borderRadius: 10, flex: '1 1 160px', minWidth: 140, padding: '7px 14px' }}>
       <div style={S.statLbl}>{label}</div>
-      <div style={{ ...S.statVal, color: color || C.accent, fontSize: 26 }}>{value}</div>
-      {sub && <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{sub}</div>}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+        <span style={{ ...S.statVal, color: color || C.accent, fontSize: 18 }}>{value}</span>
+        {sub && <span style={{ fontSize: 10, color: C.muted }}>{sub}</span>}
+      </div>
     </div>
   )
 }

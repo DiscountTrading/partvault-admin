@@ -173,11 +173,30 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   const [lastSync, setLastSync] = useState(null) // most recent sync of ANY kind (manual or nightly)
   const fetchNightly = useCallback(async () => {
     if (!storeId) return
-    const { data } = await sb.from('sync_runs').select('phase, detail, done, updated_at')
+    const { data } = await sb.from('sync_runs').select('phase, detail, done, started_at, updated_at')
       .eq('store_id', storeId).order('updated_at', { ascending: false }).limit(1).maybeSingle()
     setNightly(data || null)
-    const { data: ls } = await sb.rpc('get_last_sync', { p_store_id: storeId })
-    setLastSync(Array.isArray(ls) ? (ls[0] || null) : (ls || null))
+    // Derive "last sync" straight from sync_runs — the source of truth for BOTH
+    // scheduled and manual runs. (The old get_last_sync RPC read an audit_log
+    // 'sync' row the diff-only audit trigger no longer writes, so it was always
+    // empty → the panel wrongly said "no run yet".) Manual vs auto is inferred
+    // from a marker runSync drops in localStorage on completion.
+    if (data?.updated_at) {
+      let kind = 'auto'
+      try {
+        const man = localStorage.getItem(`pv_last_manual_sync_${storeId}`)
+        if (man && Math.abs(new Date(data.updated_at) - new Date(man)) < 15 * 60 * 1000) kind = 'manual'
+      } catch { /* ignore */ }
+      const failed = /error|failed|stopped/i.test(data.detail || '') || data.phase === 'error'
+      setLastSync({
+        synced_at: data.updated_at,
+        summary: data.detail || (data.done ? 'eBay sync complete' : data.phase) || 'eBay sync',
+        kind,
+        ok: !failed,
+      })
+    } else {
+      setLastSync(null)
+    }
   }, [storeId])
   useEffect(() => { fetchNightly() }, [fetchNightly])
   // Store timezone — drives the nightly sync schedule (local midnight) and the
@@ -1120,6 +1139,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       setSyncPhase('✓ Sync complete')
       setImportJob(j => ({ ...j, status: 'completed', current_item: '✓ Sync complete' }))
       markRun('import'); markRun('backfill'); markRun('reconcile')
+      try { localStorage.setItem(`pv_last_manual_sync_${storeId}`, new Date().toISOString()) } catch { /* ignore */ }
       await fetchNightly()
       await checkSyncStatus() // auto-refresh the status panel — no manual re-check needed
     } catch (e) {
@@ -2912,7 +2932,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                 const lsTs = lastSync?.synced_at ? new Date(lastSync.synced_at).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null
                 const inProgress = nightly && !nightly.done
                 const nightlyTs = nightly?.updated_at ? new Date(nightly.updated_at).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null
-                const kindLbl = lastSync?.kind === 'nightly' ? ' (auto)' : lastSync?.kind === 'manual' ? ' (manual)' : lastSync?.kind === 'live' ? ' (live check)' : ''
+                const kindLbl = lastSync?.kind === 'manual' ? ' (manual)' : (lastSync?.kind === 'auto' || lastSync?.kind === 'nightly') ? ' (scheduled)' : lastSync?.kind === 'live' ? ' (live check)' : ''
                 const intervalLabel = Number(syncInterval) >= 24 ? 'once a day' : `every ${syncInterval}h`
                 return (
                   <div style={{ fontSize: 11, marginBottom: 8, padding: '6px 10px', borderRadius: 6,
