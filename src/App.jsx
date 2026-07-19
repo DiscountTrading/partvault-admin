@@ -19,13 +19,11 @@ import FloatingHelp from './components/FloatingHelp'
 import JoinStore from './components/JoinStore'
 import Analytics from './components/Analytics'
 import Sales from './components/Sales'
-import Ebay from './components/Ebay'
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊' },
   { id: 'sales', label: 'Sales', icon: '🧾' },
   { id: 'inventory', label: 'Inventory', icon: '📦' },
-  { id: 'ebay', label: 'eBay', icon: '🛒' },
   { id: 'analytics', label: 'Analytics', icon: '📈' },
   { id: 'settings', label: 'Settings', icon: '⚙️' },
   { id: 'help', label: 'Help', icon: '🆘' },
@@ -345,10 +343,9 @@ export default function App() {
             assess={assess}
           />
         )}
-        {tab === 'ebay' && <Ebay storeId={storeId} onChanged={smartRefetch} parts={parts} />}
         {tab === 'analytics' && <Analytics storeId={storeId} initial={insightsInit} parts={parts} cars={cars} sales={sales} costing={costingFull}
           onVehiclesChanged={() => { refetch(); sb.from('cars').select('*').eq('store_id', storeId).is('deleted_at', null).order('created_at', { ascending: false }).then(({ data }) => setCars(data || [])) }} />}
-        {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores}
+        {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores} parts={parts} onChanged={smartRefetch}
           onSettingsSaved={s => { if (s?.costing) setCosting(c => ({ ...c, ...s.costing })); if (s?.inventory) setInventory(i => ({ ...i, ...s.inventory })); if (s?.storage) setStorage(st => ({ ...st, ...s.storage })); if (s?.shipping) setShipping(s.shipping); if (s?.warehouse) setWarehouse(w => ({ ...w, ...s.warehouse })); if (s?.labels) setLabels(l => ({ ...l, ...s.labels })) }} />}
         {tab === 'help' && <Help storeId={storeId} />}
       </main>

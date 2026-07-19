@@ -15,6 +15,7 @@ import ContainerManager from './ContainerManager'
 import { WAREHOUSE_DEFAULTS } from '../lib/warehouse'
 import EbayHistoryUpload from './EbayHistoryUpload'
 import HistoricalCosts from './HistoricalCosts'
+import SkuReconcile from './SkuReconcile'
 
 // Small inline %/$ (or rate) toggle used on the costing fields.
 function ModeToggle({ mode, onChange, opts }) {
@@ -103,7 +104,7 @@ function StatCard({ label, value, color, sub }) {
   )
 }
 
-export default function Settings({ profile, storeId, onSignOut, refreshStores, onSettingsSaved }) {
+export default function Settings({ profile, storeId, onSignOut, refreshStores, onSettingsSaved, parts = [], onChanged }) {
   const [tab, setTab] = useState('account')
   const [footer, setFooter] = useState(DEFAULT_FOOTER)
   // eBay listing defaults applied at publish time (warranty aspect + condition
@@ -2993,6 +2994,16 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
             ))}
             {showAdvSync && <div ref={reconcileRef}><ReconcileSection /></div>}
           </div>{/* end right column */}
+        </div>
+      )}
+
+      {/* SKU reconcile — pull the current custom labels from eBay (moved here from
+          the old eBay tab). Full-width below the sync grid. */}
+      {tab === 'ebay' && (
+        <div style={{ marginTop: 16 }}>
+          <Section title="🔄 Reconcile SKUs from eBay">
+            <SkuReconcile storeId={storeId} parts={parts} onApplied={onChanged} />
+          </Section>
         </div>
       )}
 
