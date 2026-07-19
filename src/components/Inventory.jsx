@@ -6,6 +6,8 @@ import { makesFor, MODEL_SUGS } from '../lib/vehicles'
 import { printLabels, DEFAULT_LABELS } from '../lib/labels'
 import { WAREHOUSE_DEFAULTS, warehouseConfig } from '../lib/warehouse'
 import BulkEdit from './BulkEdit'
+import ListingPreview from './ListingPreview'
+import EbayActions from './EbayActions'
 
 function Field({ label, children }) {
   return <div style={{ marginBottom: 12 }}><label style={S.label}>{label}</label>{children}</div>
@@ -1121,6 +1123,13 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [deleteCarTarget, setDeleteCarTarget] = useState(null)
   const [expandedCars, setExpandedCars] = useState(new Set())
+  // eBay listing consolidation: row selection + a preview modal + a quick
+  // "eBay mode" that filters to parts to list (in-stock) or de-list (listed).
+  const [sel, setSel] = useState(() => new Set())
+  const [previewPart, setPreviewPart] = useState(null)
+  const [ebayMode, setEbayMode] = useState('off') // off | list | delist
+  useEffect(() => { setSel(new Set()) }, [storeId, ebayMode])
+  const toggleSel = (id) => setSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
   const [bulkAIGroup, setBulkAIGroup] = useState(null)
   const [showAddCar, setShowAddCar] = useState(false)
   const [page, setPage] = useState(0)
@@ -1138,6 +1147,8 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
   const models = useMemo(() => { const src=filterMake?parts.filter(p=>p.make===filterMake):parts; return [...new Set(src.filter(p=>p.model).map(p=>p.model))].sort() }, [parts, filterMake])
 
   const filtered = useMemo(() => parts.filter(p => {
+    if (ebayMode === 'list' && p.status !== 'in_stock') return false
+    if (ebayMode === 'delist' && p.status !== 'listed') return false
     if (hideSold && p.status === 'sold') return false
     const q=search.toLowerCase()
     if (q&&![p.title,p.make,p.model,p.year,p.sku,p.partNumber,p.category,p.subcategory,p.condition,p.status].some(v=>(v||'').toLowerCase().includes(q))) return false
@@ -1149,7 +1160,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
     if (filterCond&&p.condition!==filterCond) return false
     if (newOnly && (!p.createdAt || new Date(p.createdAt).getTime() < Date.now() - newWindow*3600*1000)) return false
     return true
-  }), [parts,search,filterMake,filterModel,filterYear,filterCat,filterStatus,filterCond,hideSold,showDeleted,newOnly,newWindow])
+  }), [parts,search,filterMake,filterModel,filterYear,filterCat,filterStatus,filterCond,hideSold,showDeleted,newOnly,newWindow,ebayMode])
 
   const carGroups = useMemo(() => {
     const g={}
@@ -1244,6 +1255,13 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
             <button onClick={() => setViewMode('parts')} style={{ padding:'5px 14px', fontSize:12, fontWeight:600, background:viewMode==='parts'?C.accent:'white', color:viewMode==='parts'?'white':C.muted, border:'none', cursor:'pointer' }}>📦 By Part</button>
             <button onClick={() => setViewMode('car')} style={{ padding:'5px 14px', fontSize:12, fontWeight:600, background:viewMode==='car'?C.accent:'white', color:viewMode==='car'?'white':C.muted, border:'none', cursor:'pointer', borderLeft:`1px solid ${C.border}` }}>🚗 By Car</button>
             <button onClick={() => setViewMode('bulk')} style={{ padding:'5px 14px', fontSize:12, fontWeight:600, background:viewMode==='bulk'?C.accent:'white', color:viewMode==='bulk'?'white':C.muted, border:'none', cursor:'pointer', borderLeft:`1px solid ${C.border}` }}>✏️ Bulk edit</button>
+          </div>
+          {/* eBay listing mode — filters to parts to list (in-stock) or de-list (listed) and turns on row selection. */}
+          <div style={{ display:'flex', borderRadius:8, overflow:'hidden', border:`1.5px solid ${EBAY_BLUE}55` }} title="Select parts to list on / de-list from eBay">
+            {[['off','🛒 eBay'],['list','List'],['delist','De-list']].map(([m,lbl],i) => (
+              <button key={m} onClick={() => { setEbayMode(m); if (m!=='off') setViewMode('parts') }}
+                style={{ padding:'5px 12px', fontSize:12, fontWeight:600, background:ebayMode===m?EBAY_BLUE:'white', color:ebayMode===m?'white':(m==='off'?C.muted:EBAY_BLUE), border:'none', cursor:'pointer', borderLeft:i?`1px solid ${EBAY_BLUE}33`:'none' }}>{lbl}</button>
+            ))}
           </div>
           <span style={{ fontSize:12, color:C.muted, background:C.panel, borderRadius:10, padding:'2px 10px', fontWeight:600 }}>{totals.count} parts</span>
         </div>
@@ -1443,6 +1461,11 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
             <table style={{ borderCollapse:'collapse', fontSize:13, minWidth:1000, width:'100%' }}>
               <thead style={{ position:'sticky', top:0, zIndex:10 }}>
                 <tr style={{ background:'#f5f4f0' }}>
+                  {ebayMode!=='off' && (
+                    <th style={{ padding:'8px 8px', textAlign:'center', background:'#f5f4f0', borderBottom:`2px solid ${C.accent}`, borderRight:`1px solid ${C.border}`, width:34 }}>
+                      <input type="checkbox" checked={paged.length>0 && paged.every(p=>sel.has(p.id))} onChange={()=>setSel(s=>{ const n=new Set(s); const all=paged.every(p=>n.has(p.id)); paged.forEach(p=>all?n.delete(p.id):n.add(p.id)); return n })} style={{ width:15, height:15, cursor:'pointer' }} />
+                    </th>
+                  )}
                   {[['Edit',124],['SKU',80],['Title',260],['Make',80],['Model',90],['Year',65],['Category',150],['Status',85],['AI',40],['List$',72],['Cost',72],['Profit',72],['Del',50]].map(([h,w])=>(
                     <th key={h} style={{ padding:'8px 8px', textAlign:'left', fontSize:10, fontWeight:700, textTransform:'uppercase', color:C.muted, background:'#f5f4f0', borderBottom:`2px solid ${C.accent}`, borderRight:`1px solid ${C.border}`, minWidth:w, whiteSpace:'nowrap' }}>{h}</th>
                   ))}
@@ -1454,9 +1477,15 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                   const bg=p.deletedAt?'#fff5f5':p.status==='sold'?'#f0fdf4':i%2===0?'#ffffff':'#faf9f7'
                   const td=(v,col,bold)=><td style={{ padding:'4px 8px', fontSize:12, color:col||C.text, fontWeight:bold?700:400, borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`, overflow:'hidden', whiteSpace:'nowrap', textOverflow:'ellipsis', maxWidth:260 }} title={String(v||'')}>{v||<span style={{color:C.border}}>—</span>}</td>
                   return (
-                    <tr key={p.id} style={{ background:bg }}>
+                    <tr key={p.id} style={{ background: ebayMode!=='off' && sel.has(p.id) ? '#eef2ff' : bg }}>
+                      {ebayMode!=='off' && (
+                        <td style={{ padding:'4px 6px', textAlign:'center', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}` }}>
+                          <input type="checkbox" checked={sel.has(p.id)} onChange={()=>toggleSel(p.id)} style={{ width:15, height:15, cursor:'pointer' }} />
+                        </td>
+                      )}
                       <td style={{ padding:'4px 6px', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`, whiteSpace:'nowrap' }}>
                         <button onClick={()=>{setEditingPart(p);setShowForm(true)}} style={{ fontSize:11, padding:'2px 8px', background:'#eff6ff', color:C.blue, border:`1px solid ${C.blue}44`, borderRadius:4, cursor:'pointer', marginRight:4 }}>Edit</button>
+                        <button onClick={()=>setPreviewPart(p)} title="Preview the eBay listing" style={{ fontSize:11, padding:'2px 6px', background:'#fff', color:C.text, border:`1px solid ${C.border}`, borderRadius:4, cursor:'pointer', marginRight:4 }}>👁</button>
                         {p.sku && <button onClick={()=>printLabels(p, labels)} title="Print stock label" style={{ fontSize:11, padding:'2px 6px', background:'#fff', color:C.text, border:`1px solid ${C.border}`, borderRadius:4, cursor:'pointer' }}>🏷️</button>}
                         <EbayLink part={p} style={{ padding:'2px 6px', background:'#fff', border:`1px solid ${C.border}`, borderRadius:4, marginLeft:4 }} />
                       </td>
@@ -1478,11 +1507,11 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                     </tr>
                   )
                 })}
-                {!paged.length&&<tr><td colSpan={13} style={{ textAlign:'center', padding:40, color:C.muted }}>No parts match your filters.</td></tr>}
+                {!paged.length&&<tr><td colSpan={ebayMode!=='off'?14:13} style={{ textAlign:'center', padding:40, color:C.muted }}>No parts match your filters.</td></tr>}
               </tbody>
               <tfoot>
                 <tr style={{ background:'#1c1c1e' }}>
-                  <td colSpan={9} style={{ padding:'6px 12px', fontSize:11, color:'rgba(255,255,255,0.5)', fontWeight:600 }}>TOTALS ({totals.count} parts)</td>
+                  <td colSpan={ebayMode!=='off'?10:9} style={{ padding:'6px 12px', fontSize:11, color:'rgba(255,255,255,0.5)', fontWeight:600 }}>TOTALS ({totals.count} parts)</td>
                   <td style={{ padding:'6px 8px', textAlign:'right', fontSize:12, fontWeight:700, color:'#93c5fd' }}>${totals.list.toFixed(0)}</td>
                   <td style={{ padding:'6px 8px', textAlign:'right', fontSize:12, fontWeight:700, color:'#fca5a5' }}>${totals.cost.toFixed(0)}</td>
                   <td style={{ padding:'6px 8px', textAlign:'right', fontSize:12, fontWeight:700, color:totals.profit>=0?'#86efac':'#fca5a5' }}>${totals.profit.toFixed(0)}</td>
@@ -1491,8 +1520,10 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
               </tfoot>
             </table>
           </div>
+          {ebayMode!=='off' && <EbayActions storeId={storeId} selectedParts={parts.filter(p=>sel.has(p.id))} onDone={refetch} onClear={()=>setSel(new Set())} />}
         </div>
       )}
+      {previewPart && <ListingPreview storeId={storeId} part={previewPart} onClose={()=>setPreviewPart(null)} />}
     </div>
   )
 }
