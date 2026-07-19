@@ -1459,6 +1459,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     { id: 'descriptions', label: '📝 Descriptions' },
     { id: 'ebay', label: '🛒 eBay Sync' },
     { id: 'shipping', label: '📦 Shipping' },
+    { id: 'costs', label: '💰 Costs' },
     { id: 'warehouse', label: '🗺️ Warehouse' },
     { id: 'team', label: '👥 User Access' },
     { id: 'activity', label: '📋 Activity' },
@@ -2124,33 +2125,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
               ))}
             </div>
           </Section>
-          <Section title="Marketing Images">
-            <div style={{ fontSize: 13, color: C.muted, marginBottom: 12, lineHeight: 1.5 }}>
-              Standard images added to the end of every eBay listing (e.g. store info, warranty, shipping). They're appended after the part and car photos, up to eBay's 24-image limit.
-            </div>
-            <input ref={mktFileRef} type="file" accept="image/*" multiple onChange={uploadMarketing} style={{ display: 'none' }} />
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-              {marketingImages.map(url => (
-                <div key={url} style={{ position: 'relative', width: 90, height: 90, borderRadius: 8, overflow: 'hidden', border: `1px solid ${C.border}` }}>
-                  <img src={url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  <button onClick={() => removeMarketing(url)} style={{ position: 'absolute', top: 3, right: 3, background: 'rgba(0,0,0,0.6)', color: '#fff', border: 'none', borderRadius: '50%', width: 22, height: 22, fontSize: 13, cursor: 'pointer', padding: 0, lineHeight: '22px' }}>×</button>
-                </div>
-              ))}
-              <button onClick={() => mktFileRef.current?.click()} disabled={mktUploading}
-                style={{ width: 90, height: 90, borderRadius: 8, border: `2px dashed ${C.border}`, background: '#fafaf9', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, fontSize: 12, color: C.muted, fontWeight: 600 }}>
-                <span style={{ fontSize: 22 }}>{mktUploading ? '⏳' : '＋'}</span>{mktUploading ? '' : 'Add'}
-              </button>
-            </div>
-          </Section>
-          <div style={S.card}>
-            <div style={{ fontSize: 12, color: C.muted }}>PartVault Admin v{APP_VERSION}</div>
-          </div>
-        </>
-      )}
 
-      {/* DESCRIPTIONS TAB */}
-      {tab === 'descriptions' && !loading && (
-        <>
           <Section title="📱 Mobile capture AI">
             <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
               What the AI fills in automatically when a part is captured on the phone. The part name is always pre-filled. Everything else (description, item specifics, fitment) is done here in admin.
@@ -2183,7 +2158,15 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
             {amSaved && <div style={{ fontSize: 12, color: C.green, marginTop: 8 }}>✓ saved</div>}
             <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>Credits come from your monthly plan allowance, then top-up packs. Premium uses your allowance ~4× faster than Economy.</div>
           </Section>
+          <div style={S.card}>
+            <div style={{ fontSize: 12, color: C.muted }}>PartVault Admin v{APP_VERSION}</div>
+          </div>
+        </>
+      )}
 
+      {/* COSTS TAB */}
+      {tab === 'costs' && !loading && (
+        <>
           <Section title="💰 Costing">
             <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
               Used to estimate each part's cost basis: the car's purchase price spread across its parts (by sale price), plus removal labour (AI-estimated minutes × your rate), plus an admin cost.
@@ -2274,7 +2257,12 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
               <div style={{ fontSize: 12, color: C.muted, marginTop: 12 }}>The heaviest tier is used for anything over the top weight. Estimated postage = matching carrier rate + handling fee.</div>
             </div>
           </Section>
+        </>
+      )}
 
+      {/* STOCK LABELS — shown under Warehouse (physical inventory) */}
+      {tab === 'warehouse' && !loading && (
+        <>
           <Section title="🏷️ Stock labels">
             <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
               Printable shelf labels with a scannable QR (links to the part) plus SKU and details. Set the size to match your
@@ -2329,7 +2317,12 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
               <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>The field app prints a stock label on "Done" per this setting (its "don't ask again" toggle maps here).</div>
             </div>
           </Section>
+        </>
+      )}
 
+      {/* COSTS TAB (continued) */}
+      {tab === 'costs' && !loading && (
+        <>
           <Section title="📦 Aged stock">
             <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
               Controls the Dashboard aged-stock report: when stock counts as "aged", and the age brackets the chart groups unsold stock into.
@@ -2362,7 +2355,12 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
             </div>
             <div style={{ fontSize: 12, color: C.muted, marginTop: 12 }}>Anything older than the last bracket falls into an "older" group. Defaults: 90 · 180 · 365 · 730 · 1065 days.</div>
           </Section>
+        </>
+      )}
 
+      {/* DESCRIPTIONS TAB */}
+      {tab === 'descriptions' && !loading && (
+        <>
           <Section title="🤖 AI Description Template">
             <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
               Configure what information the AI includes when generating part descriptions.
@@ -2451,6 +2449,25 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
             </p>
             <div style={{ background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 8, padding: 16, fontSize: 13, lineHeight: 1.8, whiteSpace: 'pre-wrap', color: C.text, fontFamily: 'inherit', maxHeight: 400, overflowY: 'auto' }}>
               {previewDescription()}
+            </div>
+          </Section>
+
+          <Section title="🖼️ Marketing Images">
+            <div style={{ fontSize: 13, color: C.muted, marginBottom: 12, lineHeight: 1.5 }}>
+              Standard images added to the end of every eBay listing (e.g. store info, warranty, shipping). They're appended after the part and car photos, up to eBay's 24-image limit.
+            </div>
+            <input ref={mktFileRef} type="file" accept="image/*" multiple onChange={uploadMarketing} style={{ display: 'none' }} />
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+              {marketingImages.map(url => (
+                <div key={url} style={{ position: 'relative', width: 90, height: 90, borderRadius: 8, overflow: 'hidden', border: `1px solid ${C.border}` }}>
+                  <img src={url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  <button onClick={() => removeMarketing(url)} style={{ position: 'absolute', top: 3, right: 3, background: 'rgba(0,0,0,0.6)', color: '#fff', border: 'none', borderRadius: '50%', width: 22, height: 22, fontSize: 13, cursor: 'pointer', padding: 0, lineHeight: '22px' }}>×</button>
+                </div>
+              ))}
+              <button onClick={() => mktFileRef.current?.click()} disabled={mktUploading}
+                style={{ width: 90, height: 90, borderRadius: 8, border: `2px dashed ${C.border}`, background: '#fafaf9', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, fontSize: 12, color: C.muted, fontWeight: 600 }}>
+                <span style={{ fontSize: 22 }}>{mktUploading ? '⏳' : '＋'}</span>{mktUploading ? '' : 'Add'}
+              </button>
             </div>
           </Section>
         </>
