@@ -11,9 +11,7 @@ const COLS = [
   { key: 'make',       label: 'Make',      type: 'text',   w: 110 },
   { key: 'model',      label: 'Model',     type: 'text',   w: 120 },
   { key: 'year',       label: 'Year',      type: 'text',   w: 90 },
-  { key: 'category',   label: 'Category',  type: 'select', w: 180, options: CATEGORY_NAMES },
-  { key: 'subcategory',label: 'Subcategory', type: 'subcat', w: 170 },
-  { key: 'ebay_category', label: 'eBay Category', type: 'ebaycat', w: 240 },
+  { key: 'category',   label: 'Category',  type: 'category', w: 210 },
   { key: 'condition',  label: 'Condition', type: 'select', w: 150, options: PART_CONDITIONS },
   { key: 'list_price', label: 'Price',     type: 'number', w: 90 },
   { key: 'market_price', label: 'Market',  type: 'readonly', w: 90 },
@@ -24,7 +22,7 @@ const COLS = [
   { key: 'notes',      label: 'Notes',     type: 'text',   w: 220 },
 ]
 const NUMERIC = new Set(['list_price', 'weight'])
-const DEFAULT_VISIBLE = ['title', 'make', 'model', 'year', 'category', 'subcategory', 'ebay_category', 'condition', 'list_price', 'status']
+const DEFAULT_VISIBLE = ['title', 'make', 'model', 'year', 'category', 'condition', 'list_price', 'status']
 const PAGE = 15
 
 // Normalise a useParts (camelCase) part into the flat row this grid edits.
@@ -61,6 +59,19 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
   const [marketBusy, setMarketBusy] = useState(false)
   const [underPct, setUnderPct] = useState(0)   // undercut the market median by this %
   const [msg, setMsg] = useState('')
+
+  // Hover-to-reveal: after ~2s over a cell, show its full content in a popup.
+  const [tip, setTip] = useState(null)          // { x, y, text }
+  const tipPos = useRef({ x: 0, y: 0 })
+  const tipTimer = useRef(null)
+  const startTip = (text) => {
+    clearTimeout(tipTimer.current)
+    const t = String(text ?? '').trim()
+    if (!t) { setTip(null); return }
+    tipTimer.current = setTimeout(() => setTip({ ...tipPos.current, text: t }), 2000)
+  }
+  const endTip = () => { clearTimeout(tipTimer.current); setTip(null) }
+  useEffect(() => () => clearTimeout(tipTimer.current), [])
 
   const makes = useMemo(() => [...new Set(rows.map(r => r.make).filter(Boolean))].sort(), [rows])
 
@@ -155,6 +166,12 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
     catch (e) { setMsg(e.message) }
     setCatBusy(false)
   }
+  // Open the combined Category editor (PartVault category + sub-category + eBay
+  // category) for one row, seeding the eBay search with a sensible query.
+  const openCatEditor = (row) => {
+    setCatRow(row.id); setCatSugs([]); setCatBusy(false)
+    setCatQuery(row.title || `${row.make || ''} ${row.subcategory || row.category || ''}`.trim())
+  }
   const applyEbayCat = async (rowId, sug) => {
     setCatBusy(true)
     try {
@@ -221,20 +238,18 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
         {col.options.map(o => <option key={o} value={o}>{col.labels ? col.labels[o] || o : o}</option>)}
       </select>
     }
-    if (col.type === 'subcat') {
+    if (col.type === 'category') {
       const cat = cellVal(row, 'category')
-      const opts = EBAY_AU_CATEGORIES[cat] || []
-      const list = val && !opts.includes(val) ? [val, ...opts] : opts
-      return <select value={val ?? ''} onChange={e => setCell(row.id, key, e.target.value)} style={{ ...inp, background: bg, cursor: 'pointer' }}>
-        <option value="">—</option>
-        {list.map(o => <option key={o} value={o}>{o}</option>)}
-      </select>
-    }
-    if (col.type === 'ebaycat') {
-      const cur = row.ebayOverrides?.categoryName || row.ebayOverrides?.categoryId || ''
-      return <button onClick={() => { setCatRow(row.id); setCatSugs([]); setCatQuery(row.title || `${row.make || ''} ${row.subcategory || row.category || ''}`.trim()) }}
-        title="Set the eBay category — search the full category tree" style={{ ...inp, textAlign: 'left', cursor: 'pointer', color: cur ? C.text : C.accent, background: bg }}>
-        {cur || 'Set eBay category…'}
+      const sub = cellVal(row, 'subcategory')
+      const ebayCat = row.ebayOverrides?.categoryName || row.ebayOverrides?.categoryId || ''
+      const dirty = editedCell(row.id, 'category') || editedCell(row.id, 'subcategory')
+      const label = sub || cat
+      return <button onClick={() => openCatEditor(row)} title="Set category, sub-category and eBay category"
+        style={{ ...inp, textAlign: 'left', cursor: 'pointer', color: label ? C.text : C.accent, background: dirty ? '#fff7ed' : bg, lineHeight: 1.3 }}>
+        <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {label || 'Set category…'}{sub && cat ? <span style={{ color: C.muted, fontWeight: 400 }}> · {cat}</span> : null}
+        </span>
+        {ebayCat && <span style={{ display: 'block', fontSize: 10, color: C.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>eBay: {ebayCat}</span>}
       </button>
     }
     return <input type={col.type === 'number' ? 'number' : 'text'} value={val ?? ''} onChange={e => setCell(row.id, key, e.target.value)} style={{ ...inp, background: bg }} />
@@ -250,6 +265,19 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
       </select>
     }
     return <input value={val ?? ''} onChange={e => setCell(row.id, key, e.target.value)} style={{ ...inp, background: bg }} />
+  }
+
+  // Full text of a cell, for the hover-reveal popup.
+  const cellText = (row, col) => {
+    if (col.type === 'category') {
+      const cat = cellVal(row, 'category'), sub = cellVal(row, 'subcategory')
+      const ebayCat = row.ebayOverrides?.categoryName || row.ebayOverrides?.categoryId || ''
+      return [sub || cat, (cat && sub) ? `(${cat})` : '', ebayCat ? `eBay: ${ebayCat}` : ''].filter(Boolean).join('  ·  ')
+    }
+    const v = cellVal(row, col.key)
+    if (col.type === 'readonly') return (v == null || v === '') ? '' : fmt(v)
+    if (col.type === 'select' && col.labels) return col.labels[v] || v
+    return v
   }
 
   const th = { textAlign: 'left', padding: '7px 8px', fontSize: 11, color: C.muted, fontWeight: 700, background: C.panel, borderBottom: `1px solid ${C.border}`, whiteSpace: 'nowrap', position: 'sticky', top: 0 }
@@ -310,8 +338,10 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
         </button>
       </div>
 
-      {/* Spreadsheet */}
-      <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: 'auto', background: '#fff' }}>
+      {/* Spreadsheet — fixed height so the horizontal scrollbar stays in view and
+          the rows scroll vertically inside (sticky header stays put). */}
+      <div onMouseMove={e => { tipPos.current = { x: e.clientX, y: e.clientY } }}
+        style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflowX: 'scroll', overflowY: 'auto', maxHeight: '56vh', background: '#fff' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr>
@@ -325,12 +355,13 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
               <tr><td colSpan={1 + shownCols.length + shownSpecs.length} style={{ padding: 20, color: C.muted }}>No parts match.</td></tr>
             ) : pageRows.map(row => (
               <tr key={row.id}>
-                <td style={{ ...cellTd, padding: '6px 8px', maxWidth: 260 }}>
+                <td style={{ ...cellTd, padding: '6px 8px', maxWidth: 260 }}
+                  onMouseEnter={() => startTip(`${row.title || 'Untitled'} · ${row.sku || 'no SKU'}`)} onMouseLeave={endTip}>
                   <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 500 }}>{row.title || 'Untitled'}</div>
                   <div style={{ fontSize: 11, color: C.muted, fontFamily: 'monospace' }}>{row.sku || 'no SKU'}</div>
                 </td>
-                {shownCols.map(c => <td key={c.key} style={cellTd}>{renderCell(row, c)}</td>)}
-                {shownSpecs.map(s => <td key={s.name} style={cellTd}>{renderSpec(row, s)}</td>)}
+                {shownCols.map(c => <td key={c.key} style={cellTd} onMouseEnter={() => startTip(cellText(row, c))} onMouseLeave={endTip}>{renderCell(row, c)}</td>)}
+                {shownSpecs.map(s => <td key={s.name} style={cellTd} onMouseEnter={() => startTip(cellVal(row, `spec:${s.name}`))} onMouseLeave={endTip}>{renderSpec(row, s)}</td>)}
               </tr>
             ))}
           </tbody>
@@ -345,32 +376,73 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
       </div>
       {editCount > 0 && <div style={{ textAlign: 'center', fontSize: 12, color: C.accent, marginTop: 6 }}>Edits on other pages are kept until you Save.</div>}
 
-      {/* eBay category picker — search the full eBay category tree for one part. */}
-      {catRow && (
+      {/* Category editor — PartVault category + sub-category (staged) and the eBay
+          category (applies immediately), all in one popup off the Category cell. */}
+      {catRow && (() => {
+        const cr = rows.find(r => r.id === catRow)
+        const curCat = cr ? cellVal(cr, 'category') : ''
+        const curSub = cr ? cellVal(cr, 'subcategory') : ''
+        const subOpts = EBAY_AU_CATEGORIES[curCat] || []
+        const subList = curSub && !subOpts.includes(curSub) ? [curSub, ...subOpts] : subOpts
+        const curEbay = cr?.ebayOverrides?.categoryName || cr?.ebayOverrides?.categoryId || ''
+        const lbl = { fontSize: 11, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.4px', display: 'block', marginBottom: 4 }
+        const fld = { ...S.select, width: '100%', marginBottom: 0 }
+        return (
         <div onClick={() => !catBusy && setCatRow(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: '100%', maxWidth: 560, maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: '100%', maxWidth: 560, maxHeight: '86vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
             <div style={{ padding: '16px 20px', borderBottom: `1px solid ${C.border}` }}>
-              <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>Set eBay category</div>
-              <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>Search eBay's live category tree and pick the exact category (full hierarchy shown).</div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>Category</div>
+              <div style={{ fontSize: 12, color: C.muted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cr?.title || 'This part'}</div>
             </div>
             <div style={{ padding: 16, overflowY: 'auto' }}>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-                <input autoFocus value={catQuery} onChange={e => setCatQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && searchEbayCats()} placeholder="e.g. headlight, tail light, alternator…" style={{ ...S.input, marginBottom: 0, flex: 1 }} />
-                <button onClick={searchEbayCats} disabled={catBusy} title="Search eBay categories" style={{ ...S.btn('primary'), padding: '9px 16px', opacity: catBusy ? 0.6 : 1 }}>{catBusy ? '…' : 'Search'}</button>
+              {/* PartVault category + sub-category — staged, saved with the grid */}
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ flex: '1 1 200px' }}>
+                  <label style={lbl}>Category</label>
+                  <select value={curCat ?? ''} onChange={e => { setCell(catRow, 'category', e.target.value); setCell(catRow, 'subcategory', '') }} style={fld}>
+                    <option value="">—</option>
+                    {CATEGORY_NAMES.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div style={{ flex: '1 1 200px' }}>
+                  <label style={lbl}>Sub-category</label>
+                  <select value={curSub ?? ''} onChange={e => setCell(catRow, 'subcategory', e.target.value)} disabled={!subList.length} style={{ ...fld, opacity: subList.length ? 1 : 0.5 }}>
+                    <option value="">—</option>
+                    {subList.map(o => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                </div>
               </div>
-              {catSugs.length === 0 ? <div style={{ fontSize: 12, color: C.muted, padding: '8px 2px' }}>Type a part type and Search to see matching eBay categories.</div> : (
-                catSugs.map((s, i) => (
-                  <button key={i} onClick={() => applyEbayCat(catRow, s)} disabled={catBusy} title="Use this eBay category"
-                    style={{ display: 'block', width: '100%', textAlign: 'left', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 8, padding: '9px 12px', marginBottom: 6, cursor: 'pointer', fontSize: 13 }}>
-                    {s.name} <span style={{ color: C.muted, fontSize: 11 }}>· id {s.id}</span>
-                  </button>
-                ))
-              )}
+              <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>Category &amp; sub-category are staged — they save when you click <strong>Save</strong> on the grid.</div>
+
+              {/* eBay category — search the live tree; applies immediately */}
+              <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 16, paddingTop: 16 }}>
+                <label style={lbl}>eBay category{curEbay && <span style={{ textTransform: 'none', fontWeight: 400, color: C.text }}> · now: {curEbay}</span>}</label>
+                <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                  <input autoFocus value={catQuery} onChange={e => setCatQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && searchEbayCats()} placeholder="e.g. headlight, tail light, alternator…" style={{ ...S.input, marginBottom: 0, flex: 1 }} />
+                  <button onClick={searchEbayCats} disabled={catBusy} title="Search eBay categories" style={{ ...S.btn('primary'), padding: '9px 16px', opacity: catBusy ? 0.6 : 1 }}>{catBusy ? '…' : 'Search'}</button>
+                </div>
+                {catSugs.length === 0 ? <div style={{ fontSize: 12, color: C.muted, padding: '2px 2px 4px' }}>Search eBay's live tree and pick the exact category (applies right away).</div> : (
+                  catSugs.map((s, i) => (
+                    <button key={i} onClick={() => applyEbayCat(catRow, s)} disabled={catBusy} title="Use this eBay category"
+                      style={{ display: 'block', width: '100%', textAlign: 'left', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 8, padding: '9px 12px', marginBottom: 6, cursor: 'pointer', fontSize: 13 }}>
+                      {s.name} <span style={{ color: C.muted, fontSize: 11 }}>· id {s.id}</span>
+                    </button>
+                  ))
+                )}
+              </div>
             </div>
             <div style={{ padding: '12px 20px', borderTop: `1px solid ${C.border}`, display: 'flex', justifyContent: 'flex-end' }}>
-              <button onClick={() => setCatRow(null)} disabled={catBusy} title="Cancel" style={{ ...S.btn('secondary'), padding: '9px 16px' }}>Cancel</button>
+              <button onClick={() => setCatRow(null)} disabled={catBusy} title="Close" style={{ ...S.btn('secondary'), padding: '9px 16px' }}>Done</button>
             </div>
           </div>
+        </div>
+        )
+      })()}
+
+      {/* Hover-reveal popup — full cell content after a short delay. */}
+      {tip && (
+        <div style={{ position: 'fixed', left: Math.min(tip.x + 14, (typeof window !== 'undefined' ? window.innerWidth : 1200) - 320), top: tip.y + 18, zIndex: 1200, maxWidth: 300, background: '#1c1c1e', color: '#fff', fontSize: 12, lineHeight: 1.5, padding: '8px 11px', borderRadius: 8, boxShadow: '0 8px 30px rgba(0,0,0,0.35)', pointerEvents: 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          {tip.text}
         </div>
       )}
     </div>
