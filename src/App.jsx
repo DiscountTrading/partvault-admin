@@ -19,6 +19,14 @@ import FloatingHelp from './components/FloatingHelp'
 import JoinStore from './components/JoinStore'
 import Analytics from './components/Analytics'
 import Sales from './components/Sales'
+import TableSizeControl from './components/TableSizeControl'
+import { applyTableZoom, getTableZoom, injectTableScrollStyles } from './lib/tableZoom'
+
+// Apply the saved table text-size as early as possible so tables render at the
+// chosen size on first paint (before any component mounts), and inject the
+// always-visible scrollbar styling used by every table's scroll container.
+applyTableZoom(getTableZoom())
+injectTableScrollStyles()
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊' },
@@ -314,6 +322,7 @@ export default function App() {
         <div style={{ marginLeft: 'auto', padding: '0 18px', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: 'rgba(255,255,255,0.55)' }}>
           {loading ? <span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>⏳</span> : null}
           <AssessBadge assess={assess} />
+          <TableSizeControl />
           v{APP_VERSION} · {totalCount} parts
           <SyncBadge status={syncStatus} />
           <a href="https://app.partvault.app" target="partvault-app" style={{ background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.9)', borderRadius: 6, padding: '6px 12px', cursor: 'pointer', fontSize: 13, fontWeight: 600, textDecoration: 'none' }}>📱 Field App ↗</a>

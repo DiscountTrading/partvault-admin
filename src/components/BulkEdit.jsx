@@ -343,9 +343,9 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
 
       {/* Spreadsheet — fixed height so the horizontal scrollbar stays in view and
           the rows scroll vertically inside (sticky header stays put). */}
-      <div ref={gridRef} onMouseMove={e => { tipPos.current = { x: e.clientX, y: e.clientY } }}
+      <div ref={gridRef} className="pv-scroll" onMouseMove={e => { tipPos.current = { x: e.clientX, y: e.clientY } }}
         style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflowX: 'scroll', overflowY: 'auto', maxHeight: gridH || '56vh', background: '#fff' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, zoom: 'var(--table-zoom, 1)' }}>
           <thead>
             <tr>
               <th style={{ ...th, minWidth: 220, borderRight: `1px solid ${C.border}` }}>Part</th>

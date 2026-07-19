@@ -1472,17 +1472,22 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
               <button disabled={page===pages-1} onClick={()=>setPage(p=>p+1)} style={{ ...S.btn('secondary'), padding:'4px 12px', fontSize:12 }}>Next →</button>
             </div>
           )}
-          <div ref={tableRef} style={{ overflowX:'scroll', overflowY:'auto', maxHeight: tableH ? tableH - (ebayMode!=='off'?72:0) : '60vh', borderRadius:6, border:`1px solid ${C.border}` }}>
-            <table style={{ borderCollapse:'collapse', fontSize:13, minWidth:1000, width:'100%' }}>
+          <div ref={tableRef} className="pv-scroll" style={{ overflowX:'scroll', overflowY:'auto', maxHeight: tableH ? tableH - (ebayMode!=='off'?72:0) : '60vh', borderRadius:6, border:`1px solid ${C.border}` }}>
+            <table style={{ borderCollapse:'collapse', fontSize:13, minWidth:1000, width:'100%', zoom:'var(--table-zoom, 1)' }}>
               <thead style={{ position:'sticky', top:0, zIndex:10 }}>
                 <tr style={{ background:'#f5f4f0' }}>
-                  {ebayMode!=='off' && (
-                    <th style={{ padding:'8px 8px', textAlign:'center', background:'#f5f4f0', borderBottom:`2px solid ${C.accent}`, borderRight:`1px solid ${C.border}`, width:34 }}>
-                      <input type="checkbox" checked={paged.length>0 && paged.every(p=>sel.has(p.id))} onChange={()=>setSel(s=>{ const n=new Set(s); const all=paged.every(p=>n.has(p.id)); paged.forEach(p=>all?n.delete(p.id):n.add(p.id)); return n })} style={{ width:15, height:15, cursor:'pointer' }} />
+                  {/* Fixed column set — identical across By-Part / List / De-list; only
+                      the eBay select checkbox appears (inside the Edit column) so the
+                      layout never shifts when you switch modes. */}
+                  {[['Edit',150],['SKU',80],['Title',260],['Make',80],['Model',90],['Year',65],['Category',150],['Status',85],['AI',40],['List$',72],['Cost',72],['Profit',72],['Del',50]].map(([h,w])=>(
+                    <th key={h} style={{ padding:'8px 8px', textAlign:'left', fontSize:10, fontWeight:700, textTransform:'uppercase', color:C.muted, background:'#f5f4f0', borderBottom:`2px solid ${C.accent}`, borderRight:`1px solid ${C.border}`, minWidth:w, whiteSpace:'nowrap' }}>
+                      {h==='Edit' && ebayMode!=='off'
+                        ? <span style={{ display:'inline-flex', alignItems:'center', gap:6 }}>
+                            <input type="checkbox" title="Select all on this page" checked={paged.length>0 && paged.every(p=>sel.has(p.id))} onChange={()=>setSel(s=>{ const n=new Set(s); const all=paged.every(p=>n.has(p.id)); paged.forEach(p=>all?n.delete(p.id):n.add(p.id)); return n })} style={{ width:15, height:15, cursor:'pointer' }} />
+                            {h}
+                          </span>
+                        : h}
                     </th>
-                  )}
-                  {[['Edit',124],['SKU',80],['Title',260],['Make',80],['Model',90],['Year',65],['Category',150],['Status',85],['AI',40],['List$',72],['Cost',72],['Profit',72],['Del',50]].map(([h,w])=>(
-                    <th key={h} style={{ padding:'8px 8px', textAlign:'left', fontSize:10, fontWeight:700, textTransform:'uppercase', color:C.muted, background:'#f5f4f0', borderBottom:`2px solid ${C.accent}`, borderRight:`1px solid ${C.border}`, minWidth:w, whiteSpace:'nowrap' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -1493,12 +1498,8 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                   const td=(v,col,bold)=><td style={{ padding:'4px 8px', fontSize:12, color:col||C.text, fontWeight:bold?700:400, borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`, overflow:'hidden', whiteSpace:'nowrap', textOverflow:'ellipsis', maxWidth:260 }} title={String(v||'')}>{v||<span style={{color:C.border}}>—</span>}</td>
                   return (
                     <tr key={p.id} style={{ background: ebayMode!=='off' && sel.has(p.id) ? '#eef2ff' : bg }}>
-                      {ebayMode!=='off' && (
-                        <td style={{ padding:'4px 6px', textAlign:'center', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}` }}>
-                          <input type="checkbox" checked={sel.has(p.id)} onChange={()=>toggleSel(p.id)} style={{ width:15, height:15, cursor:'pointer' }} />
-                        </td>
-                      )}
                       <td style={{ padding:'4px 6px', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`, whiteSpace:'nowrap' }}>
+                        {ebayMode!=='off' && <input type="checkbox" checked={sel.has(p.id)} onChange={()=>toggleSel(p.id)} style={{ width:15, height:15, cursor:'pointer', marginRight:6, verticalAlign:'middle' }} />}
                         <button onClick={()=>{setEditingPart(p);setShowForm(true)}} title="Edit this part's details" style={{ fontSize:11, padding:'2px 8px', background:'#eff6ff', color:C.blue, border:`1px solid ${C.blue}44`, borderRadius:4, cursor:'pointer', marginRight:4 }}>Edit</button>
                         <button onClick={()=>setPreviewPart(p)} title="Preview the eBay listing (category, specifics, fitment) — and edit it" style={{ fontSize:11, padding:'2px 6px', background:'#fff', color:C.text, border:`1px solid ${C.border}`, borderRadius:4, cursor:'pointer', marginRight:4 }}>👁</button>
                         {p.sku && <button onClick={()=>printLabels(p, labels)} title="Print stock label" style={{ fontSize:11, padding:'2px 6px', background:'#fff', color:C.text, border:`1px solid ${C.border}`, borderRadius:4, cursor:'pointer' }}>🏷️</button>}
@@ -1522,12 +1523,12 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                     </tr>
                   )
                 })}
-                {!paged.length&&<tr><td colSpan={ebayMode!=='off'?14:13} style={{ textAlign:'center', padding:40, color:C.muted }}>No parts match your filters.</td></tr>}
+                {!paged.length&&<tr><td colSpan={13} style={{ textAlign:'center', padding:40, color:C.muted }}>No parts match your filters.</td></tr>}
               </tbody>
               <tfoot>
                 {(() => { const ftd = { background:'#1c1c1e', position:'sticky', bottom:0, zIndex:11 }; return (
                 <tr>
-                  <td colSpan={ebayMode!=='off'?10:9} style={{ ...ftd, padding:'6px 12px', fontSize:11, color:'rgba(255,255,255,0.5)', fontWeight:600 }}>TOTALS ({totals.count} parts)</td>
+                  <td colSpan={9} style={{ ...ftd, padding:'6px 12px', fontSize:11, color:'rgba(255,255,255,0.5)', fontWeight:600 }}>TOTALS ({totals.count} parts)</td>
                   <td style={{ ...ftd, padding:'6px 8px', textAlign:'right', fontSize:12, fontWeight:700, color:'#93c5fd' }}>${totals.list.toFixed(0)}</td>
                   <td style={{ ...ftd, padding:'6px 8px', textAlign:'right', fontSize:12, fontWeight:700, color:'#fca5a5' }}>${totals.cost.toFixed(0)}</td>
                   <td style={{ ...ftd, padding:'6px 8px', textAlign:'right', fontSize:12, fontWeight:700, color:totals.profit>=0?'#86efac':'#fca5a5' }}>${totals.profit.toFixed(0)}</td>

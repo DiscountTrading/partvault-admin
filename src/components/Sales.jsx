@@ -795,8 +795,8 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
           style={{ ...S.btn('secondary'), padding: '7px 12px', fontSize: 12, opacity: rows.length ? 1 : 0.5 }}>⤓ Export CSV</button>
       </div>
 
-      <div ref={tableRef} style={{ overflowX: 'scroll', overflowY: 'auto', maxHeight: tableH || '60vh', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>
-        <table style={{ width: '100%', minWidth: 1000, borderCollapse: 'collapse', fontSize: 13 }}>
+      <div ref={tableRef} className="pv-scroll" style={{ overflowX: 'scroll', overflowY: 'auto', maxHeight: tableH || '60vh', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>
+        <table style={{ width: '100%', minWidth: 1000, borderCollapse: 'collapse', fontSize: 13, zoom: 'var(--table-zoom, 1)' }}>
           <thead>
             <tr style={{ borderBottom: `2px solid ${C.border}` }}>
               <th style={{ ...th, width: 34 }} title="Expand a row for its fulfilment actions"></th>
