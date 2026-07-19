@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { sb } from '../lib/supabase'
 import { C, S, fmt } from '../lib/constants'
+import useFillHeight from '../hooks/useFillHeight'
 
 const DEAD_DAYS = 90
 const DEAD_MARGIN = 10
@@ -59,6 +60,7 @@ function Card({ label, value, sub }) {
 }
 
 export default function Insights({ storeId, initial }) {
+  const [tableRef, tableH] = useFillHeight(52)  // fill to viewport; the "showing N" note sits below
   const [allRows, setAllRows] = useState([])
   const [loading, setLoading] = useState(true)
 
@@ -362,13 +364,13 @@ export default function Insights({ storeId, initial }) {
       </div>
 
       {loading ? <div style={{ color: C.muted, padding: 20 }}>Loading…</div> : (
-        <div style={{ overflowX: 'auto', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>
-          <table style={{ width: '100%', minWidth: 1100, borderCollapse: 'collapse', fontSize: 13, tableLayout: 'fixed' }}>
+        <div ref={tableRef} className="pv-scroll" style={{ overflowX: 'scroll', overflowY: 'auto', maxHeight: tableH || '60vh', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>
+          <table style={{ width: '100%', minWidth: 1100, borderCollapse: 'collapse', fontSize: 13, tableLayout: 'fixed', zoom: 'var(--table-zoom, 1)' }}>
             <colgroup>{COLS.map(c => <col key={c.key} style={{ width: c.w }} />)}</colgroup>
             <thead>
               <tr style={{ borderBottom: `2px solid ${C.border}` }}>
                 {COLS.map(col => (
-                  <th key={col.key} style={{ textAlign: 'left', padding: '9px 12px', color: C.muted, fontWeight: 700, fontSize: 11, whiteSpace: 'nowrap', position: 'relative' }}>
+                  <th key={col.key} style={{ textAlign: 'left', padding: '9px 12px', color: C.muted, fontWeight: 700, fontSize: 11, whiteSpace: 'nowrap', position: 'sticky', top: 0, background: '#fff', zIndex: 6 }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
                       <span onClick={() => toggleSort(col.key)} style={{ cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', gap: 4, overflow: 'hidden' }}>
                         <span style={{ width: 9, flexShrink: 0, display: 'inline-block', fontSize: 10, color: sort.key === col.key ? C.text : '#cbd5e1' }}>

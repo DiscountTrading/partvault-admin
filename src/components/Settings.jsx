@@ -2934,6 +2934,29 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                 const nightlyTs = nightly?.updated_at ? new Date(nightly.updated_at).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null
                 const kindLbl = lastSync?.kind === 'manual' ? ' (manual)' : (lastSync?.kind === 'auto' || lastSync?.kind === 'nightly') ? ' (scheduled)' : lastSync?.kind === 'live' ? ' (live check)' : ''
                 const intervalLabel = Number(syncInterval) >= 24 ? 'once a day' : `every ${syncInterval}h`
+                // Next scheduled run: the cron fires at store-local hours that are
+                // multiples of the interval (anchored to local midnight).
+                const nextSync = (() => {
+                  const iv = Math.max(1, Number(syncInterval) || 24)
+                  const now = new Date()
+                  let h, m
+                  try {
+                    const parts = new Intl.DateTimeFormat('en-GB', { timeZone: timezone, hour12: false, hour: '2-digit', minute: '2-digit' }).formatToParts(now)
+                    h = +parts.find(p => p.type === 'hour').value
+                    m = +parts.find(p => p.type === 'minute').value
+                  } catch { h = now.getHours(); m = now.getMinutes() }
+                  const cur = h * 60 + m
+                  let slot = null
+                  for (let s = 0; s < 1440; s += iv * 60) { if (s > cur) { slot = s; break } }
+                  const tomorrow = slot == null
+                  if (tomorrow) slot = 0
+                  const deltaMin = tomorrow ? (1440 - cur) + slot : slot - cur
+                  const sh = Math.floor(slot / 60)
+                  const hh = sh % 12 === 0 ? 12 : sh % 12
+                  const ap = sh < 12 ? 'am' : 'pm'
+                  const dh = Math.floor(deltaMin / 60), dm = deltaMin % 60
+                  return { label: `${tomorrow ? 'tomorrow' : 'today'} ${hh}:00${ap}`, rel: dh ? `${dh}h ${dm}m` : `${dm}m` }
+                })()
                 return (
                   <div style={{ fontSize: 11, marginBottom: 8, padding: '6px 10px', borderRadius: 6,
                     background: !lastSync ? '#f9f8f5' : ok ? '#ecfdf5' : '#fef2f2',
@@ -2944,6 +2967,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                         ? <>{ok ? '✓' : '⚠'} <strong>Last sync:</strong> {lsTs}{kindLbl}{lastSync.summary ? ` · ${lastSync.summary}` : ''}</>
                         : <>🕐 <strong>Sync:</strong> no run yet — runs automatically {intervalLabel}</>}
                       {inProgress && <><br />⏳ Auto-sync in progress · {nightly.phase}{nightly.detail ? ` · ${nightly.detail}` : ''} (as of {nightlyTs})</>}
+                      {!inProgress && ebayConnected && <><br />🕒 <strong>Next scheduled:</strong> {nextSync.label} · in {nextSync.rel}</>}
                     </span>
                     <button onClick={fetchNightly} style={{ ...S.btn('secondary'), padding: '3px 10px', fontSize: 11 }}>↻</button>
                   </div>

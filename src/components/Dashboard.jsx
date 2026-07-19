@@ -133,24 +133,28 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, marginBottom:14 }}>
         <div style={{ ...S.card, padding:14 }}>
           <h2 style={{ ...S.h2, marginBottom:8 }}>Stock by Category</h2>
-          {catBreak.map(({cat,count})=>{
+          {catBreak.slice(0,8).map(({cat,count})=>{
             const drill = () => onDrill?.({ partIds: active.filter(p=>p.category===cat).map(p=>p.id), label:cat })
             return (
               <div key={cat} onClick={drill} title={`View ${count} ${cat} parts in Insights`}
-                style={{ display:'flex', justifyContent:'space-between', padding:'4px 0', borderBottom:`1px solid ${C.border}`, fontSize:13, cursor:'pointer' }}>
+                style={{ display:'flex', justifyContent:'space-between', padding:'2px 0', borderBottom:`1px solid ${C.border}`, fontSize:12.5, cursor:'pointer' }}>
                 <span>{cat}</span>
                 <span style={{ color:C.accent, fontWeight:700 }}>{count}</span>
               </div>
             )
           })}
           {!catBreak.length && <p style={{ color:C.muted, fontSize:12 }}>No parts yet.</p>}
-          {!!catBreak.length && <div style={{ fontSize:11, color:C.muted, marginTop:6 }}>Click a category to see those parts in Insights.</div>}
+          {catBreak.length>8 && <div style={{ fontSize:11, color:C.muted, marginTop:5, cursor:'pointer' }} onClick={()=>onDrill?.({ partIds: active.map(p=>p.id), label:'All parts' })}>+{catBreak.length-8} more · click to view all parts</div>}
+          {!!catBreak.length && catBreak.length<=8 && <div style={{ fontSize:11, color:C.muted, marginTop:5 }}>Click a category to see those parts in Insights.</div>}
         </div>
         <div style={{ ...S.card, padding:14 }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:10 }}>
             <h2 style={{ ...S.h2, margin:0 }}>Aged Stock</h2>
             <span style={{ fontSize:12, color:C.muted }}>{aged.length.toLocaleString()} items &gt;{agedThreshold}d · {fmt(agedValue)} listed</span>
           </div>
+          {/* Reserve the chart's height so it doesn't pop-in and shove the page
+              over one screen once the parts data loads. */}
+          <div style={{ minHeight: 132 }}>
           {!aged.length && <p style={{ color:C.muted, fontSize:12 }}>No stock aged over {agedThreshold} days.</p>}
           {aged.length>0 && ageBuckets.map((b,i)=>{
             // Older brackets shade from yellow → red so the tail stands out.
@@ -162,34 +166,34 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
             }
             return (
               <div key={b.label} onClick={b.count?drill:undefined} title={b.count?`View ${b.count} items in ${b.label} in Insights`:undefined}
-                style={{ marginBottom:6, cursor:b.count?'pointer':'default' }}>
-                <div style={{ display:'flex', justifyContent:'space-between', fontSize:12, marginBottom:3 }}>
+                style={{ marginBottom:4, cursor:b.count?'pointer':'default' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', fontSize:11.5, marginBottom:2 }}>
                   <span style={{ color:C.text }}>{b.label}</span>
                   <span style={{ color:C.muted }}><strong style={{ color:C.text }}>{b.count.toLocaleString()}</strong> · {fmt(b.value)}</span>
                 </div>
-                <div style={{ height:10, background:C.bg, borderRadius:5, overflow:'hidden' }}>
-                  <div style={{ width:`${(b.count/maxBucket)*100}%`, height:'100%', background:col, borderRadius:5, minWidth:b.count?4:0 }} />
+                <div style={{ height:7, background:C.bg, borderRadius:4, overflow:'hidden' }}>
+                  <div style={{ width:`${(b.count/maxBucket)*100}%`, height:'100%', background:col, borderRadius:4, minWidth:b.count?4:0 }} />
                 </div>
               </div>
             )
           })}
-          {aged.length>0 && <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>Click a band to see those parts in Insights.</div>}
-          <div style={{ marginTop:10, borderTop:`1px solid ${C.border}`, paddingTop:10, display:'flex', gap:20, flexWrap:'wrap' }}>
+          </div>
+          <div style={{ marginTop:8, borderTop:`1px solid ${C.border}`, paddingTop:8, display:'flex', gap:20, flexWrap:'wrap' }}>
             <div>
               <div style={{ fontSize:10, color:C.muted, marginBottom:2 }}>INVENTORY VALUE (at cost)</div>
-              <div style={{ fontSize:18, fontWeight:700, color:C.blue }}>{fmt(stockVal)}</div>
+              <div style={{ fontSize:15, fontWeight:700, color:C.blue }}>{fmt(stockVal)}</div>
             </div>
             <div>
               <div style={{ fontSize:10, color:C.muted, marginBottom:2 }}>SHIPPING INCOME</div>
-              <div style={{ fontSize:18, fontWeight:700, color:C.green }}>{fmt(shipInc)}</div>
+              <div style={{ fontSize:15, fontWeight:700, color:C.green }}>{fmt(shipInc)}</div>
             </div>
             <div>
               <div style={{ fontSize:10, color:C.muted, marginBottom:2 }}>SHIPPING COST</div>
-              <div style={{ fontSize:18, fontWeight:700, color:C.yellow }}>{fmt(shipCost)}</div>
+              <div style={{ fontSize:15, fontWeight:700, color:C.yellow }}>{fmt(shipCost)}</div>
             </div>
             <div>
               <div style={{ fontSize:10, color:C.muted, marginBottom:2 }}>NET SHIPPING</div>
-              <div style={{ fontSize:18, fontWeight:700, color: netShip>=0?C.green:C.red }}>{fmt(netShip)}</div>
+              <div style={{ fontSize:15, fontWeight:700, color: netShip>=0?C.green:C.red }}>{fmt(netShip)}</div>
             </div>
           </div>
         </div>

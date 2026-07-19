@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback } from 'react'
 import { C, S, fmt, totalCost, estimateCostBasis, partEffectiveCost, storageCostFor, storageConfigured } from '../lib/constants'
 import { parseVehicle } from '../lib/vehicles'
+import useFillHeight from '../hooks/useFillHeight'
 
 // ============================================================================
 // Vehicle analytics — which donor cars and which makes/models actually make
@@ -85,6 +86,7 @@ const withScores = (rows) => {
 
 // `level` ('models' | 'cars') is driven by the Analytics pivot in the parent.
 export default function Vehicles({ parts = [], cars = [], sales = [], costing = {}, level = 'models' }) {
+  const [tableRef, tableH] = useFillHeight(64)  // fill to viewport; the "showing N" note sits below
   const [carSort, setCarSort] = useState({ key: 'score', dir: 'desc' })
   const [modelSort, setModelSort] = useState({ key: 'score', dir: 'desc' })
   const [query, setQuery] = useState('')
@@ -389,14 +391,14 @@ export default function Vehicles({ parts = [], cars = [], sales = [], costing = 
           style={{ ...S.input, marginBottom: 0, padding: '7px 12px', width: 180 }} />
       </div>
 
-      <div style={{ overflowX: 'auto', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>
-        <table style={{ width: '100%', minWidth: 1000, borderCollapse: 'collapse', fontSize: 13, tableLayout: 'fixed' }}>
+      <div ref={tableRef} className="pv-scroll" style={{ overflowX: 'scroll', overflowY: 'auto', maxHeight: tableH || '60vh', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>
+        <table style={{ width: '100%', minWidth: 1000, borderCollapse: 'collapse', fontSize: 13, tableLayout: 'fixed', zoom: 'var(--table-zoom, 1)' }}>
           <colgroup>{cols.map(c => <col key={c.key} style={{ width: c.w }} />)}</colgroup>
           <thead>
             <tr style={{ borderBottom: `2px solid ${C.border}` }}>
               {cols.map(col => (
                 <th key={col.key} onClick={() => onSort(col.key)}
-                  style={{ textAlign: col.align, padding: '10px 12px', color: C.muted, fontWeight: 700, fontSize: 11, whiteSpace: 'nowrap', cursor: 'pointer', userSelect: 'none' }}>
+                  style={{ textAlign: col.align, padding: '10px 12px', color: C.muted, fontWeight: 700, fontSize: 11, whiteSpace: 'nowrap', cursor: 'pointer', userSelect: 'none', position: 'sticky', top: 0, background: '#fff', zIndex: 6 }}>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexDirection: col.align === 'right' ? 'row-reverse' : 'row' }}>
                     <span style={{ width: 9, fontSize: 10, color: sort.key === col.key ? C.text : '#cbd5e1' }}>
                       {sort.key === col.key ? (sort.dir === 'asc' ? '▲' : '▼') : '↕'}
