@@ -1,5 +1,6 @@
 import { useState, useMemo, Fragment } from 'react'
 import { C, S, fmt, partEffectiveCost, estimateCostBasis, storageCostFor, storageConfigured, FEE_COST_KEYS } from '../lib/constants'
+import useFillHeight from '../hooks/useFillHeight'
 import { printLabels } from '../lib/labels'
 import { hasGridLoc, gridLocShort } from '../lib/warehouse'
 import { getActiveMarketplace } from '../lib/marketplaces'
@@ -531,6 +532,7 @@ function SaleActions({ s, p, wf, setStage }) {
 
 
 export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, setStage = () => {} }) {
+  const [tableRef, tableH] = useFillHeight(80)  // sales table fills to viewport; note/pager sit below
   const [period, setPeriod] = useState(90)
   const [query, setQuery] = useState('')
   const [detail, setDetail] = useState(null) // sale whose cost breakdown is open
@@ -714,7 +716,7 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
 
   const PERIOD_TITLES = { 0: 'All time', 30: 'Last 30 days', 90: 'Last 90 days', 365: 'Last 12 months' }
   const periodTitle = period === 'custom' ? 'Selected range' : (PERIOD_TITLES[period] || `Last ${period} days`)
-  const th = { textAlign: 'left', padding: '9px 12px', color: C.muted, fontWeight: 700, fontSize: 11, whiteSpace: 'nowrap' }
+  const th = { textAlign: 'left', padding: '9px 12px', color: C.muted, fontWeight: 700, fontSize: 11, whiteSpace: 'nowrap', position: 'sticky', top: 0, background: '#fff', zIndex: 5 }
   const td = (align = 'left') => ({ textAlign: align, padding: '9px 12px', color: C.text, whiteSpace: 'nowrap' })
 
   return (
@@ -787,7 +789,7 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
         <Stat label="Profit" value={fmt(totals.net - totals.cogs)} sub={`${totals.matched}/${rows.length} cost-linked`} color={(totals.net - totals.cogs) >= 0 ? C.green : C.red} />
       </div>
 
-      <div style={{ overflowX: 'auto', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>
+      <div ref={tableRef} style={{ overflowX: 'scroll', overflowY: 'auto', maxHeight: tableH || '60vh', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>
         <table style={{ width: '100%', minWidth: 1000, borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr style={{ borderBottom: `2px solid ${C.border}` }}>

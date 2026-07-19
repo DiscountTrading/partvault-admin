@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { sb } from '../lib/supabase'
 import { C, S, fmt, CATEGORY_NAMES, EBAY_AU_CATEGORIES, PART_CONDITIONS, STATUS_LABELS } from '../lib/constants'
+import useFillHeight from '../hooks/useFillHeight'
 
 const EDGE_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import'
 const STATUS_OPTS = ['in_stock', 'listed', 'sold', 'scrapped', 'deferred']
@@ -72,6 +73,8 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
   }
   const endTip = () => { clearTimeout(tipTimer.current); setTip(null) }
   useEffect(() => () => clearTimeout(tipTimer.current), [])
+
+  const [gridRef, gridH] = useFillHeight(96)  // leave room for the pager below the grid
 
   const makes = useMemo(() => [...new Set(rows.map(r => r.make).filter(Boolean))].sort(), [rows])
 
@@ -340,8 +343,8 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
 
       {/* Spreadsheet — fixed height so the horizontal scrollbar stays in view and
           the rows scroll vertically inside (sticky header stays put). */}
-      <div onMouseMove={e => { tipPos.current = { x: e.clientX, y: e.clientY } }}
-        style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflowX: 'scroll', overflowY: 'auto', maxHeight: '56vh', background: '#fff' }}>
+      <div ref={gridRef} onMouseMove={e => { tipPos.current = { x: e.clientX, y: e.clientY } }}
+        style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflowX: 'scroll', overflowY: 'auto', maxHeight: gridH || '56vh', background: '#fff' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr>

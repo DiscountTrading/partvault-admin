@@ -8,6 +8,7 @@ import { WAREHOUSE_DEFAULTS, warehouseConfig } from '../lib/warehouse'
 import BulkEdit from './BulkEdit'
 import ListingPreview from './ListingPreview'
 import EbayActions from './EbayActions'
+import useFillHeight from '../hooks/useFillHeight'
 
 function Field({ label, children }) {
   return <div style={{ marginBottom: 12 }}><label style={S.label}>{label}</label>{children}</div>
@@ -1104,6 +1105,7 @@ function BulkAIPanel({ group, onComplete, aiSettings, footer, storeId }) {
 // ─── Main Inventory ────────────────────────────────────────────────────────
 export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDeleteCar, onAddCar, storeId, aiSettings, footer, costing, labels = DEFAULT_LABELS, warehouse = WAREHOUSE_DEFAULTS, refetch, assess }) {
   const [viewMode, setViewMode] = useState('parts')
+  const [tableRef, tableH] = useFillHeight(28)  // By-Part grid fills to the viewport bottom
   const [search, setSearch] = useState('')
   const [filterMake, setFilterMake] = useState('')
   const [filterModel, setFilterModel] = useState('')
@@ -1462,7 +1464,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
               <button disabled={page===pages-1} onClick={()=>setPage(p=>p+1)} style={{ ...S.btn('secondary'), padding:'4px 12px', fontSize:12 }}>Next →</button>
             </div>
           )}
-          <div style={{ overflowX:'auto', borderRadius:6, border:`1px solid ${C.border}` }}>
+          <div ref={tableRef} style={{ overflowX:'scroll', overflowY:'auto', maxHeight: tableH ? tableH - (ebayMode!=='off'?72:0) : '60vh', borderRadius:6, border:`1px solid ${C.border}` }}>
             <table style={{ borderCollapse:'collapse', fontSize:13, minWidth:1000, width:'100%' }}>
               <thead style={{ position:'sticky', top:0, zIndex:10 }}>
                 <tr style={{ background:'#f5f4f0' }}>
@@ -1515,13 +1517,15 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                 {!paged.length&&<tr><td colSpan={ebayMode!=='off'?14:13} style={{ textAlign:'center', padding:40, color:C.muted }}>No parts match your filters.</td></tr>}
               </tbody>
               <tfoot>
-                <tr style={{ background:'#1c1c1e' }}>
-                  <td colSpan={ebayMode!=='off'?10:9} style={{ padding:'6px 12px', fontSize:11, color:'rgba(255,255,255,0.5)', fontWeight:600 }}>TOTALS ({totals.count} parts)</td>
-                  <td style={{ padding:'6px 8px', textAlign:'right', fontSize:12, fontWeight:700, color:'#93c5fd' }}>${totals.list.toFixed(0)}</td>
-                  <td style={{ padding:'6px 8px', textAlign:'right', fontSize:12, fontWeight:700, color:'#fca5a5' }}>${totals.cost.toFixed(0)}</td>
-                  <td style={{ padding:'6px 8px', textAlign:'right', fontSize:12, fontWeight:700, color:totals.profit>=0?'#86efac':'#fca5a5' }}>${totals.profit.toFixed(0)}</td>
-                  <td />
+                {(() => { const ftd = { background:'#1c1c1e', position:'sticky', bottom:0, zIndex:11 }; return (
+                <tr>
+                  <td colSpan={ebayMode!=='off'?10:9} style={{ ...ftd, padding:'6px 12px', fontSize:11, color:'rgba(255,255,255,0.5)', fontWeight:600 }}>TOTALS ({totals.count} parts)</td>
+                  <td style={{ ...ftd, padding:'6px 8px', textAlign:'right', fontSize:12, fontWeight:700, color:'#93c5fd' }}>${totals.list.toFixed(0)}</td>
+                  <td style={{ ...ftd, padding:'6px 8px', textAlign:'right', fontSize:12, fontWeight:700, color:'#fca5a5' }}>${totals.cost.toFixed(0)}</td>
+                  <td style={{ ...ftd, padding:'6px 8px', textAlign:'right', fontSize:12, fontWeight:700, color:totals.profit>=0?'#86efac':'#fca5a5' }}>${totals.profit.toFixed(0)}</td>
+                  <td style={ftd} />
                 </tr>
+                )})()}
               </tfoot>
             </table>
           </div>
