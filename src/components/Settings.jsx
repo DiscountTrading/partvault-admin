@@ -208,6 +208,18 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       setSiSaved(true); setTimeout(() => setSiSaved(false), 2000)
     } catch (e) { console.error('Sync interval save failed', e) }
   }
+  // AI model tier — quality vs credit cost per part (economy/standard/premium).
+  const [aiModel, setAiModel] = useState('standard')
+  const [amSaved, setAmSaved] = useState(false)
+  const saveAiModel = async (m) => {
+    setAiModel(m)
+    if (!storeId) return
+    try {
+      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      await sb.from('stores').update({ settings: { ...(current?.settings || {}), aiModel: m } }).eq('id', storeId)
+      setAmSaved(true); setTimeout(() => setAmSaved(false), 2000)
+    } catch (e) { console.error('AI model save failed', e) }
+  }
   // Subscription plan + this month's AI usage (usage metered server-side).
   const [plan, setPlan] = useState(() => planState(null))
   const [aiUsage, setAiUsage] = useState(null)
@@ -382,6 +394,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         if (data.settings.timezone) setTimezone(data.settings.timezone)
         else saveTimezone(browserTz)
         if (data.settings.syncIntervalHours) setSyncInterval(+data.settings.syncIntervalHours)
+        if (data.settings.aiModel) setAiModel(data.settings.aiModel)
         setMarketplace(data.settings.marketplace || 'EBAY_AU')
       }
       // Marketplace locks once the store has any part (DB-enforced too).
@@ -2155,6 +2168,31 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
             </p>
             <Toggle label="Assess category at capture" desc="Auto-pick the part category from the photo." value={captureAssess.category} onChange={v => setCaptureAssess(s => ({ ...s, category: v }))} />
             <Toggle label="Suggest a sale price at capture" desc="Fill a suggested list price (only when none was entered)." value={captureAssess.price} onChange={v => setCaptureAssess(s => ({ ...s, price: v }))} />
+          </Section>
+
+          <Section title="🧠 AI model">
+            <p style={{ fontSize: 13, color: C.muted, marginBottom: 14, lineHeight: 1.6 }}>
+              Which model does the full part assessment. Higher quality costs more AI credits per part.
+            </p>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              {[
+                { id: 'economy',  name: 'Economy',  weight: 1, blurb: 'Fast, lowest cost. Good for simple/common parts.' },
+                { id: 'standard', name: 'Standard',  weight: 2, blurb: 'Balanced quality — recommended for most listings.' },
+                { id: 'premium',  name: 'Premium',  weight: 4, blurb: 'Deepest reasoning + more photos. Best detail.' },
+              ].map(t => (
+                <button key={t.id} onClick={() => saveAiModel(t.id)}
+                  style={{ flex: '1 1 200px', textAlign: 'left', cursor: 'pointer', borderRadius: 10, padding: '12px 14px',
+                    border: `2px solid ${aiModel === t.id ? C.accent : C.border}`, background: aiModel === t.id ? C.accent + '12' : '#fff' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontWeight: 700, fontSize: 14, color: C.text }}>{t.name}</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: C.accent, background: C.accent + '18', borderRadius: 6, padding: '2px 7px' }}>{t.weight} credit{t.weight === 1 ? '' : 's'}/part</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: C.muted, marginTop: 5, lineHeight: 1.5 }}>{t.blurb}</div>
+                </button>
+              ))}
+            </div>
+            {amSaved && <div style={{ fontSize: 12, color: C.green, marginTop: 8 }}>✓ saved</div>}
+            <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>Credits come from your monthly plan allowance, then top-up packs. Premium uses your allowance ~4× faster than Economy.</div>
           </Section>
 
           <Section title="💰 Costing">

@@ -91,27 +91,40 @@ async function storeMarketplaceId(url: string, storeId?: string): Promise<string
 // Founder stores are unlimited. Fail-open on any error — never let a metering
 // hiccup block a paying user's work.
 const AI_FULL_LIMITS: Record<string, number> = { trial: 100, basic: 50, pro: 1000, business: 3000 }
-async function meterFullAI(url: string, storeId?: string): Promise<{ allowed: boolean; used: number; limit: number; tier: string; viaCredit?: boolean }> {
+
+// Per-store AI model tier (settings.aiModel). Drives which model + how many images
+// + thinking depth the deep assessment uses, and how many credits it consumes
+// (weight). Economy = Haiku (cheap, no thinking); Standard = tuned Sonnet 5;
+// Premium = Sonnet 5 with full thinking + more images.
+type AiTier = { model: string; images: number; thinking: boolean; effort: string; weight: number }
+const AI_TIERS: Record<string, AiTier> = {
+  economy:  { model: 'claude-haiku-4-5-20251001', images: 2, thinking: false, effort: 'low',  weight: 1 },
+  standard: { model: 'claude-sonnet-5',           images: 2, thinking: true,  effort: 'low',  weight: 2 },
+  premium:  { model: 'claude-sonnet-5',           images: 4, thinking: true,  effort: 'high', weight: 4 },
+}
+const resolveTier = (v: unknown): AiTier => AI_TIERS[(v === 'economy' || v === 'premium') ? v as string : 'standard']
+async function meterFullAI(url: string, storeId?: string, weight = 1): Promise<{ allowed: boolean; used: number; limit: number; tier: string; viaCredit?: boolean }> {
   const unlimited = { allowed: true, used: 0, limit: 0, tier: 'unknown' }
   if (!storeId) return unlimited
+  const w = Math.max(1, weight | 0)
   try {
     const svc = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
     const { data: st } = await svc.from('stores').select('plan').eq('id', storeId).single()
     const plan = st?.plan || {}
-    if (plan.founder) { svc.rpc('increment_ai_usage', { p_store_id: storeId, p_kind: 'full' }).then(() => {}, () => {}); return { ...unlimited, tier: 'founder' } }
+    if (plan.founder) { svc.rpc('increment_ai_usage', { p_store_id: storeId, p_kind: 'full', p_amount: w }).then(() => {}, () => {}); return { ...unlimited, tier: 'founder' } }
     const tier = plan.tier || 'business'
     const limit = AI_FULL_LIMITS[tier] ?? AI_FULL_LIMITS.business
     const month = new Date().toISOString().slice(0, 7)
     const { data: usage } = await svc.from('ai_usage').select('full_count').eq('store_id', storeId).eq('month', month).maybeSingle()
     const used = usage?.full_count || 0
     if (used >= limit) {
-      // Monthly allowance exhausted — fall back to purchased credit packs.
-      const { data: consumed } = await svc.rpc('consume_ai_credit', { p_store_id: storeId })
-      if (consumed === true) { await svc.rpc('increment_ai_usage', { p_store_id: storeId, p_kind: 'full' }); return { allowed: true, used: used + 1, limit, tier, viaCredit: true } }
+      // Monthly allowance exhausted — fall back to purchased credit packs (weighted).
+      const { data: consumed } = await svc.rpc('consume_ai_credit', { p_store_id: storeId, p_amount: w })
+      if (consumed === true) { await svc.rpc('increment_ai_usage', { p_store_id: storeId, p_kind: 'full', p_amount: w }); return { allowed: true, used: used + w, limit, tier, viaCredit: true } }
       return { allowed: false, used, limit, tier }
     }
-    await svc.rpc('increment_ai_usage', { p_store_id: storeId, p_kind: 'full' })
-    return { allowed: true, used: used + 1, limit, tier }
+    await svc.rpc('increment_ai_usage', { p_store_id: storeId, p_kind: 'full', p_amount: w })
+    return { allowed: true, used: used + w, limit, tier }
   } catch { return unlimited }
 }
 // Light (Haiku) calls are near-free — tracked for visibility, never blocked.
@@ -365,10 +378,16 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
     // (angles, label close-ups, part-number stamps) plus the donor car's photos
     // and details as context for a more accurate assessment.
     const { photoBase64, photoBase64s, photoUrl, photoUrls, car, carId, categories, partId, existingTitle, existingPrice } = body
-    // Cap part photos at 2. Sonnet 5 hi-res vision is ~3–5k input tokens PER image,
-    // so images dominate cost — 2 (main + one close-up for the part number) keeps
-    // assessment quality while roughly halving the per-part image spend.
-    const MAX_PART_IMAGES = 2
+    // Per-store AI model tier (settings.aiModel) → model, image count, thinking and
+    // the credit weight. Default 'standard'. Sonnet 5 hi-res vision is ~3–5k input
+    // tokens PER image, so the image count is the main cost lever.
+    let TIER = AI_TIERS.standard
+    try {
+      const svc = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const { data: strow } = await svc.from('stores').select('settings').eq('id', storeId).single()
+      TIER = resolveTier(strow?.settings?.aiModel)
+    } catch (_) { /* default standard */ }
+    const MAX_PART_IMAGES = TIER.images
     const urls = (Array.isArray(photoUrls) ? photoUrls : (photoUrl ? [photoUrl] : [])).filter(Boolean).slice(0, MAX_PART_IMAGES)
     const b64s = (Array.isArray(photoBase64s) ? photoBase64s : (photoBase64 ? [photoBase64] : [])).filter(Boolean).slice(0, Math.max(0, MAX_PART_IMAGES - urls.length))
     const partBlocks: any[] = [
@@ -482,26 +501,24 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
     // Plan enforcement: the full Sonnet assessment is the metered unit. For the
     // background capture flow, skip quietly (part stays editable, stage-1 already
     // cleared ai_pending); for a user-invoked run, explain the limit.
-    const meter = await meterFullAI(url, storeId)
+    const meter = await meterFullAI(url, storeId, TIER.weight)
     if (!meter.allowed) {
       await clearPendingOnFail()
       if (trusted && partId) return json({ ok: true, skipped: 'ai_limit', message: aiLimitMsg(meter) })
       return json({ error: aiLimitMsg(meter) }, 429)
     }
-    const aiRes = await callAnthropic({
-      // Sonnet 5 with adaptive thinking for the deep part assessment. temperature
-      // is omitted (non-default values 400 on Sonnet 5); max_tokens is raised to
-      // leave room for thinking tokens + the new tokenizer. textOf() ignores the
-      // thinking blocks, so JSON parsing is unaffected.
-      model: 'claude-sonnet-5', max_tokens: 6000, thinking: { type: 'adaptive' }, output_config: { effort: 'low' }, system: sys,
-      messages: [{ role: 'user', content }],
-    })
+    // Model + thinking come from the store's tier. Sonnet tiers use adaptive
+    // thinking (temperature omitted — it 400s on Sonnet 5); Haiku (economy) runs
+    // plain (thinking/effort aren't supported there). textOf() ignores thinking blocks.
+    const assessPayload: Record<string, unknown> = { model: TIER.model, max_tokens: 6000, system: sys, messages: [{ role: 'user', content }] }
+    if (TIER.thinking) { assessPayload.thinking = { type: 'adaptive' }; assessPayload.output_config = { effort: TIER.effort } }
+    const aiRes = await callAnthropic(assessPayload)
     const data = await aiRes.json()
     // Record assessment failures so they're diagnosable (the queue swallows them).
     const logAssessFail = async (msg: string) => {
       try {
         await createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!).from('ai_usage_log').insert({
-          store_id: storeId, part_id: partId || null, operation: 'assess', model: 'claude-sonnet-5',
+          store_id: storeId, part_id: partId || null, operation: 'assess', model: TIER.model,
           input_tokens: 0, output_tokens: 0, cost_usd: 0, success: false,
           error_message: `HTTP ${aiRes.status}: ${String(msg).slice(0, 400)}`,
         })
