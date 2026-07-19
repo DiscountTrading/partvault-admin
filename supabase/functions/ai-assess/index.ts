@@ -365,11 +365,10 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
     // (angles, label close-ups, part-number stamps) plus the donor car's photos
     // and details as context for a more accurate assessment.
     const { photoBase64, photoBase64s, photoUrl, photoUrls, car, carId, categories, partId, existingTitle, existingPrice } = body
-    // Cap part photos at 4. Each image costs ~1.5k input tokens, and the org's
-    // Anthropic rate limit is 10k input tokens/min — 8 images could exceed it in
-    // a SINGLE call. 4 (main + a couple of close-ups) keeps quality while leaving
-    // headroom to assess several parts a minute. Total part images bounded to 4.
-    const MAX_PART_IMAGES = 4
+    // Cap part photos at 2. Sonnet 5 hi-res vision is ~3–5k input tokens PER image,
+    // so images dominate cost — 2 (main + one close-up for the part number) keeps
+    // assessment quality while roughly halving the per-part image spend.
+    const MAX_PART_IMAGES = 2
     const urls = (Array.isArray(photoUrls) ? photoUrls : (photoUrl ? [photoUrl] : [])).filter(Boolean).slice(0, MAX_PART_IMAGES)
     const b64s = (Array.isArray(photoBase64s) ? photoBase64s : (photoBase64 ? [photoBase64] : [])).filter(Boolean).slice(0, Math.max(0, MAX_PART_IMAGES - urls.length))
     const partBlocks: any[] = [
@@ -494,7 +493,7 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
       // is omitted (non-default values 400 on Sonnet 5); max_tokens is raised to
       // leave room for thinking tokens + the new tokenizer. textOf() ignores the
       // thinking blocks, so JSON parsing is unaffected.
-      model: 'claude-sonnet-5', max_tokens: 6000, thinking: { type: 'adaptive' }, output_config: { effort: 'medium' }, system: sys,
+      model: 'claude-sonnet-5', max_tokens: 6000, thinking: { type: 'adaptive' }, output_config: { effort: 'low' }, system: sys,
       messages: [{ role: 'user', content }],
     })
     const data = await aiRes.json()

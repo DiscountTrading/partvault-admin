@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.36.29'
+const EDGE_FN_VERSION         = '3.36.30'
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  HARD BLOCK — EDITING LIVE eBay LISTINGS IS DISABLED AT THE CODE LEVEL.
@@ -264,7 +264,7 @@ async function fillAspects(
             method: 'POST',
             headers: { 'x-api-key': ANTHROPIC, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
             body: JSON.stringify({
-              model: 'claude-sonnet-4-6', max_tokens: 1400, system: sys,
+              model: 'claude-haiku-4-5-20251001', max_tokens: 1400, system: sys,
               messages: [{ role: 'user', content: [
                 ...aiPhotos.map((u: string) => ({ type: 'image', source: { type: 'url', url: u } })),
                 { type: 'text', text: usr },
@@ -3069,7 +3069,7 @@ async function handleRequest(req: Request): Promise<Response> {
       }
       const photos = [...new Set([...partUrls, ...carUrls, ...marketingImages.slice(0, marketingMax)])].slice(0, 24)
 
-      const { aspects, fitmentList, specs } = await fillAspects(part, categoryId, categoryTreeId, ebayHeaders, partUrls.slice(0, 4), settings.listingDefaults || {})
+      const { aspects, fitmentList, specs } = await fillAspects(part, categoryId, categoryTreeId, ebayHeaders, partUrls.slice(0, 2), settings.listingDefaults || {})
       // Show EVERY aspect eBay offers for this category, with our filled value
       // (or empty), so the user sees the full set and what's still blank.
       const ovSpec = (part.ebay_overrides && part.ebay_overrides.specifics) || {}
