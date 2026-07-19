@@ -1389,8 +1389,12 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                     ))}
                   </div>
                   <div style={{ display:'flex', gap:8 }}>
-                    {aiPending>0&&<button onClick={e=>{e.stopPropagation();setBulkAIGroup(g)}} style={{ ...S.btn('blue'), padding:'5px 12px', fontSize:12, flexShrink:0 }}>✨ AI ({aiPending})</button>}
-                    <button onClick={e=>{e.stopPropagation();setDeleteCarTarget(g)}} style={{ ...S.btn('danger'), padding:'5px 12px', fontSize:12, flexShrink:0 }}>🗑 Delete Car</button>
+                    {(() => { const n = g.parts.filter(p=>!p.ai_assessed && partHasPhoto(p)).length; return (
+                      <button onClick={e=>{e.stopPropagation(); if(n) setBulkAIGroup(g)}} disabled={!n}
+                        title={n ? `Run AI assessment on the ${n} part${n===1?'':'s'} in this car that need it` : 'All parts in this car are assessed (or have no photo to assess)'}
+                        style={{ ...S.btn(n?'blue':'secondary'), padding:'5px 12px', fontSize:12, flexShrink:0, opacity:n?1:0.45, cursor:n?'pointer':'default' }}>✨ AI{n?` (${n})`:''}</button>
+                    )})()}
+                    <button onClick={e=>{e.stopPropagation();setDeleteCarTarget(g)}} title="Delete this car and its parts" style={{ ...S.btn('danger'), padding:'5px 12px', fontSize:12, flexShrink:0 }}>🗑 Delete Car</button>
                   </div>
                 </div>
                 {isOpen && (
@@ -1422,7 +1426,8 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                               <td style={{ padding:'8px 12px', color:C.red, whiteSpace:'nowrap' }}>${cost.toFixed(0)}</td>
                               <td style={{ padding:'8px 12px', fontWeight:600, color:pr>=0?C.green:C.red, whiteSpace:'nowrap' }}>${pr.toFixed(0)}</td>
                               <td style={{ padding:'8px 12px', whiteSpace:'nowrap' }}>
-                                <button onClick={()=>{setEditingPart(p);setShowForm(true)}} style={{ ...S.btn('secondary'), padding:'3px 10px', fontSize:11, marginRight:6 }}>Edit</button>
+                                <button onClick={()=>{setEditingPart(p);setShowForm(true)}} title="Edit this part's details" style={{ ...S.btn('secondary'), padding:'3px 10px', fontSize:11, marginRight:6 }}>Edit</button>
+                                <button onClick={()=>setPreviewPart(p)} title="Preview the eBay listing (category, specifics, fitment) — and edit it" style={{ ...S.btn('secondary'), padding:'3px 8px', fontSize:11, marginRight:6 }}>👁</button>
                                 {p.sku && <button onClick={()=>printLabels(p, labels)} title="Print stock label" style={{ ...S.btn('secondary'), padding:'3px 8px', fontSize:11, marginRight:6 }}>🏷️</button>}
                                 <EbayLink part={p} style={{ ...S.btn('secondary'), padding:'3px 8px', marginRight:6 }} />
                                 <button onClick={()=>setDeleteTarget(p)} title="Delete this part" style={{ ...S.btn('danger'), padding:'3px 8px', fontSize:11 }}>🗑</button>

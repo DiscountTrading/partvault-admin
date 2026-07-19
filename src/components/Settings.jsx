@@ -2070,20 +2070,8 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                   {(() => {
                     let local = ''
                     try { local = new Date().toLocaleString('en-AU', { timeZone: timezone, hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' }) } catch { /* invalid tz */ }
-                    return `Sync windows are anchored to midnight here${local ? ` · local time now ${local}` : ''}. Auto-detected from your browser — edit if it's wrong (e.g. on a VPN).`
+                    return `Sync windows are anchored to midnight here${local ? ` · local time now ${local}` : ''}. Auto-detected from your browser — edit if it's wrong (e.g. on a VPN). Auto-sync frequency is set under eBay Sync.`
                   })()}
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.border}` }}>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>🔄 Auto-sync every</span>
-                  <select value={syncInterval} onChange={e => saveSyncInterval(e.target.value)}
-                    style={{ border: `1px solid ${C.border}`, borderRadius: 6, padding: '4px 8px', fontSize: 12, background: '#fff' }}>
-                    <option value={3}>3 hours</option>
-                    <option value={6}>6 hours</option>
-                    <option value={12}>12 hours</option>
-                    <option value={24}>24 hours (nightly)</option>
-                  </select>
-                  {siSaved && <span style={{ fontSize: 12, color: C.green }}>✓ saved</span>}
-                  <span style={{ fontSize: 11, color: C.muted }}>How often the full eBay sync runs (import + sold orders + reconcile). More frequent = ended/sold statuses clear faster.</span>
                 </div>
               </div>
 
@@ -2772,6 +2760,24 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                   </div>
                 )
               })()}
+
+              {/* Auto-sync frequency — how often the full eBay sync runs. */}
+              {ebayConnected && (
+                <div style={{ background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 14px', marginBottom: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>🔄 Auto-sync every</span>
+                    <select value={syncInterval} onChange={e => saveSyncInterval(e.target.value)} title="How often the full eBay sync runs automatically (import + sold orders + reconcile)"
+                      style={{ border: `1px solid ${C.border}`, borderRadius: 6, padding: '4px 8px', fontSize: 12, background: '#fff' }}>
+                      <option value={3}>3 hours</option>
+                      <option value={6}>6 hours</option>
+                      <option value={12}>12 hours</option>
+                      <option value={24}>24 hours (nightly)</option>
+                    </select>
+                    {siSaved && <span style={{ fontSize: 12, color: C.green }}>✓ saved</span>}
+                  </div>
+                  <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>Runs at each interval in your store's timezone. More frequent = ended/sold statuses (and the out-of-sync count above) clear faster.</div>
+                </div>
+              )}
 
               {/* Sales audit (advanced) — on-demand check of recorded sales vs eBay for a
                   specific date range. Routine whole-DB sales matching is now part of Sync

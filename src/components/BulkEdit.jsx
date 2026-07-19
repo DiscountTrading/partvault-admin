@@ -1,33 +1,40 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { sb } from '../lib/supabase'
-import { C, S, fmt, CATEGORY_NAMES, PART_CONDITIONS, STATUS_LABELS } from '../lib/constants'
+import { C, S, fmt, CATEGORY_NAMES, EBAY_AU_CATEGORIES, PART_CONDITIONS, STATUS_LABELS } from '../lib/constants'
 
 const EDGE_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import'
 const STATUS_OPTS = ['in_stock', 'listed', 'sold', 'scrapped', 'deferred']
 
 // Core part fields you'd realistically bulk-change, in spreadsheet form.
 const COLS = [
+  { key: 'title',      label: 'Title',     type: 'text',   w: 240 },
   { key: 'make',       label: 'Make',      type: 'text',   w: 110 },
   { key: 'model',      label: 'Model',     type: 'text',   w: 120 },
   { key: 'year',       label: 'Year',      type: 'text',   w: 90 },
   { key: 'category',   label: 'Category',  type: 'select', w: 180, options: CATEGORY_NAMES },
+  { key: 'subcategory',label: 'Subcategory', type: 'subcat', w: 170 },
+  { key: 'ebay_category', label: 'eBay Category', type: 'ebaycat', w: 240 },
   { key: 'condition',  label: 'Condition', type: 'select', w: 150, options: PART_CONDITIONS },
   { key: 'list_price', label: 'Price',     type: 'number', w: 90 },
   { key: 'market_price', label: 'Market',  type: 'readonly', w: 90 },
   { key: 'status',     label: 'Status',    type: 'select', w: 120, options: STATUS_OPTS, labels: STATUS_LABELS },
+  { key: 'weight',     label: 'Weight (g)', type: 'number', w: 100 },
   { key: 'location',   label: 'Location',  type: 'text',   w: 130 },
   { key: 'part_number',label: 'Part #',    type: 'text',   w: 120 },
+  { key: 'notes',      label: 'Notes',     type: 'text',   w: 220 },
 ]
-const DEFAULT_VISIBLE = ['make', 'model', 'year', 'category', 'condition', 'list_price', 'status']
+const NUMERIC = new Set(['list_price', 'weight'])
+const DEFAULT_VISIBLE = ['title', 'make', 'model', 'year', 'category', 'subcategory', 'ebay_category', 'condition', 'list_price', 'status']
 const PAGE = 15
 
 // Normalise a useParts (camelCase) part into the flat row this grid edits.
 const toRow = (p) => ({
   id: p.id, title: p.title || '', sku: p.sku || '',
   make: p.make || '', model: p.model || '', year: p.year || '',
-  category: p.category || '', condition: p.condition || '',
+  category: p.category || '', subcategory: p.subcategory || '', condition: p.condition || '',
   list_price: p.listPrice ?? p.list_price ?? '', status: p.status || 'in_stock',
   market_price: p.marketPrice ?? p.market_price ?? null,
+  weight: p.weight ?? '', notes: p.notes || '',
   location: p.location || '', part_number: p.partNumber || p.part_number || '',
   ebayOverrides: p.ebayOverrides || p.ebay_overrides || {},
 })
@@ -46,6 +53,11 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
   const [page, setPage] = useState(0)
   const [edits, setEdits] = useState({})          // { partId: { field|spec:Name : value } }
   const [saving, setSaving] = useState(false)
+  // eBay-category picker (full hierarchy via eBay's live tree) for one row.
+  const [catRow, setCatRow] = useState(null)
+  const [catQuery, setCatQuery] = useState('')
+  const [catSugs, setCatSugs] = useState([])
+  const [catBusy, setCatBusy] = useState(false)
   const [marketBusy, setMarketBusy] = useState(false)
   const [underPct, setUnderPct] = useState(0)   // undercut the market median by this %
   const [msg, setMsg] = useState('')
@@ -108,7 +120,8 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
       const specSet = {}
       for (const [k, v] of Object.entries(e)) {
         if (k.startsWith('spec:')) specSet[k.slice(5)] = v
-        else if (k === 'list_price') patch.list_price = v === '' ? null : +v
+        else if (k === 'ebay_category') continue // applied immediately via set_category, not batched
+        else if (NUMERIC.has(k)) patch[k] = v === '' ? null : +v
         else patch[k] = v === '' ? null : v
       }
       if (Object.keys(specSet).length) {
@@ -124,6 +137,33 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
     setEdits({})
     onSaved?.()
     setTimeout(() => setMsg(''), 3000)
+  }
+
+  // eBay category — search the live category tree (full hierarchy) and apply an
+  // override to one part immediately (server persists ebay_overrides + learns it).
+  const callEdge = async (payload) => {
+    const { data: { session } } = await sb.auth.getSession()
+    const res = await fetch(EDGE_FN, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` }, body: JSON.stringify(payload) })
+    const d = await res.json()
+    if (!res.ok || d.error) throw new Error(d.error || 'Request failed')
+    return d
+  }
+  const searchEbayCats = async () => {
+    const q = catQuery.trim(); if (!q) return
+    setCatBusy(true)
+    try { const d = await callEdge({ action: 'category_suggestions', storeId, query: q }); setCatSugs(d.suggestions || []) }
+    catch (e) { setMsg(e.message) }
+    setCatBusy(false)
+  }
+  const applyEbayCat = async (rowId, sug) => {
+    setCatBusy(true)
+    try {
+      await callEdge({ action: 'set_category', storeId, partId: rowId, categoryId: sug.id, categoryName: sug.name })
+      setCatRow(null); setCatQuery(''); setCatSugs([])
+      setMsg(`eBay category set to "${sug.name}"`); setTimeout(() => setMsg(''), 3000)
+      onSaved?.() // refetch so the cell reflects the new override
+    } catch (e) { setMsg(e.message) }
+    setCatBusy(false)
   }
 
   // Pull fresh eBay market prices (in-stock parts, stalest first, bounded server-side).
@@ -180,6 +220,22 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
       return <select value={val ?? ''} onChange={e => setCell(row.id, key, e.target.value)} style={{ ...inp, background: bg, cursor: 'pointer' }}>
         {col.options.map(o => <option key={o} value={o}>{col.labels ? col.labels[o] || o : o}</option>)}
       </select>
+    }
+    if (col.type === 'subcat') {
+      const cat = cellVal(row, 'category')
+      const opts = EBAY_AU_CATEGORIES[cat] || []
+      const list = val && !opts.includes(val) ? [val, ...opts] : opts
+      return <select value={val ?? ''} onChange={e => setCell(row.id, key, e.target.value)} style={{ ...inp, background: bg, cursor: 'pointer' }}>
+        <option value="">—</option>
+        {list.map(o => <option key={o} value={o}>{o}</option>)}
+      </select>
+    }
+    if (col.type === 'ebaycat') {
+      const cur = row.ebayOverrides?.categoryName || row.ebayOverrides?.categoryId || ''
+      return <button onClick={() => { setCatRow(row.id); setCatSugs([]); setCatQuery(row.title || `${row.make || ''} ${row.subcategory || row.category || ''}`.trim()) }}
+        title="Set the eBay category — search the full category tree" style={{ ...inp, textAlign: 'left', cursor: 'pointer', color: cur ? C.text : C.accent, background: bg }}>
+        {cur || 'Set eBay category…'}
+      </button>
     }
     return <input type={col.type === 'number' ? 'number' : 'text'} value={val ?? ''} onChange={e => setCell(row.id, key, e.target.value)} style={{ ...inp, background: bg }} />
   }
@@ -288,6 +344,35 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
         <button onClick={() => setPage(p => Math.min(pageCount - 1, p + 1))} disabled={curPage >= pageCount - 1} style={{ ...S.btn('secondary'), padding: '6px 12px', opacity: curPage >= pageCount - 1 ? 0.5 : 1 }}>Next →</button>
       </div>
       {editCount > 0 && <div style={{ textAlign: 'center', fontSize: 12, color: C.accent, marginTop: 6 }}>Edits on other pages are kept until you Save.</div>}
+
+      {/* eBay category picker — search the full eBay category tree for one part. */}
+      {catRow && (
+        <div onClick={() => !catBusy && setCatRow(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: '100%', maxWidth: 560, maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+            <div style={{ padding: '16px 20px', borderBottom: `1px solid ${C.border}` }}>
+              <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>Set eBay category</div>
+              <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>Search eBay's live category tree and pick the exact category (full hierarchy shown).</div>
+            </div>
+            <div style={{ padding: 16, overflowY: 'auto' }}>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                <input autoFocus value={catQuery} onChange={e => setCatQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && searchEbayCats()} placeholder="e.g. headlight, tail light, alternator…" style={{ ...S.input, marginBottom: 0, flex: 1 }} />
+                <button onClick={searchEbayCats} disabled={catBusy} title="Search eBay categories" style={{ ...S.btn('primary'), padding: '9px 16px', opacity: catBusy ? 0.6 : 1 }}>{catBusy ? '…' : 'Search'}</button>
+              </div>
+              {catSugs.length === 0 ? <div style={{ fontSize: 12, color: C.muted, padding: '8px 2px' }}>Type a part type and Search to see matching eBay categories.</div> : (
+                catSugs.map((s, i) => (
+                  <button key={i} onClick={() => applyEbayCat(catRow, s)} disabled={catBusy} title="Use this eBay category"
+                    style={{ display: 'block', width: '100%', textAlign: 'left', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 8, padding: '9px 12px', marginBottom: 6, cursor: 'pointer', fontSize: 13 }}>
+                    {s.name} <span style={{ color: C.muted, fontSize: 11 }}>· id {s.id}</span>
+                  </button>
+                ))
+              )}
+            </div>
+            <div style={{ padding: '12px 20px', borderTop: `1px solid ${C.border}`, display: 'flex', justifyContent: 'flex-end' }}>
+              <button onClick={() => setCatRow(null)} disabled={catBusy} title="Cancel" style={{ ...S.btn('secondary'), padding: '9px 16px' }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
