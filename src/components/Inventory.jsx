@@ -1258,8 +1258,8 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
           </div>
           {/* eBay listing mode — filters to parts to list (in-stock) or de-list (listed) and turns on row selection. */}
           <div style={{ display:'flex', borderRadius:8, overflow:'hidden', border:`1.5px solid ${EBAY_BLUE}55` }} title="Select parts to list on / de-list from eBay">
-            {[['off','🛒 eBay'],['list','List'],['delist','De-list']].map(([m,lbl],i) => (
-              <button key={m} onClick={() => { setEbayMode(m); if (m!=='off') setViewMode('parts') }}
+            {[['off','🛒 eBay','Turn off eBay selection mode'],['list','List','Show in-stock parts and select which to list on eBay'],['delist','De-list','Show live listings and select which to end on eBay']].map(([m,lbl,tip],i) => (
+              <button key={m} onClick={() => { setEbayMode(m); if (m!=='off') setViewMode('parts') }} title={tip}
                 style={{ padding:'5px 12px', fontSize:12, fontWeight:600, background:ebayMode===m?EBAY_BLUE:'white', color:ebayMode===m?'white':(m==='off'?C.muted:EBAY_BLUE), border:'none', cursor:'pointer', borderLeft:i?`1px solid ${EBAY_BLUE}33`:'none' }}>{lbl}</button>
             ))}
           </div>
@@ -1303,7 +1303,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
       <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:'12px 16px', marginBottom:14 }}>
         <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:8, flexWrap:'wrap' }}>
           <input style={{ ...inputSm, flex:2, minWidth:200 }} placeholder="🔍 Search everything..." value={search} onChange={e => { setSearch(e.target.value); setPage(0) }} />
-          <button onClick={clearFilters} style={{ ...S.btn('secondary'), padding:'0 12px', height:30, fontSize:12 }}>Clear</button>
+          <button onClick={clearFilters} title="Clear all filters" style={{ ...S.btn('secondary'), padding:'0 12px', height:30, fontSize:12 }}>Clear</button>
           <span style={{ fontSize:12, color:C.muted }}>{filtered.length} matching</span>
         </div>
         <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
@@ -1425,7 +1425,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                                 <button onClick={()=>{setEditingPart(p);setShowForm(true)}} style={{ ...S.btn('secondary'), padding:'3px 10px', fontSize:11, marginRight:6 }}>Edit</button>
                                 {p.sku && <button onClick={()=>printLabels(p, labels)} title="Print stock label" style={{ ...S.btn('secondary'), padding:'3px 8px', fontSize:11, marginRight:6 }}>🏷️</button>}
                                 <EbayLink part={p} style={{ ...S.btn('secondary'), padding:'3px 8px', marginRight:6 }} />
-                                <button onClick={()=>setDeleteTarget(p)} style={{ ...S.btn('danger'), padding:'3px 8px', fontSize:11 }}>🗑</button>
+                                <button onClick={()=>setDeleteTarget(p)} title="Delete this part" style={{ ...S.btn('danger'), padding:'3px 8px', fontSize:11 }}>🗑</button>
                               </td>
                             </tr>
                           )
@@ -1484,8 +1484,8 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                         </td>
                       )}
                       <td style={{ padding:'4px 6px', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`, whiteSpace:'nowrap' }}>
-                        <button onClick={()=>{setEditingPart(p);setShowForm(true)}} style={{ fontSize:11, padding:'2px 8px', background:'#eff6ff', color:C.blue, border:`1px solid ${C.blue}44`, borderRadius:4, cursor:'pointer', marginRight:4 }}>Edit</button>
-                        <button onClick={()=>setPreviewPart(p)} title="Preview the eBay listing" style={{ fontSize:11, padding:'2px 6px', background:'#fff', color:C.text, border:`1px solid ${C.border}`, borderRadius:4, cursor:'pointer', marginRight:4 }}>👁</button>
+                        <button onClick={()=>{setEditingPart(p);setShowForm(true)}} title="Edit this part's details" style={{ fontSize:11, padding:'2px 8px', background:'#eff6ff', color:C.blue, border:`1px solid ${C.blue}44`, borderRadius:4, cursor:'pointer', marginRight:4 }}>Edit</button>
+                        <button onClick={()=>setPreviewPart(p)} title="Preview the eBay listing (category, specifics, fitment) — and edit it" style={{ fontSize:11, padding:'2px 6px', background:'#fff', color:C.text, border:`1px solid ${C.border}`, borderRadius:4, cursor:'pointer', marginRight:4 }}>👁</button>
                         {p.sku && <button onClick={()=>printLabels(p, labels)} title="Print stock label" style={{ fontSize:11, padding:'2px 6px', background:'#fff', color:C.text, border:`1px solid ${C.border}`, borderRadius:4, cursor:'pointer' }}>🏷️</button>}
                         <EbayLink part={p} style={{ padding:'2px 6px', background:'#fff', border:`1px solid ${C.border}`, borderRadius:4, marginLeft:4 }} />
                       </td>
@@ -1502,7 +1502,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                       {td(`$${cost.toFixed(0)}`,C.red)}
                       {td(`$${pr.toFixed(0)}`,pr>=0?C.green:C.red,true)}
                       <td style={{ padding:'4px 6px', textAlign:'center', borderBottom:`1px solid ${C.border}` }}>
-                        <button onClick={()=>setDeleteTarget(p)} style={{ fontSize:11, padding:'2px 6px', background:'#fef2f2', color:C.red, border:`1px solid ${C.red}44`, borderRadius:4, cursor:'pointer' }}>🗑</button>
+                        <button onClick={()=>setDeleteTarget(p)} title="Delete this part" style={{ fontSize:11, padding:'2px 6px', background:'#fef2f2', color:C.red, border:`1px solid ${C.red}44`, borderRadius:4, cursor:'pointer' }}>🗑</button>
                       </td>
                     </tr>
                   )
@@ -1523,7 +1523,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
           {ebayMode!=='off' && <EbayActions storeId={storeId} selectedParts={parts.filter(p=>sel.has(p.id))} onDone={refetch} onClear={()=>setSel(new Set())} />}
         </div>
       )}
-      {previewPart && <ListingPreview storeId={storeId} part={previewPart} onClose={()=>setPreviewPart(null)} />}
+      {previewPart && <ListingPreview storeId={storeId} part={previewPart} onClose={()=>setPreviewPart(null)} onChanged={refetch} />}
     </div>
   )
 }

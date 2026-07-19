@@ -84,12 +84,12 @@ export default function EbayActions({ storeId, selectedParts, onDone, onClear })
           <span style={{ fontWeight: 700 }}>{selectedParts.length} selected</span>
           {notReady.length > 0 && allInStock && <span style={{ fontSize: 12, color: '#fca5a5' }}>⚠ {notReady.length} not ready (photo/price)</span>}
           <div style={{ flex: 1 }} />
-          <button onClick={onClear} style={{ background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.25)', color: '#fff', borderRadius: 8, padding: '8px 14px', fontSize: 13, cursor: 'pointer' }}>Clear</button>
+          <button onClick={onClear} title="Clear the selection" style={{ background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.25)', color: '#fff', borderRadius: 8, padding: '8px 14px', fontSize: 13, cursor: 'pointer' }}>Clear</button>
           {mixed ? <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.7)' }}>Select all in-stock (to list) or all listed (to de-list)</span>
            : allListed ? (
-            <button onClick={() => setDelistOpen(true)} disabled={canPub === false} style={{ background: C.red, border: 'none', color: '#fff', borderRadius: 8, padding: '9px 18px', fontSize: 14, fontWeight: 700, cursor: 'pointer', opacity: canPub === false ? 0.5 : 1 }}>⏹ De-list {selectedParts.length}</button>
+            <button onClick={() => setDelistOpen(true)} disabled={canPub === false} title="End the selected live eBay listings" style={{ background: C.red, border: 'none', color: '#fff', borderRadius: 8, padding: '9px 18px', fontSize: 14, fontWeight: 700, cursor: 'pointer', opacity: canPub === false ? 0.5 : 1 }}>⏹ De-list {selectedParts.length}</button>
            ) : (
-            <button onClick={() => setReview(true)} disabled={canPub === false} style={{ background: C.accent, border: 'none', color: '#fff', borderRadius: 8, padding: '9px 18px', fontSize: 14, fontWeight: 700, cursor: 'pointer', opacity: canPub === false ? 0.5 : 1 }}>🚀 List {selectedParts.length} to eBay</button>
+            <button onClick={() => setReview(true)} disabled={canPub === false} title="Review, then publish the selected parts as live eBay listings" style={{ background: C.accent, border: 'none', color: '#fff', borderRadius: 8, padding: '9px 18px', fontSize: 14, fontWeight: 700, cursor: 'pointer', opacity: canPub === false ? 0.5 : 1 }}>🚀 List {selectedParts.length} to eBay</button>
            )}
         </div>
       )}
