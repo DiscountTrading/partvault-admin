@@ -2894,13 +2894,13 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                 </div>
               )}
 
-              <div style={{ marginBottom: syncPhase ? 6 : 12 }}>
-                <button style={{ ...S.btn('primary'), width: '100%', opacity: (syncingAll || !ebayConnected) ? 0.6 : 1 }} onClick={runSync} disabled={syncingAll || importing || backfilling || reconciling || !ebayConnected}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: syncPhase ? 6 : 10 }}>
+                <button style={{ ...S.btn('primary'), opacity: (syncingAll || !ebayConnected) ? 0.6 : 1 }} onClick={runSync} disabled={syncingAll || importing || backfilling || reconciling || !ebayConnected}>
                   {syncingAll ? '⏳ Syncing…' : '🔄 Sync now'}
                 </button>
-                <div style={{ fontSize: 11, color: C.muted, marginTop: 5 }}>
-                  One pass to match eBay: imports listings, sold orders &amp; fees, fills make/model from titles, then reconciles &amp; auto-resolves ended/sold items. Read-only; keeps running in the background even if you leave this page.
-                </div>
+                <span style={{ fontSize: 12, color: C.muted, flex: '1 1 240px', lineHeight: 1.45 }}>
+                  A read-only pass that imports listings, sold orders &amp; fees, then reconciles ended/sold items. Keeps running if you leave the page.
+                </span>
               </div>
               {syncPhase && (
                 <div style={{ fontSize: 12, color: syncPhase.startsWith('✓') ? C.green : syncPhase.startsWith('Sync stopped') ? C.red : C.text, marginBottom: 8, padding: '6px 10px', background: syncPhase.startsWith('✓') ? '#ecfdf5' : syncPhase.startsWith('Sync stopped') ? '#fef2f2' : C.bg, borderRadius: 6, border: `1px solid ${syncPhase.startsWith('✓') ? '#a7f3d0' : syncPhase.startsWith('Sync stopped') ? '#fecaca' : C.border}` }}>
@@ -2912,7 +2912,8 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                 const lsTs = lastSync?.synced_at ? new Date(lastSync.synced_at).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null
                 const inProgress = nightly && !nightly.done
                 const nightlyTs = nightly?.updated_at ? new Date(nightly.updated_at).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : null
-                const kindLbl = lastSync?.kind === 'nightly' ? ' (nightly)' : lastSync?.kind === 'manual' ? ' (manual)' : lastSync?.kind === 'live' ? ' (live check)' : ''
+                const kindLbl = lastSync?.kind === 'nightly' ? ' (auto)' : lastSync?.kind === 'manual' ? ' (manual)' : lastSync?.kind === 'live' ? ' (live check)' : ''
+                const intervalLabel = Number(syncInterval) >= 24 ? 'once a day' : `every ${syncInterval}h`
                 return (
                   <div style={{ fontSize: 11, marginBottom: 8, padding: '6px 10px', borderRadius: 6,
                     background: !lastSync ? '#f9f8f5' : ok ? '#ecfdf5' : '#fef2f2',
@@ -2921,16 +2922,13 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                     <span>
                       {lastSync
                         ? <>{ok ? '✓' : '⚠'} <strong>Last sync:</strong> {lsTs}{kindLbl}{lastSync.summary ? ` · ${lastSync.summary}` : ''}</>
-                        : <>🌙 <strong>Sync:</strong> no run recorded yet — nightly runs at your local midnight</>}
-                      {inProgress && <><br />⏳ Nightly in progress · {nightly.phase}{nightly.detail ? ` · ${nightly.detail}` : ''} (as of {nightlyTs})</>}
+                        : <>🕐 <strong>Sync:</strong> no run yet — runs automatically {intervalLabel}</>}
+                      {inProgress && <><br />⏳ Auto-sync in progress · {nightly.phase}{nightly.detail ? ` · ${nightly.detail}` : ''} (as of {nightlyTs})</>}
                     </span>
                     <button onClick={fetchNightly} style={{ ...S.btn('secondary'), padding: '3px 10px', fontSize: 11 }}>↻</button>
                   </div>
                 )
               })()}
-              <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>One click imports new listings, updates sold orders (last ~4 months), then reconciles against eBay. It only reads from eBay — it never changes your live listings.</div>
-              <div style={{ fontSize: 11, color: C.green, marginBottom: 8 }}>🌙 Auto-syncs every night around midnight (Sydney) — no need to click unless you want an update now.</div>
-
               <button onClick={() => setShowAdvSync(v => !v)} style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12, padding: '2px 0', marginBottom: showAdvSync ? 10 : 4 }}>
                 {showAdvSync ? '▴ Hide one-time & maintenance tools' : '⚙ One-time & maintenance tools'}
               </button>
