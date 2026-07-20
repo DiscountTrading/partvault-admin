@@ -1136,7 +1136,8 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
   const [bulkAIGroup, setBulkAIGroup] = useState(null)
   const [showAddCar, setShowAddCar] = useState(false)
   const [page, setPage] = useState(0)
-  const PAGE = 100
+  const [PAGE, setPAGE] = useState(() => { try { return +localStorage.getItem('pv_inv_pagesize') || 100 } catch { return 100 } })
+  const setPageSize = (n) => { setPAGE(n); setPage(0); try { localStorage.setItem('pv_inv_pagesize', String(n)) } catch { /* ignore */ } }
   const [carPage, setCarPage] = useState(0)
   const [carPageSize, setCarPageSize] = useState(25)
 
@@ -1465,13 +1466,21 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
 
       {viewMode==='parts' && (
         <div>
-          {pages>1&&(
-            <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:10 }}>
+          <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:10, flexWrap:'wrap' }}>
+            {pages>1&&(<>
               <button disabled={page===0} onClick={()=>setPage(p=>p-1)} style={{ ...S.btn('secondary'), padding:'4px 12px', fontSize:12 }}>← Prev</button>
               <span style={{ fontSize:13, color:C.muted }}>Page {page+1} of {pages} ({filtered.length} parts)</span>
               <button disabled={page===pages-1} onClick={()=>setPage(p=>p+1)} style={{ ...S.btn('secondary'), padding:'4px 12px', fontSize:12 }}>Next →</button>
-            </div>
-          )}
+            </>)}
+            <div style={{ flex:1 }} />
+            <label style={{ fontSize:12, color:C.muted, display:'flex', alignItems:'center', gap:6 }}>
+              Show
+              <select value={PAGE} onChange={e=>setPageSize(+e.target.value)} title="Records per page" style={{ ...selSm, padding:'4px 8px', minWidth:0 }}>
+                {[20,50,100,250,500].map(n=><option key={n} value={n}>{n}</option>)}
+              </select>
+              per page
+            </label>
+          </div>
           <div ref={tableRef} className="pv-scroll" style={{ overflowX:'scroll', overflowY:'auto', maxHeight: tableH ? tableH - (ebayMode!=='off'?72:0) : '60vh', borderRadius:6, border:`1px solid ${C.border}` }}>
             <table style={{ borderCollapse:'collapse', fontSize:13, minWidth:1000, width:'100%', zoom:'var(--table-zoom, 1)' }}>
               <thead style={{ position:'sticky', top:0, zIndex:10 }}>

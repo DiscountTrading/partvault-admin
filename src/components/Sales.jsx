@@ -1,6 +1,6 @@
-import { useState, useMemo, Fragment } from 'react'
+import { useState, useMemo, useEffect, Fragment } from 'react'
 import { C, S, fmt, partEffectiveCost, estimateCostBasis, storageCostFor, storageConfigured, FEE_COST_KEYS } from '../lib/constants'
-import useFillHeight from '../hooks/useFillHeight'
+import useMatchHeight from '../hooks/useMatchHeight'
 import { printLabels } from '../lib/labels'
 import { hasGridLoc, gridLocShort } from '../lib/warehouse'
 import { getActiveMarketplace } from '../lib/marketplaces'
@@ -532,8 +532,13 @@ function SaleActions({ s, p, wf, setStage }) {
 
 
 export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, setStage = () => {} }) {
-  const [tableRef, tableH] = useFillHeight(80)  // sales table fills to viewport; note/pager sit below
-  const [period, setPeriod] = useState(90)
+  const [leftRef, leftH] = useMatchHeight()  // sales table column matches the graphs column height
+  const [period, setPeriod] = useState(() => {
+    // Default to whatever period the user last left the Sales page on.
+    try { const s = localStorage.getItem('pv_sales_period'); if (s) return s === 'custom' ? 'custom' : (+s || 90) } catch { /* ignore */ }
+    return 90
+  })
+  useEffect(() => { try { localStorage.setItem('pv_sales_period', String(period)) } catch { /* ignore */ } }, [period])
   const [query, setQuery] = useState('')
   const [detail, setDetail] = useState(null) // sale whose cost breakdown is open
   const [limit, setLimit] = useState(RENDER_CAP)
@@ -726,7 +731,7 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px, 440px) 1fr', gap: 16, alignItems: 'start' }}>
       {/* LEFT — performance graph, promoted listings, and the period totals */}
-      <div>
+      <div ref={leftRef}>
       {/* Performance overview — trend + comparison against the previous period (compact). Always at the top. */}
       <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12, padding: '14px 16px', marginBottom: 16 }}>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
@@ -784,8 +789,9 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
       </div>
       </div>{/* /LEFT */}
 
-      {/* RIGHT — the full sales table; it fills the height and scrolls on its own */}
-      <div>
+      {/* RIGHT — the full sales table; matches the graphs column's height so both
+          columns end together, and scrolls internally to show all rows. */}
+      <div style={{ display: 'flex', flexDirection: 'column', height: leftH || undefined, minHeight: 360 }}>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
         <div style={{ fontSize: 13, color: C.muted, fontWeight: 600 }}>{periodTitle} · {rows.length} sale{rows.length === 1 ? '' : 's'}</div>
         <div style={{ flex: 1 }} />
@@ -795,7 +801,7 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
           style={{ ...S.btn('secondary'), padding: '7px 12px', fontSize: 12, opacity: rows.length ? 1 : 0.5 }}>⤓ Export CSV</button>
       </div>
 
-      <div ref={tableRef} className="pv-scroll" style={{ overflowX: 'scroll', overflowY: 'auto', maxHeight: tableH || '60vh', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>
+      <div className="pv-scroll" style={{ flex: 1, minHeight: 0, overflowX: 'scroll', overflowY: 'auto', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>
         <table style={{ width: '100%', minWidth: 1000, borderCollapse: 'collapse', fontSize: 13, zoom: 'var(--table-zoom, 1)' }}>
           <thead>
             <tr style={{ borderBottom: `2px solid ${C.border}` }}>
