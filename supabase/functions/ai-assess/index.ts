@@ -108,7 +108,32 @@ const resolveTier = (v: unknown): AiTier => AI_TIERS[(v === 'economy' || v === '
 // Google Gemini is ~10× cheaper than Sonnet on the token-heavy vision work, so
 // the part assessment defaults to it (per-store overridable). Same JSON contract
 // as the Anthropic path; on ANY Gemini failure the caller falls back to Claude.
-const GEMINI_MODELS = { assess: 'gemini-2.5-flash', light: 'gemini-2.5-flash-lite' }
+// Model names churn (Google retires old IDs for new keys), so we don't hardcode
+// one — we ask the API which models THIS key can use and pick the current Flash.
+// Cached per cold-start. `wantLite` picks the cheaper flash-lite for light tasks.
+let _geminiModelCache: { full?: string; lite?: string } | null = null
+async function resolveGeminiModel(wantLite = false): Promise<string> {
+  if (_geminiModelCache) return (wantLite ? _geminiModelCache.lite : _geminiModelCache.full) || _geminiModelCache.full!
+  const KEY = Deno.env.get('GEMINI_API_KEY')
+  if (!KEY) throw new Error('GEMINI_API_KEY not set')
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${KEY}&pageSize=200`)
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(`Gemini ListModels HTTP ${res.status}: ${data?.error?.message || 'error'}`)
+  const names: string[] = (data.models || [])
+    .filter((m: any) => (m.supportedGenerationMethods || []).includes('generateContent'))
+    .map((m: any) => String(m.name || '').replace(/^models\//, ''))
+  const bad = /lite|pro|thinking|thinking|-exp|embedding|aqa|vision-|1\.0|1\.5|8b/i
+  const full = names.find(n => n === 'gemini-flash-latest')
+    || names.filter(n => /flash/i.test(n) && !bad.test(n)).sort().reverse()[0]
+    || names.find(n => /flash/i.test(n) && !/pro|embedding|aqa/i.test(n))
+    || names.find(n => /gemini/i.test(n))
+  const lite = names.find(n => n === 'gemini-flash-lite-latest')
+    || names.filter(n => /flash-lite/i.test(n) && !/-exp/i.test(n)).sort().reverse()[0]
+    || full
+  if (!full) throw new Error(`No usable Gemini model for this key (saw: ${names.slice(0, 12).join(', ') || 'none'})`)
+  _geminiModelCache = { full, lite }
+  return wantLite ? (lite || full) : full
+}
 
 // Convert an Anthropic-style content array (text + image url/base64 blocks) into
 // Gemini `parts`. Gemini needs image BYTES inline, so URL images are fetched and
@@ -587,11 +612,12 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
 
     if (wantGemini) {
       try {
-        const g = await callGemini(GEMINI_MODELS.assess, sys, content, 6000)
-        assessText = g.text; usedProvider = 'gemini'; usedModel = GEMINI_MODELS.assess; inTok = g.inTok; outTok = g.outTok
+        const gModel = await resolveGeminiModel(false)
+        const g = await callGemini(gModel, sys, content, 6000)
+        assessText = g.text; usedProvider = 'gemini'; usedModel = gModel; inTok = g.inTok; outTok = g.outTok
       } catch (e) {
         // Log the Gemini miss (so we can watch reliability), then fall back below.
-        try { await svcLog().from('ai_usage_log').insert({ store_id: storeId, part_id: partId || null, operation: 'assess', model: GEMINI_MODELS.assess, input_tokens: 0, output_tokens: 0, cost_usd: 0, success: false, error_message: `gemini fallback: ${String(e).slice(0, 300)}` }) } catch (_) { /* ignore */ }
+        try { await svcLog().from('ai_usage_log').insert({ store_id: storeId, part_id: partId || null, operation: 'assess', model: 'gemini', input_tokens: 0, output_tokens: 0, cost_usd: 0, success: false, error_message: `gemini fallback: ${String(e).slice(0, 300)}` }) } catch (_) { /* ignore */ }
       }
     }
 
