@@ -46,6 +46,18 @@ function StatusPill({ part, fontSize = 11, padding }) {
 
 // eBay-style accent + section card (mirrors eBay's "Create your listing" layout)
 const EBAY_BLUE = '#3665f3'
+
+// By-Part table columns [label, width, align]. Locked via table-layout:fixed so
+// the grid is IDENTICAL across By-Part / List / De-list — switching modes changes
+// the row contents, never the column positions. Money columns are right-aligned
+// so they line up by place value (and under the TOTALS footer).
+const BYPART_COLS = [
+  ['Edit', 172, 'left'], ['SKU', 92, 'left'], ['Title', 260, 'left'],
+  ['Make', 90, 'left'], ['Model', 100, 'left'], ['Year', 68, 'left'],
+  ['Category', 150, 'left'], ['Status', 92, 'left'], ['AI', 44, 'center'],
+  ['List$', 80, 'right'], ['Cost', 80, 'right'], ['Profit', 86, 'right'], ['Del', 54, 'center'],
+]
+const BYPART_MINW = BYPART_COLS.reduce((n, c) => n + c[1], 0)
 function Section({ title, hint, action, children, accent }) {
   return (
     <div style={{ background:'#fff', border:`1px solid ${C.border}`, borderRadius:14, padding:'18px 22px', marginBottom:16, boxShadow:'0 1px 2px rgba(0,0,0,0.04)' }}>
@@ -1481,15 +1493,15 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
               per page
             </label>
           </div>
-          <div ref={tableRef} className="pv-scroll" style={{ overflowX:'scroll', overflowY:'auto', maxHeight: tableH ? tableH - (ebayMode!=='off'?72:0) : '60vh', borderRadius:6, border:`1px solid ${C.border}` }}>
-            <table style={{ borderCollapse:'collapse', fontSize:13, minWidth:1000, width:'100%', zoom:'var(--table-zoom, 1)' }}>
+          <div ref={tableRef} className="pv-scroll" style={{ overflowX:'scroll', overflowY:'scroll', maxHeight: tableH ? tableH - (ebayMode!=='off'?72:0) : '60vh', borderRadius:6, border:`1px solid ${C.border}` }}>
+            <table style={{ borderCollapse:'collapse', fontSize:13, minWidth:BYPART_MINW, width:'100%', tableLayout:'fixed', zoom:'var(--table-zoom, 1)' }}>
+              <colgroup>{BYPART_COLS.map(([h,w])=><col key={h} style={{ width:w }} />)}</colgroup>
               <thead style={{ position:'sticky', top:0, zIndex:10 }}>
                 <tr style={{ background:'#f5f4f0' }}>
-                  {/* Fixed column set — identical across By-Part / List / De-list; only
-                      the eBay select checkbox appears (inside the Edit column) so the
-                      layout never shifts when you switch modes. */}
-                  {[['Edit',150],['SKU',80],['Title',260],['Make',80],['Model',90],['Year',65],['Category',150],['Status',85],['AI',40],['List$',72],['Cost',72],['Profit',72],['Del',50]].map(([h,w])=>(
-                    <th key={h} style={{ padding:'8px 8px', textAlign:'left', fontSize:10, fontWeight:700, textTransform:'uppercase', color:C.muted, background:'#f5f4f0', borderBottom:`2px solid ${C.accent}`, borderRight:`1px solid ${C.border}`, minWidth:w, whiteSpace:'nowrap' }}>
+                  {/* Column widths are locked by the colgroup + table-layout:fixed, so the
+                      grid is identical across By-Part / List / De-list. */}
+                  {BYPART_COLS.map(([h,w,align])=>(
+                    <th key={h} style={{ padding:'8px 8px', textAlign:align||'left', fontSize:10, fontWeight:700, textTransform:'uppercase', color:C.muted, background:'#f5f4f0', borderBottom:`2px solid ${C.accent}`, borderRight:`1px solid ${C.border}`, whiteSpace:'nowrap', overflow:'hidden' }}>
                       {h==='Edit' && ebayMode!=='off'
                         ? <span style={{ display:'inline-flex', alignItems:'center', gap:6 }}>
                             <input type="checkbox" title="Select all on this page" checked={paged.length>0 && paged.every(p=>sel.has(p.id))} onChange={()=>setSel(s=>{ const n=new Set(s); const all=paged.every(p=>n.has(p.id)); paged.forEach(p=>all?n.delete(p.id):n.add(p.id)); return n })} style={{ width:15, height:15, cursor:'pointer' }} />
@@ -1504,7 +1516,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                 {paged.map((p,i)=>{
                   const cost=totalCost(p),lp=+p.list_price||0,pr=lp-cost
                   const bg=p.deletedAt?'#fff5f5':p.status==='sold'?'#f0fdf4':i%2===0?'#ffffff':'#faf9f7'
-                  const td=(v,col,bold)=><td style={{ padding:'4px 8px', fontSize:12, color:col||C.text, fontWeight:bold?700:400, borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`, overflow:'hidden', whiteSpace:'nowrap', textOverflow:'ellipsis', maxWidth:260 }} title={String(v||'')}>{v||<span style={{color:C.border}}>—</span>}</td>
+                  const td=(v,col,bold,align)=><td style={{ padding:'4px 8px', fontSize:12, color:col||C.text, fontWeight:bold?700:400, textAlign:align||'left', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`, overflow:'hidden', whiteSpace:'nowrap', textOverflow:'ellipsis' }} title={String(v??'')}>{v||<span style={{color:C.border}}>—</span>}</td>
                   return (
                     <tr key={p.id} style={{ background: ebayMode!=='off' && sel.has(p.id) ? '#eef2ff' : bg }}>
                       <td style={{ padding:'4px 6px', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`, whiteSpace:'nowrap' }}>
@@ -1523,9 +1535,9 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                           ? <span title="Add a photo — AI assessment needs one">📷</span>
                           : <span title={p.ai_assessed?'AI Assessed':'Needs AI'}>{p.ai_assessed?'✅':'⬜'}</span>}
                       </td>
-                      {td(lp>0?`$${lp.toFixed(0)}`:'',C.text,true)}
-                      {td(`$${cost.toFixed(0)}`,C.red)}
-                      {td(`$${pr.toFixed(0)}`,pr>=0?C.green:C.red,true)}
+                      {td(lp>0?`$${lp.toFixed(0)}`:'',C.text,true,'right')}
+                      {td(`$${cost.toFixed(0)}`,C.red,false,'right')}
+                      {td(`$${pr.toFixed(0)}`,pr>=0?C.green:C.red,true,'right')}
                       <td style={{ padding:'4px 6px', textAlign:'center', borderBottom:`1px solid ${C.border}` }}>
                         <button onClick={()=>setDeleteTarget(p)} title="Delete this part" style={{ fontSize:11, padding:'2px 6px', background:'#fef2f2', color:C.red, border:`1px solid ${C.red}44`, borderRadius:4, cursor:'pointer' }}>🗑</button>
                       </td>
