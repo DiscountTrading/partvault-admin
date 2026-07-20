@@ -240,6 +240,20 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       setAmSaved(true); setTimeout(() => setAmSaved(false), 2000)
     } catch (e) { console.error('AI model save failed', e) }
   }
+  // Which AI engine does the (token-heavy) part assessment: Gemini (cheap) or
+  // Claude. Gemini is the default; Claude tiers below still apply to the Claude
+  // path and to the reasoning tasks that always use Claude.
+  const [assessProvider, setAssessProvider] = useState('gemini')
+  const [apSaved, setApSaved] = useState(false)
+  const saveAssessProvider = async (p) => {
+    setAssessProvider(p)
+    if (!storeId) return
+    try {
+      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      await sb.from('stores').update({ settings: { ...(current?.settings || {}), assessProvider: p } }).eq('id', storeId)
+      setApSaved(true); setTimeout(() => setApSaved(false), 2000)
+    } catch (e) { console.error('AI provider save failed', e) }
+  }
   // Subscription plan + this month's AI usage (usage metered server-side).
   const [plan, setPlan] = useState(() => planState(null))
   const [aiUsage, setAiUsage] = useState(null)
@@ -415,6 +429,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         else saveTimezone(browserTz)
         if (data.settings.syncIntervalHours) setSyncInterval(+data.settings.syncIntervalHours)
         if (data.settings.aiModel) setAiModel(data.settings.aiModel)
+        if (data.settings.assessProvider) setAssessProvider(data.settings.assessProvider)
         setMarketplace(data.settings.marketplace || 'EBAY_AU')
       }
       // Marketplace locks once the store has any part (DB-enforced too).
@@ -2155,10 +2170,31 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
           </Section>
 
           <Section title="🧠 AI model">
-            <p style={{ fontSize: 13, color: C.muted, marginBottom: 14, lineHeight: 1.6 }}>
-              Which model does the full part assessment. Higher quality costs more AI credits per part.
+            {/* Assessment engine: Gemini (cheap, default) vs Claude. */}
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 6 }}>Assessment engine</div>
+            <p style={{ fontSize: 12, color: C.muted, marginBottom: 8, lineHeight: 1.5 }}>
+              Which AI identifies parts from photos — the token-heavy job. <strong>Gemini</strong> is ~10× cheaper; <strong>Claude</strong> uses the tier below. Either way, price and description tasks still use Claude.
             </p>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 18 }}>
+              {[
+                { id: 'gemini', name: '⚡ Gemini', blurb: 'Google Gemini Flash — lowest cost, great vision. Recommended.' },
+                { id: 'anthropic', name: '🎯 Claude', blurb: 'Anthropic Claude — uses the quality tier below.' },
+              ].map(t => (
+                <button key={t.id} onClick={() => saveAssessProvider(t.id)}
+                  style={{ flex: '1 1 220px', textAlign: 'left', cursor: 'pointer', borderRadius: 10, padding: '12px 14px',
+                    border: `2px solid ${assessProvider === t.id ? C.accent : C.border}`, background: assessProvider === t.id ? C.accent + '12' : '#fff' }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: C.text }}>{t.name}</div>
+                  <div style={{ fontSize: 12, color: C.muted, marginTop: 5, lineHeight: 1.5 }}>{t.blurb}</div>
+                </button>
+              ))}
+            </div>
+            {apSaved && <div style={{ fontSize: 12, color: C.green, marginBottom: 10 }}>✓ saved</div>}
+
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 6, opacity: assessProvider === 'anthropic' ? 1 : 0.55 }}>Claude quality tier {assessProvider !== 'anthropic' && <span style={{ fontWeight: 400, fontSize: 11 }}>(applies when Claude is the engine)</span>}</div>
+            <p style={{ fontSize: 13, color: C.muted, marginBottom: 14, lineHeight: 1.6 }}>
+              Which Claude model does the full part assessment. Higher quality costs more AI credits per part.
+            </p>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', opacity: assessProvider === 'anthropic' ? 1 : 0.55 }}>
               {[
                 { id: 'economy',  name: 'Economy',  weight: 1, blurb: 'Fast, lowest cost. Good for simple/common parts.' },
                 { id: 'standard', name: 'Standard',  weight: 2, blurb: 'Balanced quality — recommended for most listings.' },

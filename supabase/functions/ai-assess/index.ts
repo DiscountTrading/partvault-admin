@@ -103,6 +103,62 @@ const AI_TIERS: Record<string, AiTier> = {
   premium:  { model: 'claude-sonnet-5',           images: 4, thinking: true,  effort: 'high', weight: 4 },
 }
 const resolveTier = (v: unknown): AiTier => AI_TIERS[(v === 'economy' || v === 'premium') ? v as string : 'standard']
+
+// ── Gemini provider ─────────────────────────────────────────────────────────
+// Google Gemini is ~10× cheaper than Sonnet on the token-heavy vision work, so
+// the part assessment defaults to it (per-store overridable). Same JSON contract
+// as the Anthropic path; on ANY Gemini failure the caller falls back to Claude.
+const GEMINI_MODELS = { assess: 'gemini-2.5-flash', light: 'gemini-2.5-flash-lite' }
+
+// Convert an Anthropic-style content array (text + image url/base64 blocks) into
+// Gemini `parts`. Gemini needs image BYTES inline, so URL images are fetched and
+// base64-encoded here.
+async function toGeminiParts(content: any[]): Promise<any[]> {
+  const parts: any[] = []
+  for (const b of content) {
+    if (b?.type === 'text') { parts.push({ text: b.text }); continue }
+    if (b?.type === 'image') {
+      const src = b.source || {}
+      if (src.type === 'base64' && src.data) { parts.push({ inline_data: { mime_type: src.media_type || 'image/jpeg', data: src.data } }); continue }
+      if (src.type === 'url' && src.url) {
+        try {
+          const r = await fetch(src.url)
+          const buf = new Uint8Array(await r.arrayBuffer())
+          let bin = ''; const CH = 0x8000
+          for (let i = 0; i < buf.length; i += CH) bin += String.fromCharCode.apply(null, buf.subarray(i, i + CH) as unknown as number[])
+          const ct = r.headers.get('content-type') || ''
+          parts.push({ inline_data: { mime_type: ct.startsWith('image/') ? ct : 'image/jpeg', data: btoa(bin) } })
+        } catch (_) { /* an image that won't load is skipped, not fatal */ }
+      }
+    }
+  }
+  return parts
+}
+
+// Call Gemini generateContent in JSON mode. Returns concatenated text + token
+// usage, or throws (so the caller can fall back to Anthropic).
+async function callGemini(model: string, sys: string, content: any[], maxTokens = 6000): Promise<{ text: string; inTok: number; outTok: number }> {
+  const KEY = Deno.env.get('GEMINI_API_KEY')
+  if (!KEY) throw new Error('GEMINI_API_KEY not set')
+  const parts = await toGeminiParts(content)
+  const req = {
+    systemInstruction: { parts: [{ text: sys }] },
+    contents: [{ role: 'user', parts }],
+    generationConfig: { responseMimeType: 'application/json', maxOutputTokens: maxTokens, temperature: 0.2 },
+  }
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${KEY}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(req),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok || data.error) throw new Error(`Gemini HTTP ${res.status}: ${data?.error?.message || 'error'}`)
+  const cand = data.candidates?.[0]
+  const fin = cand?.finishReason
+  if (!cand || (fin && fin !== 'STOP' && fin !== 'MAX_TOKENS')) throw new Error(`Gemini stopped: ${fin || 'no candidate'}`)
+  const text = (cand.content?.parts || []).map((p: any) => p.text || '').join('').trim()
+  if (!text) throw new Error('Gemini empty response')
+  const u = data.usageMetadata || {}
+  return { text, inTok: u.promptTokenCount || 0, outTok: u.candidatesTokenCount || 0 }
+}
 async function meterFullAI(url: string, storeId?: string, weight = 1): Promise<{ allowed: boolean; used: number; limit: number; tier: string; viaCredit?: boolean }> {
   const unlimited = { allowed: true, used: 0, limit: 0, tier: 'unknown' }
   if (!storeId) return unlimited
@@ -382,10 +438,12 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
     // the credit weight. Default 'standard'. Sonnet 5 hi-res vision is ~3–5k input
     // tokens PER image, so the image count is the main cost lever.
     let TIER = AI_TIERS.standard
+    let storeSettings: any = {}
     try {
       const svc = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
       const { data: strow } = await svc.from('stores').select('settings').eq('id', storeId).single()
-      TIER = resolveTier(strow?.settings?.aiModel)
+      storeSettings = strow?.settings || {}
+      TIER = resolveTier(storeSettings.aiModel)
     } catch (_) { /* default standard */ }
     const MAX_PART_IMAGES = TIER.images
     const urls = (Array.isArray(photoUrls) ? photoUrls : (photoUrl ? [photoUrl] : [])).filter(Boolean).slice(0, MAX_PART_IMAGES)
@@ -498,47 +556,71 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
         try { await createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!).from('parts').update({ ai_pending: false }).eq('id', partId) } catch (_) { /* ignore */ }
       }
     }
-    // Plan enforcement: the full Sonnet assessment is the metered unit. For the
-    // background capture flow, skip quietly (part stays editable, stage-1 already
-    // cleared ai_pending); for a user-invoked run, explain the limit.
-    const meter = await meterFullAI(url, storeId, TIER.weight)
+    // Provider routing: the token-heavy vision assessment defaults to Gemini
+    // (~10× cheaper); per-store override via settings.assessProvider ('gemini' |
+    // 'anthropic'). A Gemini failure falls back to Anthropic so a part is never
+    // left unassessed. The metered unit is 1 credit on Gemini vs the tier weight
+    // on Anthropic (Gemini is far cheaper).
+    const geminiReady = !!Deno.env.get('GEMINI_API_KEY')
+    const wantGemini = (storeSettings.assessProvider ?? 'gemini') === 'gemini' && geminiReady
+    const meter = await meterFullAI(url, storeId, wantGemini ? 1 : TIER.weight)
     if (!meter.allowed) {
       await clearPendingOnFail()
       if (trusted && partId) return json({ ok: true, skipped: 'ai_limit', message: aiLimitMsg(meter) })
       return json({ error: aiLimitMsg(meter) }, 429)
     }
-    // Model + thinking come from the store's tier. Sonnet tiers use adaptive
-    // thinking (temperature omitted — it 400s on Sonnet 5); Haiku (economy) runs
-    // plain (thinking/effort aren't supported there). textOf() ignores thinking blocks.
-    const assessPayload: Record<string, unknown> = { model: TIER.model, max_tokens: 6000, system: sys, messages: [{ role: 'user', content }] }
-    if (TIER.thinking) { assessPayload.thinking = { type: 'adaptive' }; assessPayload.output_config = { effort: TIER.effort } }
-    const aiRes = await callAnthropic(assessPayload)
-    const data = await aiRes.json()
-    // Record assessment failures so they're diagnosable (the queue swallows them).
-    const logAssessFail = async (msg: string) => {
+
+    let usedProvider = 'anthropic'
+    let usedModel = TIER.model
+    let assessText = ''
+    let inTok = 0, outTok = 0
+    const svcLog = () => createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+    const logAssess = async (success: boolean, msg?: string) => {
       try {
-        await createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!).from('ai_usage_log').insert({
-          store_id: storeId, part_id: partId || null, operation: 'assess', model: TIER.model,
-          input_tokens: 0, output_tokens: 0, cost_usd: 0, success: false,
-          error_message: `HTTP ${aiRes.status}: ${String(msg).slice(0, 400)}`,
+        await svcLog().from('ai_usage_log').insert({
+          store_id: storeId, part_id: partId || null, operation: 'assess', model: usedModel,
+          input_tokens: inTok, output_tokens: outTok, cost_usd: 0, success,
+          error_message: success ? null : String(msg || '').slice(0, 400),
         })
       } catch (_) { /* ignore */ }
     }
-    if (data.error) {
-      await logAssessFail(data.error.message || JSON.stringify(data.error))
-      await clearPendingOnFail()
-      const raw = data.error.message || 'AI error'
-      const isRate = data.error.type === 'rate_limit_error' || aiRes.status === 429 || /rate limit/i.test(raw)
-      if (isRate) {
-        // Background capture: degrade quietly (part stays editable, re-runnable
-        // from admin) — don't dump a scary rate-limit toast in the field app.
-        if (trusted && partId) return json({ ok: true, skipped: 'rate_limit', message: 'AI is busy — this part was saved and can be assessed again shortly.' })
-        return json({ error: 'AI is busy right now (rate limit reached). Please wait a minute and try again.', rateLimited: true }, 429)
+
+    if (wantGemini) {
+      try {
+        const g = await callGemini(GEMINI_MODELS.assess, sys, content, 6000)
+        assessText = g.text; usedProvider = 'gemini'; usedModel = GEMINI_MODELS.assess; inTok = g.inTok; outTok = g.outTok
+      } catch (e) {
+        // Log the Gemini miss (so we can watch reliability), then fall back below.
+        try { await svcLog().from('ai_usage_log').insert({ store_id: storeId, part_id: partId || null, operation: 'assess', model: GEMINI_MODELS.assess, input_tokens: 0, output_tokens: 0, cost_usd: 0, success: false, error_message: `gemini fallback: ${String(e).slice(0, 300)}` }) } catch (_) { /* ignore */ }
       }
-      return json({ error: raw }, 400)
     }
-    const parsed = parseJson(textOf(data))
-    if (!parsed) { await logAssessFail(`unparseable response: ${textOf(data).slice(0, 200)}`); await clearPendingOnFail(); return json({ error: 'Could not parse AI response' }, 502) }
+
+    if (!assessText) {
+      // Anthropic path. Sonnet tiers use adaptive thinking (temperature omitted —
+      // it 400s on Sonnet 5); Haiku (economy) runs plain. textOf() ignores thinking.
+      usedProvider = 'anthropic'; usedModel = TIER.model
+      const assessPayload: Record<string, unknown> = { model: TIER.model, max_tokens: 6000, system: sys, messages: [{ role: 'user', content }] }
+      if (TIER.thinking) { assessPayload.thinking = { type: 'adaptive' }; assessPayload.output_config = { effort: TIER.effort } }
+      const aiRes = await callAnthropic(assessPayload)
+      const data = await aiRes.json()
+      if (data.error) {
+        await logAssess(false, `HTTP ${aiRes.status}: ${data.error.message || JSON.stringify(data.error)}`)
+        await clearPendingOnFail()
+        const raw = data.error.message || 'AI error'
+        const isRate = data.error.type === 'rate_limit_error' || aiRes.status === 429 || /rate limit/i.test(raw)
+        if (isRate) {
+          if (trusted && partId) return json({ ok: true, skipped: 'rate_limit', message: 'AI is busy — this part was saved and can be assessed again shortly.' })
+          return json({ error: 'AI is busy right now (rate limit reached). Please wait a minute and try again.', rateLimited: true }, 429)
+        }
+        return json({ error: raw }, 400)
+      }
+      assessText = textOf(data)
+      const uu = data.usage || {}; inTok = uu.input_tokens || 0; outTok = uu.output_tokens || 0
+    }
+
+    const parsed = parseJson(assessText)
+    if (!parsed) { await logAssess(false, `unparseable ${usedProvider} response: ${assessText.slice(0, 200)}`); await clearPendingOnFail(); return json({ error: 'Could not parse AI response' }, 502) }
+    await logAssess(true)
 
     // ── Learn from your own pricing history ─────────────────────────────────
     // Reuse the price you actually used/sold for the same part: match on OEM
@@ -603,10 +685,10 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
         const { [m[1]]: _drop, ...rest } = row
         row = rest
       }
-      if (upErr) { await logAssessFail(`save failed: ${upErr.message}`); return json({ error: `AI ran but saving failed: ${upErr.message}`, result: parsed }, 500) }
+      if (upErr) { await logAssess(false, `save failed: ${upErr.message}`); return json({ error: `AI ran but saving failed: ${upErr.message}`, result: parsed }, 500) }
       applied = true
     }
-    return json({ ok: true, result: parsed, applied, learnedPrice, learnedFrom })
+    return json({ ok: true, result: parsed, applied, learnedPrice, learnedFrom, provider: usedProvider, model: usedModel })
   } catch (e) {
     // Never leave a capture-triggered part stuck on "Assessing…".
     try {
