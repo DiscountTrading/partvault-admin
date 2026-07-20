@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { C, S, fmt, pct, totalCost, postageCostFor, estimatePostage, partEffectiveCost, bucketByAge, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS, CATEGORY_NAMES } from '../lib/constants'
+import useFitScale from '../hooks/useFitScale'
 
 function StatCard({ label, value, sub, color }) {
   return (
@@ -12,6 +13,9 @@ function StatCard({ label, value, sub, color }) {
 }
 
 export default function Dashboard({ parts, sales = [], costing, inventory, onDrill, onSeeSales }) {
+  // Fit the whole dashboard to the viewport height — "at a glance", no scroll,
+  // on any subscriber's screen size.
+  const { wrapRef, contentRef, wrapStyle, contentStyle } = useFitScale({ bottomMargin: 34, minScale: 0.55 })
   // Sales/P&L are shown for a selectable window (eBay reports last 90 days, so
   // 90 is the default for a like-for-like comparison). 0 = all time.
   const [periodDays, setPeriodDays] = useState(90)
@@ -104,7 +108,8 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
   const agedValue = aged.reduce((a,p) => a + (+p.listPrice || +p.list_price || 0), 0)
 
   return (
-    <div>
+    <div ref={wrapRef} style={wrapStyle}>
+    <div ref={contentRef} style={contentStyle}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10, paddingBottom:8, borderBottom:`1px solid ${C.border}` }}>
         <h2 style={{ ...S.h1, margin:0 }}>📊 Dashboard</h2>
         <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
@@ -244,6 +249,7 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
           })()}
         </div>
       </div>
+    </div>
     </div>
   )
 }
