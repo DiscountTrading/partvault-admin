@@ -91,7 +91,7 @@ function printPackingSlip(sale, part) {
   w.document.close()
 }
 
-const PERIODS = [[30, '30d'], [90, '90d'], [365, '12mo'], [0, 'All']]
+const PERIODS = [[7, '7d'], [30, '30d'], [90, '90d'], [365, '12mo'], [0, 'All']]
 const RENDER_CAP = 400
 
 const fmtDate = t => t ? new Date(t).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: '2-digit' }) : '—'
@@ -719,7 +719,7 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
     document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(a.href)
   }
 
-  const PERIOD_TITLES = { 0: 'All time', 30: 'Last 30 days', 90: 'Last 90 days', 365: 'Last 12 months' }
+  const PERIOD_TITLES = { 0: 'All time', 7: 'Last 7 days', 30: 'Last 30 days', 90: 'Last 90 days', 365: 'Last 12 months' }
   const periodTitle = period === 'custom' ? 'Selected range' : (PERIOD_TITLES[period] || `Last ${period} days`)
   const th = { textAlign: 'left', padding: '9px 12px', color: C.muted, fontWeight: 700, fontSize: 11, whiteSpace: 'nowrap', position: 'sticky', top: 0, background: '#fff', zIndex: 5 }
   const td = (align = 'left') => ({ textAlign: align, padding: '9px 12px', color: C.text, whiteSpace: 'nowrap' })

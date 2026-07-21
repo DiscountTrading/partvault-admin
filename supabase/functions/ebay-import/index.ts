@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.36.47'
+const EDGE_FN_VERSION         = '3.36.49'
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  HARD BLOCK — EDITING LIVE eBay LISTINGS IS DISABLED AT THE CODE LEVEL.
@@ -187,6 +187,86 @@ const CATEGORY_ID_MAP: Record<string, string> = {
   '33704':'Interior Parts','39754':'Interior Parts',
 }
 
+// ── Gemini provider (shared with ai-assess) ─────────────────────────────────
+// The item-specifics photo call is token-heavy vision work, so it defaults to
+// Google Gemini (~10× cheaper than Claude) with a Claude fallback on any error.
+// Model names churn (Google retires old IDs for new keys), so we ask the API
+// which Flash model THIS key can use rather than hardcoding one. Cached per
+// cold-start. Mirrors the helpers in supabase/functions/ai-assess/index.ts.
+let _geminiModelCache: { full?: string; lite?: string } | null = null
+async function resolveGeminiModel(wantLite = false): Promise<string> {
+  if (_geminiModelCache) return (wantLite ? _geminiModelCache.lite : _geminiModelCache.full) || _geminiModelCache.full!
+  const KEY = Deno.env.get('GEMINI_API_KEY')
+  if (!KEY) throw new Error('GEMINI_API_KEY not set')
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${KEY}&pageSize=200`)
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(`Gemini ListModels HTTP ${res.status}: ${data?.error?.message || 'error'}`)
+  const names: string[] = (data.models || [])
+    .filter((m: any) => (m.supportedGenerationMethods || []).includes('generateContent'))
+    .map((m: any) => String(m.name || '').replace(/^models\//, ''))
+  const bad = /lite|pro|thinking|-exp|embedding|aqa|vision-|1\.0|1\.5|8b/i
+  const full = names.find((n) => n === 'gemini-flash-latest')
+    || names.filter((n) => /flash/i.test(n) && !bad.test(n)).sort().reverse()[0]
+    || names.find((n) => /flash/i.test(n) && !/pro|embedding|aqa/i.test(n))
+    || names.find((n) => /gemini/i.test(n))
+  const lite = names.find((n) => n === 'gemini-flash-lite-latest')
+    || names.filter((n) => /flash-lite/i.test(n) && !/-exp/i.test(n)).sort().reverse()[0]
+    || full
+  if (!full) throw new Error(`No usable Gemini model for this key (saw: ${names.slice(0, 12).join(', ') || 'none'})`)
+  _geminiModelCache = { full, lite }
+  return wantLite ? (lite || full) : full
+}
+
+// Convert an Anthropic-style content array (text + image url/base64 blocks) into
+// Gemini `parts`. Gemini needs image BYTES inline, so URL images are fetched and
+// base64-encoded here. An image that won't load is skipped, not fatal.
+async function toGeminiParts(content: any[]): Promise<any[]> {
+  const parts: any[] = []
+  for (const b of content) {
+    if (b?.type === 'text') { parts.push({ text: b.text }); continue }
+    if (b?.type === 'image') {
+      const src = b.source || {}
+      if (src.type === 'base64' && src.data) { parts.push({ inline_data: { mime_type: src.media_type || 'image/jpeg', data: src.data } }); continue }
+      if (src.type === 'url' && src.url) {
+        try {
+          const r = await fetch(src.url)
+          const buf = new Uint8Array(await r.arrayBuffer())
+          let bin = ''; const CH = 0x8000
+          for (let i = 0; i < buf.length; i += CH) bin += String.fromCharCode.apply(null, buf.subarray(i, i + CH) as unknown as number[])
+          const ct = r.headers.get('content-type') || ''
+          parts.push({ inline_data: { mime_type: ct.startsWith('image/') ? ct : 'image/jpeg', data: btoa(bin) } })
+        } catch (_) { /* skip */ }
+      }
+    }
+  }
+  return parts
+}
+
+// Call Gemini generateContent in JSON mode. Returns concatenated text + token
+// usage, or throws (so the caller can fall back to Anthropic).
+async function callGemini(model: string, sys: string, content: any[], maxTokens = 1400): Promise<{ text: string; inTok: number; outTok: number }> {
+  const KEY = Deno.env.get('GEMINI_API_KEY')
+  if (!KEY) throw new Error('GEMINI_API_KEY not set')
+  const parts = await toGeminiParts(content)
+  const req = {
+    systemInstruction: { parts: [{ text: sys }] },
+    contents: [{ role: 'user', parts }],
+    generationConfig: { responseMimeType: 'application/json', maxOutputTokens: maxTokens, temperature: 0.2 },
+  }
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${KEY}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(req),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok || data.error) throw new Error(`Gemini HTTP ${res.status}: ${data?.error?.message || 'error'}`)
+  const cand = data.candidates?.[0]
+  const fin = cand?.finishReason
+  if (!cand || (fin && fin !== 'STOP' && fin !== 'MAX_TOKENS')) throw new Error(`Gemini stopped: ${fin || 'no candidate'}`)
+  const text = (cand.content?.parts || []).map((p: any) => p.text || '').join('').trim()
+  if (!text) throw new Error('Gemini empty response')
+  const u = data.usageMetadata || {}
+  return { text, inTok: u.promptTokenCount || 0, outTok: u.candidatesTokenCount || 0 }
+}
+
 // Build the eBay item specifics + confident fitment for a part, using the
 // Taxonomy aspect list for its leaf category. Three passes: derive from our
 // structured data, AI-fill the rest from the part photos, neutral fallback for
@@ -199,6 +279,7 @@ async function fillAspects(
   ebayHeaders: Record<string, string>,
   aiPhotos: string[],
   listingDefaults: any = {},
+  opts: { provider?: string; sb?: any; storeId?: string; partId?: string } = {},
 ): Promise<{ aspects: Record<string, string[]>; fitmentList: any[]; specs: any[] }> {
   const aspects: Record<string, string[]> = {}
   let fitmentList: any[] = []
@@ -253,27 +334,59 @@ async function fillAspects(
       // Pass 2 — AI fills the remaining specifics + confident fitment from the photos.
       const todo = specs.filter((s: any) => !aspects[s.name]).slice(0, 30)
       const ANTHROPIC = Deno.env.get('ANTHROPIC_API_KEY')
-      if (ANTHROPIC && aiPhotos.length && todo.length) {
+      const geminiReady = !!Deno.env.get('GEMINI_API_KEY')
+      // Provider routing: this token-heavy vision call defaults to Gemini (~10×
+      // cheaper); per-store override via settings.specificsProvider. On ANY
+      // Gemini error we fall back to Claude Haiku so a listing never loses its
+      // specifics. Either provider gets the identical prompt + JSON contract.
+      const wantGemini = (opts.provider ?? 'gemini') === 'gemini' && geminiReady
+      if ((ANTHROPIC || geminiReady) && aiPhotos.length && todo.length) {
         try {
           const aspList = todo.map((s: any) => s.selectionOnly && s.allowed.length
             ? `- ${s.name} (choose exactly one, verbatim: ${s.allowed.slice(0, 40).join(' | ')})`
             : `- ${s.name} (free text, max 60 chars)`).join('\n')
           const sys = `You are an expert Australian auto-parts eBay lister. Identify the part from the PHOTOS first — the provided Category is only a hint and may be wrong; trust the photos if they disagree. From the part photos and the known donor vehicle, do TWO things and return JSON only:\n{"aspects": {<aspectName>: <value>}, "fitment": [{"make":"","model":"","yearFrom":2012,"yearTo":2017,"trim":"","engine":""}]}\ntrim and engine are optional — include them only when the part is specific to that trim/engine; leave "" otherwise.\nASPECTS: fill in as MANY of the listed aspects as you reasonably can — do not leave fields blank when a sensible value is determinable. Use the photos, the identified part type, the donor vehicle, and standard knowledge of this kind of used auto part. Infer reasonable values for things like Type, Placement, Brand (the OEM make, or "Unbranded" for generic), Colour, Material, Surface Finish, Country/Region of Manufacture, and — for a clearly identified part — typical specs (e.g. the Voltage/Wattage/base size of a known bulb, the standard size of a known component). For "choose one" aspects return ONE listed option verbatim (pick the closest match), otherwise omit. Read any dimension, size, wattage, voltage, bulb base or part number that is PRINTED or visible in the photos and fill the matching aspect (Item Diameter, Item Length, Bulb Size, Voltage, Wattage, etc.). Do NOT fabricate a precise measurement, exact part number, or warranty term you cannot see or safely infer. Leave an aspect blank ONLY when you genuinely cannot determine a sensible value.\nFITMENT — list the vehicles this part actually fits (confidence is about whether it genuinely fits, NOT about how few you list):\n• VEHICLE-SPECIFIC parts (body panels, light assemblies, looms, ECUs, trim, mirrors): list only vehicles you are confident share the IDENTICAL part (same OEM/interchange number) — the donor vehicle plus platform-shared siblings you are sure about. Omit uncertain ones.\n• STANDARDISED / UNIVERSAL parts (a globe/bulb of a standard base such as H1/H4/H7/H11/HB3/9005, a fuse, a wiper blade of a given size, a standard spin-on oil filter, a common belt): these genuinely fit MANY vehicles. First identify the exact specification, then list the common Australian-market vehicles that use that spec — up to 20 popular models with realistic year ranges. This is accurate, not guessing, so do NOT restrict it to just the donor car.\nNever list a vehicle that does not actually take this part. Return an empty array only if you truly cannot tell.`
           const usr = `Part: ${part.title || ''}\nVehicle: ${part.make || ''} ${part.model || ''} ${part.year || ''}\nCategory: ${part.category || ''}\nPart number: ${part.part_number || 'unknown'}\n${aiPhotos.length > 1 ? `\nThe ${aiPhotos.length} photos are all of the SAME part from different angles/close-ups — use them together.` : ''}\nAspects to fill:\n${aspList}`
-          const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: { 'x-api-key': ANTHROPIC, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-            body: JSON.stringify({
-              model: 'claude-haiku-4-5-20251001', max_tokens: 1400, system: sys,
-              messages: [{ role: 'user', content: [
-                ...aiPhotos.map((u: string) => ({ type: 'image', source: { type: 'url', url: u } })),
-                { type: 'text', text: usr },
-              ] }],
-            }),
-          })
-          if (aiRes.ok) {
-            const aiData = await aiRes.json()
-            const raw = (aiData.content || []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('').trim()
+          const content = [
+            ...aiPhotos.map((u: string) => ({ type: 'image', source: { type: 'url', url: u } })),
+            { type: 'text', text: usr },
+          ]
+          // Log a Gemini miss (so we can watch reliability) then fall through to
+          // Claude. Best-effort: never let logging break the specifics fill.
+          const logGeminiMiss = async (e: unknown) => {
+            if (!opts.sb || !opts.storeId) return
+            try {
+              await opts.sb.from('ai_usage_log').insert({
+                store_id: opts.storeId, part_id: opts.partId || null, operation: 'specifics', model: 'gemini',
+                input_tokens: 0, output_tokens: 0, cost_usd: 0, success: false,
+                error_message: `gemini fallback: ${String(e).slice(0, 300)}`,
+              })
+            } catch (_) { /* ignore */ }
+          }
+
+          let raw = ''
+          if (wantGemini) {
+            try {
+              const gModel = await resolveGeminiModel(false)
+              const g = await callGemini(gModel, sys, content, 1400)
+              raw = g.text
+            } catch (e) { await logGeminiMiss(e) }
+          }
+          if (!raw && ANTHROPIC) {
+            const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+              method: 'POST',
+              headers: { 'x-api-key': ANTHROPIC, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+              body: JSON.stringify({
+                model: 'claude-haiku-4-5-20251001', max_tokens: 1400, system: sys,
+                messages: [{ role: 'user', content }],
+              }),
+            })
+            if (aiRes.ok) {
+              const aiData = await aiRes.json()
+              raw = (aiData.content || []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('').trim()
+            }
+          }
+          if (raw) {
             let map: any = null
             try { map = JSON.parse(raw) } catch { const mm = raw.match(/\{[\s\S]*\}/); if (mm) map = JSON.parse(mm[0]) }
             const aspMap = map?.aspects || map || {}
@@ -3069,7 +3182,7 @@ async function handleRequest(req: Request): Promise<Response> {
       }
       const photos = [...new Set([...partUrls, ...carUrls, ...marketingImages.slice(0, marketingMax)])].slice(0, 24)
 
-      const { aspects, fitmentList, specs } = await fillAspects(part, categoryId, categoryTreeId, ebayHeaders, partUrls.slice(0, 2), settings.listingDefaults || {})
+      const { aspects, fitmentList, specs } = await fillAspects(part, categoryId, categoryTreeId, ebayHeaders, partUrls.slice(0, 2), settings.listingDefaults || {}, { provider: settings.specificsProvider ?? 'gemini', sb, storeId, partId })
       // Show EVERY aspect eBay offers for this category, with our filled value
       // (or empty), so the user sees the full set and what's still blank.
       const ovSpec = (part.ebay_overrides && part.ebay_overrides.specifics) || {}
@@ -3448,7 +3561,7 @@ async function handleRequest(req: Request): Promise<Response> {
           // Cap at 4 images — each costs ~1.5k Anthropic input tokens and the org
           // rate limit is 10k/min; 4 keeps identification quality with headroom.
           const aiPhotos = (partUrls.length ? partUrls : imageUrls).slice(0, 4)
-          const { aspects, fitmentList } = await fillAspects(part, categoryId, categoryTreeId, ebayHeaders, aiPhotos, storeRow?.settings?.listingDefaults || {})
+          const { aspects, fitmentList } = await fillAspects(part, categoryId, categoryTreeId, ebayHeaders, aiPhotos, storeRow?.settings?.listingDefaults || {}, { provider: storeRow?.settings?.specificsProvider ?? 'gemini', sb, storeId, partId: part.id })
 
           // Full listing description: the part's description (or notes) + the
           // store's standard footer from settings.

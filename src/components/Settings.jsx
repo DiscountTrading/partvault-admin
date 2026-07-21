@@ -104,7 +104,7 @@ function StatCard({ label, value, color, sub }) {
   )
 }
 
-export default function Settings({ profile, storeId, onSignOut, refreshStores, onSettingsSaved, parts = [], onChanged }) {
+export default function Settings({ profile, storeId, onSignOut, refreshStores, onSettingsSaved, parts = [], onChanged, sync }) {
   const [tab, setTab] = useState('account')
   const [footer, setFooter] = useState(DEFAULT_FOOTER)
   // eBay listing defaults applied at publish time (warranty aspect + condition
@@ -253,6 +253,21 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       await sb.from('stores').update({ settings: { ...(current?.settings || {}), assessProvider: p } }).eq('id', storeId)
       setApSaved(true); setTimeout(() => setApSaved(false), 2000)
     } catch (e) { console.error('AI provider save failed', e) }
+  }
+  // Which AI engine fills the eBay item-specifics + fitment from the part photos
+  // (the token-heavy publish-adjacent vision call). Gemini (cheap) is the
+  // default; either way it falls back to Claude on any error so a listing never
+  // loses its specifics.
+  const [specificsProvider, setSpecificsProvider] = useState('gemini')
+  const [spSaved, setSpSaved] = useState(false)
+  const saveSpecificsProvider = async (p) => {
+    setSpecificsProvider(p)
+    if (!storeId) return
+    try {
+      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      await sb.from('stores').update({ settings: { ...(current?.settings || {}), specificsProvider: p } }).eq('id', storeId)
+      setSpSaved(true); setTimeout(() => setSpSaved(false), 2000)
+    } catch (e) { console.error('Specifics provider save failed', e) }
   }
   // Subscription plan + this month's AI usage (usage metered server-side).
   const [plan, setPlan] = useState(() => planState(null))
@@ -430,6 +445,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         if (data.settings.syncIntervalHours) setSyncInterval(+data.settings.syncIntervalHours)
         if (data.settings.aiModel) setAiModel(data.settings.aiModel)
         if (data.settings.assessProvider) setAssessProvider(data.settings.assessProvider)
+        if (data.settings.specificsProvider) setSpecificsProvider(data.settings.specificsProvider)
         setMarketplace(data.settings.marketplace || 'EBAY_AU')
       }
       // Marketplace locks once the store has any part (DB-enforced too).
@@ -1078,94 +1094,27 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   }
 
   // One-click "Sync now" — drives the SAME server-side resumable pipeline the
-  // nightly cron uses (action: cron_sync, manual:true). It POSTs repeatedly to
-  // advance the run and reads the shared sync_runs row for live progress. Because
-  // the work happens server-side, the sync keeps going — and a later nightly tick
-  // resumes it — even if this tab is closed. It is 100% READ-ONLY against eBay
-  // (see cron_sync): no listing is ever created, revised, or ended.
-  const runSync = async () => {
-    const sleep = (ms) => new Promise(r => setTimeout(r, ms))
-    // Progress bands per phase. Import dominates (thousands of listings) so it gets
-    // the widest band; the rest are quick. hi is never quite reached until the next
-    // phase begins, so the bar keeps moving without ever hitting 100 early.
-    const PHASE = {
-      import:    { lo: 4,  hi: 62, label: 'Importing listings from eBay…' },
-      backfill:  { lo: 62, hi: 80, label: 'Importing sold orders…' },
-      fees:      { lo: 80, hi: 90, label: 'Importing eBay fees…' },
-      reconcile: { lo: 90, hi: 99, label: 'Reconciling with eBay…' },
-    }
-    setSyncingAll(true)
-    setSyncPhase('Starting sync…')
-    setImportJob({ status: 'running', current_item: 'Starting…' })
-    setDisplayProgress(2); setRpm(55)
+  // nightly cron uses (action: cron_sync, manual:true). The driver + progress now
+  // live in the app-level useSyncRunner hook (passed as `sync`), NOT here, so the
+  // run survives navigating away from Settings and shows a global progress chip in
+  // the nav bar. This is just the trigger; the tachometer + caption below read
+  // sync.* for live state. It is 100% READ-ONLY against eBay (see cron_sync).
+  const runSync = () => sync?.start()
 
-    // `target` is the real progress (set by the poller); the animator eases the
-    // displayed value toward it every frame so the bar always glides — never sits
-    // frozen during a 110s server call, never jumps between phases.
-    let target = 2
-    let done   = false
+  // Mirror the hook's live phase into the local caption/tacho state so the existing
+  // tachometer + step-flags keep working unchanged while a full sync runs.
+  useEffect(() => { if (sync?.phase != null) setSyncPhase(sync.phase) }, [sync?.phase])
 
-    const anim = setInterval(() => {
-      setDisplayProgress(prev => prev < target
-        ? Math.min(target, prev + Math.max(0.5, (target - prev) * 0.1))
-        : prev)
-      setRpm(done ? 0 : 52 + Math.floor(Math.random() * 26)) // lively tacho
-    }, 120)
-
-    // Poll the shared run row often (cron_sync writes detail ~every 18s server-side)
-    // and translate phase + "X/Y" into a monotonic target. Phases without a count
-    // creep slowly across their band so the bar keeps advancing.
-    const poll = setInterval(async () => {
-      try {
-        const { data: run } = await sb.from('sync_runs')
-          .select('phase, detail').eq('store_id', storeId)
-          .order('updated_at', { ascending: false }).limit(1).maybeSingle()
-        if (!run) return
-        const p = PHASE[run.phase] || { lo: 4, hi: 99, label: 'Working…' }
-        const m = /(\d+)\s*\/\s*(\d+)/.exec(run.detail || '')
-        const t = (m && +m[2] > 0)
-          ? p.lo + (p.hi - p.lo) * Math.min(1, +m[1] / +m[2])
-          : Math.min(p.hi - 1, Math.max(target, p.lo) + 1.2) // slow creep
-        target = Math.max(target, t) // never go backward
-        setSyncPhase(`${p.label}${run.detail ? ` · ${run.detail}` : ''}`)
-      } catch { /* transient — try again next tick */ }
-    }, 2000)
-
-    try {
-      let guard = 0
-      while (!done && guard++ < 600) {
-        let d
-        try {
-          const res = await fetch(EDGE_FN, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'cron_sync', storeId, manual: true }),
-          })
-          d = await res.json()
-        } catch {
-          // Network blip — the server-side run is unaffected; keep polling.
-          await sleep(3000); continue
-        }
-        if (d.error) throw new Error(d.error)
-        done = d.done === true
-        if (d.paused) await sleep(3000)
-      }
-      target = 100
-      await sleep(700) // let the animator glide up to ~100
-      setSyncPhase('✓ Sync complete')
-      setImportJob(j => ({ ...j, status: 'completed', current_item: '✓ Sync complete' }))
-      markRun('import'); markRun('backfill'); markRun('reconcile')
-      try { localStorage.setItem(`pv_last_manual_sync_${storeId}`, new Date().toISOString()) } catch { /* ignore */ }
-      await fetchNightly()
-      await checkSyncStatus() // auto-refresh the status panel — no manual re-check needed
-    } catch (e) {
-      setSyncPhase(`Sync stopped: ${e.message}`)
-      setImportJob(j => ({ ...j, status: 'failed', current_item: e.message }))
-    } finally {
-      clearInterval(poll); clearInterval(anim)
-      setDisplayProgress(done ? 100 : 0); setRpm(0)
-      setSyncingAll(false)
-    }
-  }
+  // When a full sync finishes (completedTs bumps), refresh the panels that used to
+  // be refreshed inline — the out-of-sync health check, the nightly/last-sync row,
+  // and the per-step "last run" markers (the hook writes them to localStorage).
+  useEffect(() => {
+    if (!sync?.completedTs) return
+    checkSyncStatus()
+    fetchNightly()
+    try { setLastRun(JSON.parse(localStorage.getItem(`pv_lastrun_${storeId}`) || '{}')) } catch { /* ignore */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sync?.completedTs])
 
   // Skips listing import — just sold orders → fees → reconcile. Fast (~30s).
   const quickSync = async () => {
@@ -2190,6 +2139,26 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
             </div>
             {apSaved && <div style={{ fontSize: 12, color: C.green, marginBottom: 10 }}>✓ saved</div>}
 
+            {/* eBay item-specifics engine: Gemini (cheap, default) vs Claude. */}
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 6 }}>eBay item-specifics engine</div>
+            <p style={{ fontSize: 12, color: C.muted, marginBottom: 8, lineHeight: 1.5 }}>
+              Which AI fills the eBay item specifics + vehicle fitment from the part photos when previewing or publishing a listing. <strong>Gemini</strong> is ~10× cheaper; either way it falls back to Claude if Gemini is unavailable.
+            </p>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 18 }}>
+              {[
+                { id: 'gemini', name: '⚡ Gemini', blurb: 'Google Gemini Flash — lowest cost, great vision. Recommended.' },
+                { id: 'anthropic', name: '🎯 Claude', blurb: 'Anthropic Claude Haiku — reads photos for specifics.' },
+              ].map(t => (
+                <button key={t.id} onClick={() => saveSpecificsProvider(t.id)}
+                  style={{ flex: '1 1 220px', textAlign: 'left', cursor: 'pointer', borderRadius: 10, padding: '12px 14px',
+                    border: `2px solid ${specificsProvider === t.id ? C.accent : C.border}`, background: specificsProvider === t.id ? C.accent + '12' : '#fff' }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: C.text }}>{t.name}</div>
+                  <div style={{ fontSize: 12, color: C.muted, marginTop: 5, lineHeight: 1.5 }}>{t.blurb}</div>
+                </button>
+              ))}
+            </div>
+            {spSaved && <div style={{ fontSize: 12, color: C.green, marginBottom: 10 }}>✓ saved</div>}
+
             <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 6, opacity: assessProvider === 'anthropic' ? 1 : 0.55 }}>Claude quality tier {assessProvider !== 'anthropic' && <span style={{ fontWeight: 400, fontSize: 11 }}>(applies when Claude is the engine)</span>}</div>
             <p style={{ fontSize: 13, color: C.muted, marginBottom: 14, lineHeight: 1.6 }}>
               Which Claude model does the full part assessment. Higher quality costs more AI credits per part.
@@ -2673,10 +2642,14 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
             <Section title="📥 eBay Sync">
               {/* Sync dashboard — tacho (activity), speedo + odometer (progress), step flags */}
               {(() => {
-                const active = importJob?.status === 'running'
-                const done   = importJob?.status === 'completed'
-                const pct    = done ? 100 : (active ? displayProgress : 0)
-                const tacho  = done ? 0 : (active ? rpm : 0)
+                // Full "Sync now" state comes from the app-level hook (sync.*) so the
+                // gauges track it wherever the user navigates; other flows (e.g. a
+                // local importJob) still drive it when no full sync is running.
+                const syncOn = !!sync?.running
+                const active = syncOn || importJob?.status === 'running'
+                const done   = !syncOn && (importJob?.status === 'completed' || sync?.status === 'completed')
+                const pct    = syncOn ? Math.round(sync.progress || 0) : (done ? 100 : (importJob?.status === 'running' ? displayProgress : 0))
+                const tacho  = syncOn ? (sync.rpm || 0) : (done ? 0 : (importJob?.status === 'running' ? rpm : 0))
 
                 const MIN_A = 150, SWEEP_A = 240
                 const toRad = a => a * Math.PI / 180
@@ -2795,12 +2768,17 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                 )
               })()}
 
-              {/* Live sync-health checker */}
+              {/* Live sync-health checker. Plain-language: says what's drifted and
+                  gives one clear button that opens the fix flow (reconcile). */}
               {ebayConnected && (() => {
                 const s = syncStatus
                 const inSync = s && !s.error && s.outOfSync === 0
                 const bg = !s || s.error ? '#f9f8f5' : inSync ? '#ecfdf5' : '#fffbeb'
                 const border = !s || s.error ? C.border : inSync ? '#a7f3d0' : '#fcd34d'
+                const ago = s?.checkedAt ? (() => {
+                  const mins = Math.floor((Date.now() - new Date(s.checkedAt).getTime()) / 60000)
+                  return mins < 1 ? 'just now' : mins < 60 ? `${mins}m ago` : `${Math.floor(mins / 60)}h ago`
+                })() : null
                 return (
                   <div style={{ background: bg, border: `1px solid ${border}`, borderRadius: 10, padding: '12px 14px', marginBottom: 12 }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
@@ -2809,23 +2787,59 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                           : !s ? 'Sync status'
                           : s.error ? '⚠ Could not check'
                           : inSync ? '✓ In sync with eBay'
-                          : `⚠ ${s.outOfSync} item${s.outOfSync === 1 ? '' : 's'} out of sync`}
+                          : `⚠ ${s.outOfSync} listing${s.outOfSync === 1 ? '' : 's'} need${s.outOfSync === 1 ? 's' : ''} attention`}
                       </div>
-                      <span style={{ fontSize: 11, color: C.muted }}>Auto-checked after each sync</span>
+                      <button onClick={checkSyncStatus} disabled={statusLoading}
+                        style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: 6, padding: '3px 10px', fontSize: 11, color: C.muted, cursor: statusLoading ? 'default' : 'pointer' }}>
+                        {statusLoading ? 'Checking…' : '↻ Re-check'}
+                      </button>
                     </div>
-                    {s && !s.error && (
+
+                    {inSync && (
                       <div style={{ fontSize: 12, color: C.muted, marginTop: 6 }}>
-                        {s.stale} listed here but ended on eBay · {s.missing} on eBay not here · {s.ebayActive} active on eBay vs {s.pvActive} here
-                        {s.outOfSync > 0 && <> — <button onClick={openReconcile} style={{ background: 'none', border: 'none', padding: 0, color: C.accent, cursor: 'pointer', fontWeight: 600, textDecoration: 'underline', fontSize: 'inherit', fontFamily: 'inherit' }}>Review &amp; resolve →</button></>}
-                        {s.checkedAt && (() => {
-                          const mins = Math.floor((Date.now() - new Date(s.checkedAt).getTime()) / 60000)
-                          const ago = mins < 1 ? 'just now' : mins < 60 ? `${mins}m ago` : `${Math.floor(mins / 60)}h ago`
-                          return <span style={{ color: '#9ca3af' }}> · checked {ago}</span>
-                        })()}
+                        Everything listed here matches your live eBay listings.{ago ? ` Checked ${ago}.` : ''}
+                      </div>
+                    )}
+
+                    {s && !s.error && s.outOfSync > 0 && (
+                      <div style={{ marginTop: 8 }}>
+                        <div style={{ fontSize: 12.5, color: C.text, lineHeight: 1.6 }}>
+                          {s.stale > 0 && (
+                            <div>• <strong>{s.stale}</strong> {s.stale === 1 ? 'listing is' : 'listings are'} marked active here but <strong>ended on eBay</strong> — usually a <strong>sale we haven't recorded yet</strong> (or the listing ended).</div>
+                          )}
+                          {s.missing > 0 && (
+                            <div>• <strong>{s.missing}</strong> {s.missing === 1 ? 'listing is' : 'listings are'} <strong>live on eBay but not imported</strong> into PartVault yet.</div>
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginTop: 10 }}>
+                          {s.stale > 0 && (
+                            <button onClick={openReconcile} disabled={reconciling}
+                              style={{ ...S.btn('primary'), fontSize: 13, padding: '7px 16px', opacity: reconciling ? 0.6 : 1 }}>
+                              {reconciling ? '⏳ Checking…' : `Review & fix these ${s.stale} →`}
+                            </button>
+                          )}
+                          {s.missing > 0 && (
+                            <button onClick={runSync} disabled={sync?.running}
+                              style={{ ...S.btn('secondary'), fontSize: 13, padding: '7px 16px', opacity: sync?.running ? 0.6 : 1 }}>
+                              {sync?.running ? '⏳ Syncing…' : `Import ${s.missing} from eBay`}
+                            </button>
+                          )}
+                        </div>
+                        {s.stale > 0 && (
+                          <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>
+                            We'll look up each one on eBay and pre-pick an action — <strong>Mark sold</strong>, <strong>Archived</strong>, or <strong>Keep listed</strong> — for you to confirm.
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {s && !s.error && (
+                      <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 8 }}>
+                        {s.ebayActive} active on eBay · {s.pvActive} active here{ago ? ` · checked ${ago}` : ''}
                       </div>
                     )}
                     {s?.statusBreakdown && (
-                      <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
+                      <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>
                         Our listings by status: {Object.entries(s.statusBreakdown).map(([k, v]) => `${k} ${v}`).join(' · ')}{s.version ? ` · fn ${s.version}` : ''}
                       </div>
                     )}
@@ -2951,8 +2965,8 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
               )}
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: syncPhase ? 6 : 10 }}>
-                <button style={{ ...S.btn('primary'), opacity: (syncingAll || !ebayConnected) ? 0.6 : 1 }} onClick={runSync} disabled={syncingAll || importing || backfilling || reconciling || !ebayConnected}>
-                  {syncingAll ? '⏳ Syncing…' : '🔄 Sync now'}
+                <button style={{ ...S.btn('primary'), opacity: (sync?.running || !ebayConnected) ? 0.6 : 1 }} onClick={runSync} disabled={sync?.running || importing || backfilling || reconciling || !ebayConnected}>
+                  {sync?.running ? '⏳ Syncing…' : '🔄 Sync now'}
                 </button>
                 <span style={{ fontSize: 12, color: C.muted, flex: '1 1 240px', lineHeight: 1.45 }}>
                   A read-only pass that imports listings, sold orders &amp; fees, then reconciles ended/sold items. Keeps running if you leave the page.

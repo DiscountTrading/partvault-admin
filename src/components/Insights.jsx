@@ -15,6 +15,13 @@ const SEGMENTS = [
   { id: 'pricing', label: '📊 Pricing vs market' },
 ]
 
+// Preset segments whose ranking depends on how long a part sat / took to sell.
+// Parts with no real listing/acquisition date (date_reliable === false) have a
+// shelf age estimated from the IMPORT date, so they're excluded from these by
+// default — the "Include undated" checkbox lets the user add them back.
+const DATE_PRESETS = ['best', 'fast', 'slow', 'dead']
+const isUndated = r => r.date_reliable === false
+
 // Column definitions drive both the table and the per-column filters.
 const COLS = [
   { key: 'sku', label: 'SKU', type: 'text', align: 'left', w: 120 },
@@ -101,6 +108,7 @@ export default function Insights({ storeId, initial }) {
     setRefreshingMkt(false)
   }
   const [segment, setSegment] = useState('all')
+  const [includeUndated, setIncludeUndated] = useState(false) // add import-dated parts back into date-based presets
   const [filters, setFilters] = useState({})        // colKey -> value (string | {min,max})
 
   const [drillIds, setDrillIds] = useState(null)   // Set<part_id> from a Dashboard drill
@@ -169,10 +177,13 @@ export default function Insights({ storeId, initial }) {
       avgDts: dts.length ? Math.round(dts.reduce((a, v) => a + v, 0) / dts.length) : null,
       deadCount: rows.filter(isDead).length,
       unsoldCount: unsold.length,
+      undatedCount: rows.filter(isUndated).length,
     }
   }, [rows])
 
-  const segmented = useMemo(() => {
+  // The raw segment, BEFORE the undated-date filter — so we can both count how
+  // many undated parts a date-based preset would hide and let the user opt them in.
+  const segmentBase = useMemo(() => {
     switch (segment) {
       case 'best': return rows.filter(r => r.status === 'sold')
       case 'fast': {
@@ -189,6 +200,19 @@ export default function Insights({ storeId, initial }) {
       default: return rows
     }
   }, [rows, segment])
+
+  // How many parts in the current preset have an unreliable (import-only) date —
+  // i.e. what the checkbox would toggle. 0 for non-date presets.
+  const undatedInSegment = useMemo(
+    () => (DATE_PRESETS.includes(segment) ? segmentBase.filter(isUndated).length : 0),
+    [segmentBase, segment],
+  )
+
+  // Exclude import-dated parts from the date-based presets unless opted in.
+  const segmented = useMemo(() => {
+    if (DATE_PRESETS.includes(segment) && !includeUndated) return segmentBase.filter(r => !isUndated(r))
+    return segmentBase
+  }, [segmentBase, segment, includeUndated])
 
   const visible = useMemo(() => {
     let list = drillIds ? segmented.filter(r => drillIds.has(r.part_id)) : segmented
@@ -273,6 +297,16 @@ export default function Insights({ storeId, initial }) {
 
   const cell = (r, col) => {
     const v = fieldVal(r, col.key)
+    // Shelf age from the import date (no real listing/acquisition date) — flag it
+    // so the number isn't mistaken for a true time-on-shelf.
+    if (col.key === 'days_on_shelf' && isUndated(r)) {
+      return (
+        <span title="Estimated from the import date — no original eBay listing or acquisition date on record. Fix with Settings → eBay Sync → Backfill Listing Dates."
+          style={{ color: C.yellow, fontWeight: 600 }}>
+          ~{v == null ? '—' : `${v}d`} ⚠
+        </span>
+      )
+    }
     if (col.fmt === 'ago') {
       if (!v) return <span style={{ color: '#bbb' }}>never</span>
       const days = Math.floor((Date.now() - new Date(v).getTime()) / 86400000)
@@ -314,6 +348,13 @@ export default function Insights({ storeId, initial }) {
             {s.label}
           </button>
         ))}
+        {DATE_PRESETS.includes(segment) && (undatedInSegment > 0 || includeUndated) && (
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: C.muted, cursor: 'pointer', padding: '6px 12px', border: `1px solid ${C.border}`, borderRadius: 20, background: '#fff' }}
+            title="These parts have no original eBay listing or acquisition date, so their shelf age is estimated from the import date. They're left out of this performance view by default.">
+            <input type="checkbox" checked={includeUndated} onChange={e => setIncludeUndated(e.target.checked)} />
+            Include {undatedInSegment} undated {undatedInSegment === 1 ? 'item' : 'items'}
+          </label>
+        )}
         {segment === 'pricing' && (
           <button onClick={refreshMarket} disabled={refreshingMkt} style={{ ...S.btn('secondary'), padding: '7px 12px', fontSize: 12, opacity: refreshingMkt ? 0.6 : 1 }}>
             {refreshingMkt ? '⏳ Checking eBay…' : '↻ Refresh market prices'}
@@ -370,17 +411,17 @@ export default function Insights({ storeId, initial }) {
             <thead>
               <tr style={{ borderBottom: `2px solid ${C.border}` }}>
                 {COLS.map(col => (
-                  <th key={col.key} style={{ textAlign: 'left', padding: '9px 12px', color: C.muted, fontWeight: 700, fontSize: 11, whiteSpace: 'nowrap', position: 'sticky', top: 0, background: '#fff', zIndex: 6 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-                      <span onClick={() => toggleSort(col.key)} style={{ cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'center', gap: 4, overflow: 'hidden' }}>
+                  <th key={col.key} style={{ textAlign: 'left', padding: '9px 10px', color: C.muted, fontWeight: 700, fontSize: 11, whiteSpace: 'normal', verticalAlign: 'top', position: 'sticky', top: 0, background: '#fff', zIndex: 6 }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 6 }}>
+                      <span onClick={() => toggleSort(col.key)} style={{ cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'flex-start', gap: 4, lineHeight: 1.25 }}>
                         <span style={{ width: 9, flexShrink: 0, display: 'inline-block', fontSize: 10, color: sort.key === col.key ? C.text : '#cbd5e1' }}>
                           {sort.key === col.key ? (sort.dir === 'asc' ? '▲' : '▼') : '↕'}
                         </span>
-                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{col.label}</span>
+                        <span>{col.label}</span>
                       </span>
                       {col.type !== 'date' && (
                         <button onClick={() => setOpenFilter(o => o === col.key ? null : col.key)}
-                          style={{ background: 'none', border: 'none', padding: 2, cursor: 'pointer', lineHeight: 0 }} title="Filter">
+                          style={{ background: 'none', border: 'none', padding: 2, cursor: 'pointer', lineHeight: 0, flexShrink: 0 }} title="Filter">
                           <FunnelIcon active={active(col.key)} />
                         </button>
                       )}
@@ -452,6 +493,11 @@ export default function Insights({ storeId, initial }) {
         <span style={{ fontSize: 12, color: C.muted }}>
           {visible.length > RENDER_CAP ? `Showing top ${RENDER_CAP} of ${visible.length} matching` : `Showing ${visible.length}`} (of {rows.length} parts). Promotion & ad metrics arrive with the eBay Marketing API.
         </span>
+        {summary.undatedCount > 0 && (
+          <div style={{ fontSize: 11.5, color: C.muted, marginTop: 4 }}>
+            ⚠ {summary.undatedCount} part{summary.undatedCount === 1 ? ' has' : 's have'} an estimated shelf date (no original eBay listing date on record) and {summary.undatedCount === 1 ? "isn't" : "aren't"} counted in the best/movers views by default. Run <strong>Settings → eBay Sync → Backfill Listing Dates</strong> to fetch the real dates.
+          </div>
+        )}
       </div>
     </div>
   )

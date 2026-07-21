@@ -4,6 +4,7 @@ import { useParts } from './hooks/useParts'
 import { useSales } from './hooks/useSales'
 import { useSaleWorkflow } from './hooks/useSaleWorkflow'
 import { useAssessQueue } from './hooks/useAssessQueue'
+import { useSyncRunner } from './hooks/useSyncRunner'
 import { sb } from './lib/supabase'
 import { C, S, APP_VERSION, rentPerDay } from './lib/constants'
 import { MARKETPLACE_LIST, guessMarketplace, setActiveMarketplace } from './lib/marketplaces'
@@ -213,6 +214,26 @@ function AssessBadge({ assess }) {
   )
 }
 
+// Global eBay-sync progress chip. Shows live phase + % and a cancel button in the
+// nav bar while a full "Sync now" runs, so the run keeps going (and stays visible)
+// when the user leaves the Settings tab. Hidden when idle. Driven by useSyncRunner.
+function SyncProgressBadge({ sync }) {
+  const { running, progress, phase, cancel } = sync || {}
+  if (!running) return null
+  const pct = Math.round(progress || 0)
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(59,130,246,0.22)', border: '1px solid rgba(59,130,246,0.5)', borderRadius: 6, padding: '4px 8px', fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.95)' }}
+          title={phase || 'Syncing with eBay…'}>
+      <span style={{ animation: 'spin 1.4s linear infinite', display: 'inline-block' }}>🔄</span>
+      eBay sync {pct}%
+      <button onClick={cancel} title="Cancel — stops the foreground sync (the server may still finish this pass)"
+              style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.85)', cursor: 'pointer', fontSize: 12, padding: 0, marginLeft: 2 }}>
+        ✕
+      </button>
+    </span>
+  )
+}
+
 export default function App() {
   const { session, profile, storeId, stores, activeStoreId, setActiveStore, refreshStores, authReady, signOut } = useAuth()
   const { parts, loading, syncStatus, totalCount, addPart, editPart, softDelete, softDeleteCar, refetch } = useParts(storeId)
@@ -243,6 +264,9 @@ export default function App() {
   // App-level background AI assessment — runs on any tab so parts created in the
   // admin form / mobile / import get assessed silently. Counter lives in the nav.
   const assess = useAssessQueue({ storeId, parts, cars, refetch: smartRefetch })
+  // App-level eBay "Sync now" driver — lives here (not in the Settings tab) so a
+  // running sync survives navigating between screens and shows a global nav chip.
+  const sync = useSyncRunner({ storeId })
 
   // Enrich costing with the storage-facility config (rent normalised to /day) and
   // the per-category shipping box dims, so partEffectiveCost can compute storage.
@@ -322,6 +346,7 @@ export default function App() {
         <div style={{ marginLeft: 'auto', padding: '0 18px', display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: 'rgba(255,255,255,0.55)' }}>
           {loading ? <span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>⏳</span> : null}
           <AssessBadge assess={assess} />
+          <SyncProgressBadge sync={sync} />
           <TableSizeControl />
           v{APP_VERSION} · {totalCount} parts
           <SyncBadge status={syncStatus} />
@@ -354,7 +379,7 @@ export default function App() {
         )}
         {tab === 'analytics' && <Analytics storeId={storeId} initial={insightsInit} parts={parts} cars={cars} sales={sales} costing={costingFull}
           onVehiclesChanged={() => { refetch(); sb.from('cars').select('*').eq('store_id', storeId).is('deleted_at', null).order('created_at', { ascending: false }).then(({ data }) => setCars(data || [])) }} />}
-        {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores} parts={parts} onChanged={smartRefetch}
+        {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores} parts={parts} onChanged={smartRefetch} sync={sync}
           onSettingsSaved={s => { if (s?.costing) setCosting(c => ({ ...c, ...s.costing })); if (s?.inventory) setInventory(i => ({ ...i, ...s.inventory })); if (s?.storage) setStorage(st => ({ ...st, ...s.storage })); if (s?.shipping) setShipping(s.shipping); if (s?.warehouse) setWarehouse(w => ({ ...w, ...s.warehouse })); if (s?.labels) setLabels(l => ({ ...l, ...s.labels })) }} />}
         {tab === 'help' && <Help storeId={storeId} />}
       </main>
