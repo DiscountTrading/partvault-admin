@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { sb } from '../lib/supabase'
-import { C, S, fmt } from '../lib/constants'
+import { C, S, fmt, partEffectiveCost } from '../lib/constants'
 import useFillHeight from '../hooks/useFillHeight'
 
 const DEAD_DAYS = 90
@@ -22,21 +22,42 @@ const SEGMENTS = [
 const DATE_PRESETS = ['best', 'fast', 'slow', 'dead']
 const isUndated = r => r.date_reliable === false
 
+// value -> percentile 0..100 (avg-rank for ties) over `vals`. Used to build the
+// internal Best-performers ranking the same self-calibrating way as the Vehicles
+// Car Score, so there are no arbitrary "good profit" benchmarks.
+const percentileFn = (vals) => {
+  const clean = vals.filter(v => v != null && !Number.isNaN(v))
+  const n = clean.length
+  return (v) => {
+    if (v == null || Number.isNaN(v)) return null
+    if (n <= 1) return 100
+    let below = 0, equal = 0
+    for (const s of clean) { if (s < v) below++; else if (s === v) equal++ }
+    return ((below + (equal - 1) / 2) / (n - 1)) * 100
+  }
+}
+// Internal composite "performance" weighting for Best performers (not shown as a
+// column — it just orders the list): mostly profit, then margin, then sell-speed.
+const SCORE_W = { profit: 0.5, margin: 0.2, speed: 0.3 }
+
 // Column definitions drive both the table and the per-column filters.
+// `pricingOnly` columns (the eBay market-price comparison) only show in the
+// "Pricing vs market" segment — elsewhere they're noise and push the table past
+// one screen width. Base widths are trimmed so the default set fits one page.
 const COLS = [
-  { key: 'sku', label: 'SKU', type: 'text', align: 'left', w: 120 },
-  { key: 'title', label: 'Title', type: 'text', align: 'left', w: 300 },
-  { key: 'status', label: 'Status', type: 'status', align: 'left', w: 105 },
-  { key: 'days_on_shelf', label: 'On shelf', type: 'range', align: 'right', unit: 'd', w: 105 },
-  { key: 'listing_count', label: '# Listed', type: 'range', align: 'right', w: 95 },
-  { key: 'total_days_listed', label: 'Days listed', type: 'range', align: 'right', unit: 'd', w: 110 },
-  { key: 'total_cost', label: 'Cost', type: 'range', align: 'right', fmt: 'money', w: 95 },
-  { key: 'list_price', label: 'Price', type: 'range', align: 'right', fmt: 'money', w: 95 },
-  { key: 'market_price', label: 'Market', type: 'range', align: 'right', fmt: 'money', w: 95 },
-  { key: 'price_variance_pct', label: 'vs Market', type: 'range', align: 'right', fmt: 'pct', w: 105 },
-  { key: 'market_checked_at', label: 'Checked', type: 'date', align: 'right', fmt: 'ago', w: 95 },
-  { key: 'profit', label: 'Profit', type: 'range', align: 'right', fmt: 'money', w: 100 },
-  { key: 'margin_pct', label: 'Margin', type: 'range', align: 'right', fmt: 'pct', w: 95 },
+  { key: 'sku', label: 'SKU', type: 'text', align: 'left', w: 105 },
+  { key: 'title', label: 'Title', type: 'text', align: 'left', w: 250 },
+  { key: 'status', label: 'Status', type: 'status', align: 'left', w: 95 },
+  { key: 'days_on_shelf', label: 'On shelf', type: 'range', align: 'right', unit: 'd', w: 92 },
+  { key: 'listing_count', label: '# Listed', type: 'range', align: 'right', w: 82 },
+  { key: 'total_days_listed', label: 'Days listed', type: 'range', align: 'right', unit: 'd', w: 98 },
+  { key: 'total_cost', label: 'Cost', type: 'range', align: 'right', fmt: 'money', w: 88 },
+  { key: 'list_price', label: 'Price', type: 'range', align: 'right', fmt: 'money', w: 88 },
+  { key: 'market_price', label: 'Market', type: 'range', align: 'right', fmt: 'money', w: 92, pricingOnly: true },
+  { key: 'price_variance_pct', label: 'vs Market', type: 'range', align: 'right', fmt: 'pct', w: 98, pricingOnly: true },
+  { key: 'market_checked_at', label: 'Checked', type: 'date', align: 'right', fmt: 'ago', w: 92, pricingOnly: true },
+  { key: 'profit', label: 'Profit', type: 'range', align: 'right', fmt: 'money', w: 92 },
+  { key: 'margin_pct', label: 'Margin', type: 'range', align: 'right', fmt: 'pct', w: 88 },
 ]
 
 const fieldVal = (r, key) => key === 'profit' ? (r.realized_profit != null ? r.realized_profit : r.potential_profit) : r[key]
@@ -66,7 +87,7 @@ function Card({ label, value, sub }) {
   )
 }
 
-export default function Insights({ storeId, initial }) {
+export default function Insights({ storeId, initial, parts = [], costing = {} }) {
   const [tableRef, tableH] = useFillHeight(52)  // fill to viewport; the "showing N" note sits below
   const [allRows, setAllRows] = useState([])
   const [loading, setLoading] = useState(true)
@@ -153,7 +174,50 @@ export default function Insights({ storeId, initial }) {
   // (source='ebay_history'), PartVault = everything captured in-app.
   const [srcSel, setSrcSel] = useState({ partvault: true, ebay: true, history: true })
   const srcOf = (r) => r.source === 'ebay_import' ? 'ebay' : r.source === 'ebay_history' ? 'history' : 'partvault'
-  const rows = useMemo(() => allRows.filter(r => srcSel[srcOf(r)]), [allRows, srcSel])
+
+  // The part_insights VIEW computes cost as the raw sum of the parts.costs jsonb
+  // only — which is all-zeros for imported/eBay-history parts. That made their
+  // profit = full sale price and margin ≈ 100%, skewing every performance segment.
+  // Recompute cost/profit/margin here with partEffectiveCost() — the SAME estimate
+  // model the Dashboard and Vehicles tabs use (recorded costs + acquisition base,
+  // labour, admin, storage) — so the numbers are consistent and imported data can't
+  // inflate them. Falls back to the view's own values if we can't find the full part.
+  const partsById = useMemo(() => new Map((parts || []).map(p => [p.id, p])), [parts])
+  const costedRows = useMemo(() => allRows.map(r => {
+    const full = partsById.get(r.part_id)
+    if (!full) return r
+    const cost = Math.round(partEffectiveCost(full, costing).value * 100) / 100
+    if (r.status === 'sold') {
+      const rev = (+r.sold_price || 0) + (+r.shipping_charged || 0)
+      const profit = Math.round((rev - cost) * 100) / 100
+      return { ...r, total_cost: cost, realized_profit: profit, potential_profit: null, margin_pct: rev > 0 ? Math.round((profit / rev) * 1000) / 10 : null }
+    }
+    const lp = +r.list_price || 0
+    const profit = Math.round((lp - cost) * 100) / 100
+    return { ...r, total_cost: cost, realized_profit: null, potential_profit: profit, margin_pct: lp > 0 ? Math.round((profit / lp) * 1000) / 10 : null }
+  }), [allRows, partsById, costing])
+
+  // Internal Best-performers score: percentile-blend of profit, margin and sell-speed
+  // across sold parts (speed only when the part has a reliable date). Not displayed —
+  // it just gives "Best performers" a defensible order instead of raw dollars.
+  const scoredRows = useMemo(() => {
+    const sold = costedRows.filter(r => r.status === 'sold')
+    const profP = percentileFn(sold.map(r => r.realized_profit))
+    const margP = percentileFn(sold.map(r => r.margin_pct))
+    const spdP = percentileFn(sold.filter(r => r.days_to_sell != null && !isUndated(r)).map(r => -r.days_to_sell))
+    return costedRows.map(r => {
+      if (r.status !== 'sold') return r
+      const sP = profP(r.realized_profit), sM = margP(r.margin_pct)
+      const sS = (r.days_to_sell != null && !isUndated(r)) ? spdP(-r.days_to_sell) : null
+      let num = 0, den = 0
+      if (sP != null) { num += SCORE_W.profit * sP; den += SCORE_W.profit }
+      if (sM != null) { num += SCORE_W.margin * sM; den += SCORE_W.margin }
+      if (sS != null) { num += SCORE_W.speed * sS; den += SCORE_W.speed }
+      return { ...r, _score: den > 0 ? Math.round(num / den) : null }
+    })
+  }, [costedRows])
+
+  const rows = useMemo(() => scoredRows.filter(r => srcSel[srcOf(r)]), [scoredRows, srcSel])
 
   const statuses = useMemo(() => [...new Set(rows.map(r => r.status).filter(Boolean))].sort(), [rows])
 
@@ -239,6 +303,9 @@ export default function Insights({ storeId, initial }) {
   }, [segmented, filters, sort, drillIds])
 
   const shown = visible.slice(0, RENDER_CAP)
+  // Market-comparison columns only in the Pricing segment; keeps the default table
+  // to one screen width.
+  const visCols = useMemo(() => COLS.filter(c => segment === 'pricing' || !c.pricingOnly), [segment])
 
   const toggleSort = (key) => setSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' })
   // Any manual change to filters/segment means we're no longer on a saved view.
@@ -250,7 +317,7 @@ export default function Insights({ storeId, initial }) {
     fast: { key: 'days_to_sell', dir: 'asc' },
     slow: { key: 'days_on_shelf', dir: 'desc' },
     dead: { key: 'days_on_shelf', dir: 'desc' },
-    best: { key: 'realized_profit', dir: 'desc' },
+    best: { key: '_score', dir: 'desc' }, // internal composite (profit+margin+speed), not a visible column
     pricing: { key: 'price_variance_pct', dir: 'desc' }, // most over-priced first
     all:  { key: 'days_on_shelf', dir: 'desc' },
   }
@@ -406,11 +473,11 @@ export default function Insights({ storeId, initial }) {
 
       {loading ? <div style={{ color: C.muted, padding: 20 }}>Loading…</div> : (
         <div ref={tableRef} className="pv-scroll" style={{ overflowX: 'scroll', overflowY: 'auto', maxHeight: tableH || '60vh', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>
-          <table style={{ width: '100%', minWidth: 1100, borderCollapse: 'collapse', fontSize: 13, tableLayout: 'fixed', zoom: 'var(--table-zoom, 1)' }}>
-            <colgroup>{COLS.map(c => <col key={c.key} style={{ width: c.w }} />)}</colgroup>
+          <table style={{ width: '100%', minWidth: visCols.reduce((s, c) => s + c.w, 0), borderCollapse: 'collapse', fontSize: 13, tableLayout: 'fixed', zoom: 'var(--table-zoom, 1)' }}>
+            <colgroup>{visCols.map(c => <col key={c.key} style={{ width: c.w }} />)}</colgroup>
             <thead>
               <tr style={{ borderBottom: `2px solid ${C.border}` }}>
-                {COLS.map(col => (
+                {visCols.map(col => (
                   <th key={col.key} style={{ textAlign: 'left', padding: '9px 10px', color: C.muted, fontWeight: 700, fontSize: 11, whiteSpace: 'normal', verticalAlign: 'top', position: 'sticky', top: 0, background: '#fff', zIndex: 6 }}>
                     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 6 }}>
                       <span onClick={() => toggleSort(col.key)} style={{ cursor: 'pointer', userSelect: 'none', display: 'inline-flex', alignItems: 'flex-start', gap: 4, lineHeight: 1.25 }}>
@@ -474,10 +541,10 @@ export default function Insights({ storeId, initial }) {
             </thead>
             <tbody>
               {visible.length === 0 ? (
-                <tr><td colSpan={COLS.length} style={{ padding: 24, textAlign: 'center', color: C.muted }}>No parts in this view.</td></tr>
+                <tr><td colSpan={visCols.length} style={{ padding: 24, textAlign: 'center', color: C.muted }}>No parts in this view.</td></tr>
               ) : shown.map(r => (
                 <tr key={r.part_id} style={{ borderBottom: `1px solid ${C.border}`, background: isDead(r) ? '#fff7ed' : '#fff' }}>
-                  {COLS.map(col => (
+                  {visCols.map(col => (
                     <td key={col.key} style={{ textAlign: col.align, padding: '9px 12px', color: C.text, whiteSpace: col.key === 'title' ? 'normal' : 'nowrap', maxWidth: col.key === 'title' ? 280 : undefined, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {cell(r, col)}
                     </td>
@@ -498,6 +565,9 @@ export default function Insights({ storeId, initial }) {
             ⚠ {summary.undatedCount} part{summary.undatedCount === 1 ? ' has' : 's have'} an estimated shelf date (no original eBay listing date on record) and {summary.undatedCount === 1 ? "isn't" : "aren't"} counted in the best/movers views by default. Run <strong>Settings → eBay Sync → Backfill Listing Dates</strong> to fetch the real dates.
           </div>
         )}
+        <div style={{ fontSize: 11.5, color: C.muted, marginTop: 4 }}>
+          Cost, profit &amp; margin use the same estimate model as the Dashboard (recorded costs plus an acquisition base, labour, admin &amp; storage) wherever a real cost isn't recorded — so imported listings no longer show a near-100% margin. Record actual costs (or set the estimate rates in Settings → Costs) to sharpen these. Best performers are ranked on a blend of profit, margin &amp; sell-speed.
+        </div>
       </div>
     </div>
   )

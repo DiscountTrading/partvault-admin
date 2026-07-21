@@ -58,7 +58,7 @@ export default function Analytics({ storeId, initial, parts, cars, sales, costin
       {tidyOpen && <SpellingCleanup storeId={storeId} parts={parts} cars={cars} onApplied={onVehiclesChanged} />}
 
       {pivot === 'part'
-        ? <Insights storeId={storeId} initial={initial} />
+        ? <Insights storeId={storeId} initial={initial} parts={parts} costing={costing} />
         : <Vehicles parts={parts} cars={cars} sales={sales} costing={costing} level={pivot === 'car' ? 'cars' : 'models'} />}
     </div>
   )
