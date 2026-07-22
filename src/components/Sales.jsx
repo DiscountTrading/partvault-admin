@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, Fragment } from 'react'
+import { useState, useMemo, useEffect, useRef, useLayoutEffect, Fragment } from 'react'
 import { C, S, fmt, partEffectiveCost, estimateCostBasis, storageCostFor, storageConfigured, FEE_COST_KEYS } from '../lib/constants'
 import useMatchHeight from '../hooks/useMatchHeight'
 import { printLabels } from '../lib/labels'
@@ -312,6 +312,23 @@ const SEG_ROWS = [['organic', 'Organic'], ['low', 'Promoted low ≤3%'], ['med',
 // render below the line in red. Two-row axis: fine tick over a coarse group.
 function BarChart({ bars, money }) {
   const [hover, setHover] = useState(null)
+  // Tooltip position is measured + clamped so it's ALWAYS fully on screen: centred
+  // over the hovered bar, but nudged inward at the chart edges, with the little
+  // arrow repositioned to keep pointing at the bar. Measured in useLayoutEffect so
+  // it's placed before the browser paints (no flicker / no off-screen flash).
+  const wrapRef = useRef(null)
+  const tipRef = useRef(null)
+  const [tipPos, setTipPos] = useState(null) // { left, arrow } in px, or null pre-measure
+  useLayoutEffect(() => {
+    if (hover == null || !wrapRef.current || !tipRef.current) { setTipPos(null); return }
+    const PAD = 6
+    const cW = wrapRef.current.clientWidth
+    const tW = tipRef.current.offsetWidth
+    const center = ((hover + 0.5) / bars.length) * cW
+    const left = Math.max(PAD, Math.min(center - tW / 2, cW - tW - PAD))
+    const arrow = Math.max(10, Math.min(center - left, tW - 10)) // keep arrow inside the bubble
+    setTipPos({ left, arrow })
+  }, [hover, bars.length, money])
   const vals = bars.map(b => b.value)
   const maxPos = Math.max(0, ...vals)
   const minNeg = Math.min(0, ...vals)
@@ -325,11 +342,10 @@ function BarChart({ bars, money }) {
   const seg = v => Math.max(0, (v / span) * H)
 
   return (
-    <div style={{ position: 'relative', paddingTop: 18 }}>
-      {/* Tooltip above the hovered bar */}
+    <div ref={wrapRef} style={{ position: 'relative', paddingTop: 18 }}>
+      {/* Tooltip above the hovered bar — clamped fully on-screen (see tipPos above) */}
       {hover != null && bars[hover] && (() => {
         const b = bars[hover]
-        const leftPct = ((hover + 0.5) / bars.length) * 100
         const row = (key, label) => (b[key] || b[key + 'N']) ? (
           <div key={key} style={{ display: 'flex', justifyContent: 'space-between', gap: 14 }}>
             <span><span style={{ color: SEG[key] }}>■</span> {label}</span>
@@ -338,13 +354,13 @@ function BarChart({ bars, money }) {
         ) : null
         const totalN = b.organicN + b.lowN + b.medN + b.highN
         return (
-          <div style={{ position: 'absolute', bottom: H + 6, left: `${leftPct}%`, transform: 'translateX(-50%)', background: '#1c1c1e', color: '#fff', borderRadius: 8, padding: '8px 11px', fontSize: 11.5, lineHeight: 1.6, whiteSpace: 'nowrap', zIndex: 5, pointerEvents: 'none', boxShadow: '0 6px 18px rgba(0,0,0,0.28)' }}>
+          <div ref={tipRef} style={{ position: 'absolute', bottom: H + 6, left: tipPos ? tipPos.left : 0, transform: 'none', visibility: tipPos ? 'visible' : 'hidden', background: '#1c1c1e', color: '#fff', borderRadius: 8, padding: '8px 11px', fontSize: 11.5, lineHeight: 1.6, whiteSpace: 'nowrap', zIndex: 5, pointerEvents: 'none', boxShadow: '0 6px 18px rgba(0,0,0,0.28)' }}>
             <div style={{ fontWeight: 700, marginBottom: 3 }}>{b.secondary ? `${b.primary} ${b.secondary}` : b.primary}</div>
             {SEG_ROWS.map(([key, label]) => row(key, label))}
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, borderTop: '1px solid rgba(255,255,255,0.22)', marginTop: 3, paddingTop: 3, fontWeight: 700 }}>
               <span>Total</span><span>{fmtV(b.value)}{money ? ` · ${totalN}` : ''}</span>
             </div>
-            <div style={{ position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)', borderLeft: '6px solid transparent', borderRight: '6px solid transparent', borderTop: '6px solid #1c1c1e' }} />
+            <div style={{ position: 'absolute', top: '100%', left: tipPos ? tipPos.arrow : '50%', transform: 'translateX(-50%)', borderLeft: '6px solid transparent', borderRight: '6px solid transparent', borderTop: '6px solid #1c1c1e' }} />
           </div>
         )
       })()}
