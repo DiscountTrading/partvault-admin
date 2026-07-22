@@ -434,8 +434,8 @@ function PromotedPanel({ promo, periodLabel }) {
   const [noteHidden, setNoteHidden] = useState(() => { try { return localStorage.getItem('pv_promo_note') === 'hidden' } catch { return false } })
   const dismissNote = () => { try { localStorage.setItem('pv_promo_note', 'hidden') } catch { /* ignore */ } setNoteHidden(true) }
 
-  const tile = (label, value, sub, color) => (
-    <div style={{ flex: '1 1 130px', minWidth: 120 }}>
+  const tile = (label, value, sub, color, title) => (
+    <div title={title} style={{ flex: '1 1 130px', minWidth: 120, cursor: title ? 'help' : 'default' }}>
       <div style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>{label}</div>
       <div style={{ fontSize: 19, fontWeight: 800, color: color || C.text, marginTop: 2 }}>{value}</div>
       {sub && <div style={{ fontSize: 10.5, color: C.muted, marginTop: 1 }}>{sub}</div>}
@@ -466,7 +466,7 @@ function PromotedPanel({ promo, periodLabel }) {
           {promo.promoted > 0 ? (
             <>
               <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12 }}>
-                {tile('Ad spend', signedMoney(promo.adSpend), promo.adPct != null ? `${promo.adPct.toFixed(1)}% of promoted sales` : null)}
+                {tile('Promo ad fees', signedMoney(promo.adSpend), promo.adPct != null ? `${promo.adPct.toFixed(1)}% of promoted sales` : null, undefined, "eBay's Promoted-Listings ad fee — charged ONLY on promoted items that sold. This is the extra cost to promote, not your total listing cost, and it excludes promo spend on items that didn't sell.")}
                 {tile('Avg days to sell', promo.proDts != null ? `${Math.round(promo.proDts)}d` : '—', promo.orgDts != null ? `organic ${Math.round(promo.orgDts)}d` : 'promoted', dtsFaster != null ? (dtsFaster >= 0 ? C.green : C.red) : null)}
                 {tile('Avg profit / order', promo.proProfit != null ? signedMoney(promo.proProfit) : '—', promo.orgProfit != null ? `organic ${signedMoney(promo.orgProfit)}` : 'promoted', profitDiff != null ? (profitDiff >= 0 ? C.green : C.red) : null)}
               </div>

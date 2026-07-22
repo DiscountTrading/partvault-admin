@@ -366,7 +366,7 @@ export default function App() {
         </div>
       )}
       <main style={S.main} key={marketplaceId}>{/* re-mounts content when the active store's currency changes */}
-        {tab === 'dashboard' && <Dashboard parts={parts} sales={sales} costing={costingFull} inventory={inventory} onDrill={drillToInsights} onSeeSales={() => setTab('sales')} />}
+        {tab === 'dashboard' && <Dashboard parts={parts} sales={sales} costing={costingFull} inventory={inventory} storeId={storeId} onDrill={drillToInsights} onSeeSales={() => setTab('sales')} />}
         {tab === 'sales' && <Sales sales={sales} parts={parts} costing={costingFull} wf={wf} setStage={setStage} />}
         {tab === 'inventory' && (
           <Inventory

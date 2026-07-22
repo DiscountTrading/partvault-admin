@@ -12,7 +12,7 @@ function StatCard({ label, value, sub, color }) {
   )
 }
 
-export default function Dashboard({ parts, sales = [], costing, inventory, onDrill, onSeeSales }) {
+export default function Dashboard({ parts, sales = [], costing, inventory, onDrill, onSeeSales, storeId }) {
   // Fit the whole dashboard to the viewport height — "at a glance", no scroll,
   // on any subscriber's screen size.
   const { wrapRef, contentRef, wrapStyle, contentStyle } = useFitScale({ bottomMargin: 34, minScale: 0.55 })
@@ -25,6 +25,14 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
   // API-real data. `isHist` flags a row whose costs come from the locked snapshot.
   const [includeHistory, setIncludeHistory] = useState(true)
   const isHist = s => s.source === 'csv_orders_report'
+  // How shipping is sold, which decides how the shipping breakdown is shown:
+  //  'separate' → buyer pays postage on top (show charged / cost / net)
+  //  'included' → free postage built into the item price (net-shipping would be a
+  //               misleading "loss", since the shipping income is inside the sale
+  //               price already, so we show only the postage cost we paid).
+  // '' = auto (decide from the data below). Persisted per store.
+  const [shipModelOverride, setShipModelOverride] = useState(() => { try { return localStorage.getItem(`pv_ship_model_${storeId}`) || '' } catch { return '' } })
+  const setShipModel = (m) => { setShipModelOverride(m); try { localStorage.setItem(`pv_ship_model_${storeId}`, m) } catch { /* ignore */ } }
 
   const active = parts.filter(p=>!p.deletedAt)
   const inStock = active.filter(p=>p.status==='in_stock')
@@ -86,6 +94,11 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
     return a + est
   },0)
   const netShip = shipInc - shipCost
+  // Auto-detect the shipping model when the user hasn't set one: if buyers paid
+  // almost no separate shipping (income < 2% of gross), it's effectively free/
+  // built-into-price, so default to 'included' and don't show a misleading net loss.
+  const mostlyFreeShip = grossSales > 0 && shipInc < grossSales * 0.02
+  const shipModel = shipModelOverride || (mostlyFreeShip ? 'included' : 'separate')
   const stockVal = [...inStock,...listed].reduce((a,p)=>a+partEffectiveCost(p, costing||{}).value,0)
 
   const catBreak = CATEGORY_NAMES.map(cat=>({ cat, count:active.filter(p=>p.category===cat).length }))
@@ -183,22 +196,37 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
             )
           })}
           </div>
-          <div style={{ marginTop:8, borderTop:`1px solid ${C.border}`, paddingTop:8, display:'flex', gap:20, flexWrap:'wrap' }}>
+          <div style={{ marginTop:8, borderTop:`1px solid ${C.border}`, paddingTop:8, display:'flex', gap:20, flexWrap:'wrap', alignItems:'flex-start' }}>
             <div>
               <div style={{ fontSize:10, color:C.muted, marginBottom:2 }}>INVENTORY VALUE (at cost)</div>
               <div style={{ fontSize:15, fontWeight:700, color:C.blue }}>{fmt(stockVal)}</div>
             </div>
-            <div>
-              <div style={{ fontSize:10, color:C.muted, marginBottom:2 }}>SHIPPING INCOME</div>
-              <div style={{ fontSize:15, fontWeight:700, color:C.green }}>{fmt(shipInc)}</div>
-            </div>
-            <div>
-              <div style={{ fontSize:10, color:C.muted, marginBottom:2 }}>SHIPPING COST</div>
+            {/* Shipping breakdown. In 'included' mode the buyer-paid shipping is
+                inside the item price (already in sales), so only the postage we
+                paid is meaningful — showing income/net there would read as a fake
+                loss. The selector lets each store pick how theirs works. */}
+            <div title="What you actually paid the carrier to post sold orders. Currently an estimate from weight/category until real carrier costs are connected.">
+              <div style={{ fontSize:10, color:C.muted, marginBottom:2 }}>POSTAGE COST{shipCostEstimated?' (EST.)':''}</div>
               <div style={{ fontSize:15, fontWeight:700, color:C.yellow }}>{fmt(shipCost)}</div>
             </div>
-            <div>
-              <div style={{ fontSize:10, color:C.muted, marginBottom:2 }}>NET SHIPPING</div>
-              <div style={{ fontSize:15, fontWeight:700, color: netShip>=0?C.green:C.red }}>{fmt(netShip)}</div>
+            {shipModel==='separate' && (<>
+              <div title="Shipping the buyer paid on top of the item price.">
+                <div style={{ fontSize:10, color:C.muted, marginBottom:2 }}>SHIPPING CHARGED</div>
+                <div style={{ fontSize:15, fontWeight:700, color:C.green }}>{fmt(shipInc)}</div>
+              </div>
+              <div title="Shipping charged to buyers minus the postage cost you paid.">
+                <div style={{ fontSize:10, color:C.muted, marginBottom:2 }}>NET SHIPPING</div>
+                <div style={{ fontSize:15, fontWeight:700, color: netShip>=0?C.green:C.red }}>{fmt(netShip)}</div>
+              </div>
+            </>)}
+            <div style={{ marginLeft:'auto', textAlign:'right' }}>
+              <div style={{ fontSize:10, color:C.muted, marginBottom:2 }}>SHIPPING MODEL</div>
+              <select value={shipModel} onChange={e=>setShipModel(e.target.value)}
+                style={{ fontSize:12, padding:'3px 6px', borderRadius:6, border:`1px solid ${C.border}`, background:'#fff', color:C.text }}>
+                <option value="included">Free post (in item price)</option>
+                <option value="separate">Buyer pays postage on top</option>
+              </select>
+              {shipModel==='included' && <div style={{ fontSize:10, color:C.muted, marginTop:3, maxWidth:190 }}>Shipping's inside your sale prices, so it's already in profit — this is just postage paid.</div>}
             </div>
           </div>
         </div>
