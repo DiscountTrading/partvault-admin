@@ -130,6 +130,7 @@ export default function Insights({ storeId, initial, parts = [], costing = {} })
   }
   const [segment, setSegment] = useState('all')
   const [includeUndated, setIncludeUndated] = useState(false) // add import-dated parts back into date-based presets
+  const [soldWithin, setSoldWithin] = useState(0) // 0 = all time; else only parts sold within N days
   const [filters, setFilters] = useState({})        // colKey -> value (string | {min,max})
 
   const [drillIds, setDrillIds] = useState(null)   // Set<part_id> from a Dashboard drill
@@ -280,6 +281,11 @@ export default function Insights({ storeId, initial, parts = [], costing = {} })
 
   const visible = useMemo(() => {
     let list = drillIds ? segmented.filter(r => drillIds.has(r.part_id)) : segmented
+    // Recent-sales filter: restrict to parts SOLD within the chosen window.
+    if (soldWithin > 0) {
+      const cut = Date.now() - soldWithin * 86400000
+      list = list.filter(r => r.status === 'sold' && r.sold_date && new Date(r.sold_date).getTime() >= cut)
+    }
     for (const col of COLS) {
       const f = filters[col.key]
       if (!active(col.key)) continue
@@ -300,7 +306,7 @@ export default function Insights({ storeId, initial, parts = [], costing = {} })
       if (bv == null) return -1
       return dir === 'asc' ? (av > bv ? 1 : -1) : (av < bv ? 1 : -1)
     })
-  }, [segmented, filters, sort, drillIds])
+  }, [segmented, filters, sort, drillIds, soldWithin])
 
   const shown = visible.slice(0, RENDER_CAP)
   // Market-comparison columns only in the Pricing segment; keeps the default table
@@ -415,6 +421,18 @@ export default function Insights({ storeId, initial, parts = [], costing = {} })
             {s.label}
           </button>
         ))}
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: C.muted }}
+          title="Show only parts SOLD within this window — e.g. Best performers or movers over the last 30 days.">
+          <span style={{ fontWeight: 600 }}>Sold:</span>
+          <select value={soldWithin} onChange={e => setSoldWithin(+e.target.value)}
+            style={{ fontSize: 12, padding: '6px 8px', borderRadius: 8, border: `1.5px solid ${soldWithin ? C.accent : C.border}`, background: soldWithin ? C.accent + '12' : '#fff', color: C.text, fontWeight: 600, cursor: 'pointer' }}>
+            <option value={0}>All time</option>
+            <option value={7}>Last 7 days</option>
+            <option value={30}>Last 30 days</option>
+            <option value={90}>Last 90 days</option>
+            <option value={365}>Last 12 months</option>
+          </select>
+        </div>
         {DATE_PRESETS.includes(segment) && (undatedInSegment > 0 || includeUndated) && (
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: C.muted, cursor: 'pointer', padding: '6px 12px', border: `1px solid ${C.border}`, borderRadius: 20, background: '#fff' }}
             title="These parts have no original eBay listing or acquisition date, so their shelf age is estimated from the import date. They're left out of this performance view by default.">

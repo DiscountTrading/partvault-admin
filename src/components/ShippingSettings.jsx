@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { sb } from '../lib/supabase'
 import { C, S, CATEGORY_NAMES } from '../lib/constants'
 
+const AUSPOST_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/auspost-rates'
+
 function Section({ title, hint, children }) {
   return (
     <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 14, padding: '18px 22px', marginBottom: 16, boxShadow: '0 1px 2px rgba(0,0,0,0.04)' }}>
@@ -22,6 +24,40 @@ export default function ShippingSettings({ storeId }) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  // Australia Post live rates
+  const [apFrom, setApFrom] = useState('')       // dispatch (from) postcode
+  const [apTo, setApTo] = useState('3000')       // a destination to test against
+  const [apStatus, setApStatus] = useState(null) // { configured, account } from the edge fn
+  const [apTesting, setApTesting] = useState(false)
+  const [apResult, setApResult] = useState(null) // { cost, service } | { error }
+
+  const apHeaders = async () => {
+    const { data: { session } } = await sb.auth.getSession()
+    return { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` }
+  }
+  const checkApStatus = async () => {
+    try {
+      const res = await fetch(AUSPOST_FN, { method: 'POST', headers: await apHeaders(), body: JSON.stringify({ action: 'status', storeId }) })
+      setApStatus(await res.json())
+    } catch { setApStatus({ configured: false }) }
+  }
+  const testRate = async () => {
+    setApTesting(true); setApResult(null)
+    try {
+      const res = await fetch(AUSPOST_FN, {
+        method: 'POST', headers: await apHeaders(),
+        body: JSON.stringify({
+          action: 'calculate', storeId,
+          fromPostcode: String(apFrom).trim(), toPostcode: String(apTo).trim(),
+          weightKg: +defW > 0 ? +defW / 1000 : 0.5,
+          length: +defDims.l || undefined, width: +defDims.w || undefined, height: +defDims.h || undefined,
+        }),
+      })
+      const d = await res.json()
+      setApResult(d.error ? { error: d.error } : { cost: d.cost, service: d.service })
+    } catch (e) { setApResult({ error: e.message }) }
+    setApTesting(false)
+  }
 
   useEffect(() => {
     if (!storeId) return
@@ -32,8 +68,11 @@ export default function ShippingSettings({ storeId }) {
       setDefDims({ l: s.defaultDimsCm?.l ?? '', w: s.defaultDimsCm?.w ?? '', h: s.defaultDimsCm?.h ?? '' })
       setCats(s.categories || {})
       setAllowOffers(!!data?.settings?.allowOffers)
+      setApFrom(data?.settings?.auspost?.fromPostcode ?? '')
       setLoading(false)
     })
+    checkApStatus()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeId])
 
   const setCat = (cat, key, val) => setCats(c => ({ ...c, [cat]: { ...c[cat], [key]: val } }))
@@ -57,7 +96,8 @@ export default function ShippingSettings({ storeId }) {
         categories: cleanCats,
       }
       const { data: cur } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      await sb.from('stores').update({ settings: { ...(cur?.settings || {}), shipping, allowOffers } }).eq('id', storeId)
+      const auspost = String(apFrom).trim() ? { ...(cur?.settings?.auspost || {}), fromPostcode: String(apFrom).trim() } : (cur?.settings?.auspost || undefined)
+      await sb.from('stores').update({ settings: { ...(cur?.settings || {}), shipping, allowOffers, auspost } }).eq('id', storeId)
       setSaved(true); setTimeout(() => setSaved(false), 2000)
     } catch (e) { alert(`Save failed: ${e.message}`) }
     setSaving(false)
@@ -112,6 +152,38 @@ export default function ShippingSettings({ storeId }) {
               ))}
             </tbody>
           </table>
+        </div>
+      </Section>
+
+      <Section title="🇦🇺 Australia Post live rates" hint="Cost postage from real Australia Post parcel prices instead of weight estimates. Add the AUSPOST_API_KEY secret in Supabase (a free key from developers.auspost.com.au), set your dispatch postcode below, then Test. Account-negotiated rates can be added once your Aus Post account details are connected.">
+        <div style={{ fontSize: 12.5, marginBottom: 12, fontWeight: 600, color: apStatus?.configured ? C.green : C.muted }}>
+          {apStatus == null ? 'Checking connection…'
+            : apStatus.configured ? `✓ Connected — ${apStatus.account ? 'account rates available' : 'retail rates'}`
+            : '○ Not connected. Add the AUSPOST_API_KEY secret in Supabase to enable live rates.'}
+        </div>
+        <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <label style={{ fontSize: 13, color: C.text, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            Dispatch postcode (from)
+            <input value={apFrom} onChange={e => setApFrom(e.target.value)} placeholder="e.g. 4000" style={{ ...numInput, width: 110 }} />
+          </label>
+          <label style={{ fontSize: 13, color: C.text, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            Test destination (to)
+            <input value={apTo} onChange={e => setApTo(e.target.value)} placeholder="3000" style={{ ...numInput, width: 110 }} />
+          </label>
+          <button onClick={testRate} disabled={apTesting || !apStatus?.configured || !String(apFrom).trim()}
+            style={{ ...S.btn('secondary'), padding: '9px 16px', fontSize: 13, opacity: (apTesting || !apStatus?.configured || !String(apFrom).trim()) ? 0.55 : 1 }}>
+            {apTesting ? 'Checking…' : 'Test rate'}
+          </button>
+        </div>
+        {apResult && (
+          <div style={{ marginTop: 12, fontSize: 13, color: apResult.error ? C.red : C.green, fontWeight: 600 }}>
+            {apResult.error
+              ? `✗ ${apResult.error}`
+              : `≈ $${Number(apResult.cost).toFixed(2)} — ${apResult.service || 'Parcel Post'} (for a ${+defW > 0 ? defW : 500}g default parcel ${apFrom} → ${apTo})`}
+          </div>
+        )}
+        <div style={{ fontSize: 11, color: C.muted, marginTop: 10, lineHeight: 1.5 }}>
+          Once connected, the Dashboard's postage cost switches from an estimate to real Australia Post prices. Remember to <strong>Save</strong> after changing the dispatch postcode.
         </div>
       </Section>
 

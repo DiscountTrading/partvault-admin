@@ -39,9 +39,11 @@ export default function Analytics({ storeId, initial, parts, cars, sales, costin
   return (
     <div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 4 }}>
-        <h2 style={{ ...S.h1, margin: 0 }}>Analytics</h2>
+        <h2 style={{ ...S.h1, margin: 0 }}>{tidyOpen ? 'Tidy spellings' : 'Analytics'}</h2>
         <div style={{ width: 1, height: 22, background: C.border, margin: '0 4px' }} />
-        {PIVOTS.map(p => (
+        {/* In Tidy mode the pivot (By part/model/car) is irrelevant, so hide it and
+            show only the way back. */}
+        {!tidyOpen && PIVOTS.map(p => (
           <button key={p.id} onClick={() => setPivot(p.id)} title={p.sub}
             style={{ padding: '5px 14px', borderRadius: 20, border: `1.5px solid ${pivot === p.id ? C.accent : C.border}`, background: pivot === p.id ? C.accent : '#fff', color: pivot === p.id ? '#fff' : C.text, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
             {p.label}
@@ -49,17 +51,19 @@ export default function Analytics({ storeId, initial, parts, cars, sales, costin
         ))}
         <div style={{ flex: 1 }} />
         <button onClick={() => setTidyOpen(o => !o)}
-          style={{ padding: '5px 14px', borderRadius: 20, border: `1.5px solid ${tidyOpen ? C.accent : C.border}`, background: tidyOpen ? '#fff4ef' : '#fff', color: C.text, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
-          🧹 Tidy spellings
+          style={{ padding: '6px 16px', borderRadius: 20, border: `1.5px solid ${C.accent}`, background: tidyOpen ? C.accent : '#fff', color: tidyOpen ? '#fff' : C.text, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+          {tidyOpen ? '← Return to analytics' : '🧹 Tidy spellings'}
         </button>
       </div>
-      <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>{meta.sub}</div>
+      <div style={{ fontSize: 12, color: C.muted, marginBottom: 12 }}>
+        {tidyOpen ? 'Find make/model spellings that look like duplicates and merge them onto one. Different models are easy to mis-flag — keep those separate.' : meta.sub}
+      </div>
 
-      {tidyOpen && <SpellingCleanup storeId={storeId} parts={parts} cars={cars} onApplied={onVehiclesChanged} />}
-
-      {pivot === 'part'
-        ? <Insights storeId={storeId} initial={initial} parts={parts} costing={costing} />
-        : <Vehicles parts={parts} cars={cars} sales={sales} costing={costing} level={pivot === 'car' ? 'cars' : 'models'} />}
+      {tidyOpen
+        ? <SpellingCleanup storeId={storeId} parts={parts} cars={cars} onApplied={onVehiclesChanged} onClose={() => setTidyOpen(false)} />
+        : (pivot === 'part'
+          ? <Insights storeId={storeId} initial={initial} parts={parts} costing={costing} />
+          : <Vehicles parts={parts} cars={cars} sales={sales} costing={costing} level={pivot === 'car' ? 'cars' : 'models'} />)}
     </div>
   )
 }

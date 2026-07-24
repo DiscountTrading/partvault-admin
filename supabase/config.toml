@@ -24,3 +24,9 @@ verify_jwt = false
 # API using an app token. Admin-triggered; no per-user auth needed. Off.
 [functions.ebay-taxonomy]
 verify_jwt = false
+
+# auspost-rates holds the AUSPOST_API_KEY secret and returns live Australia Post
+# parcel prices. Verifies the caller is a store member in code (is_store_member);
+# JWT-at-gateway would reject the browser's CORS preflight. Off.
+[functions.auspost-rates]
+verify_jwt = false
