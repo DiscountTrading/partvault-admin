@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
-import { C, S, fmt, pct, totalCost, estimateCostBasis, CATEGORY_NAMES, EBAY_AU_CATEGORIES, canonicalCategory, canonicalSubcategory, PART_CONDITIONS, STATUS_COLORS, STATUS_LABELS } from '../lib/constants'
+import { C, S, fmt, pct, totalCost, partEffectiveCost, estimateCostBasis, CATEGORY_NAMES, EBAY_AU_CATEGORIES, canonicalCategory, canonicalSubcategory, PART_CONDITIONS, STATUS_COLORS, STATUS_LABELS } from '../lib/constants'
 import { sb } from '../lib/supabase'
 import { getActiveMarketplace, formatWeight } from '../lib/marketplaces'
 import { makesFor, MODEL_SUGS } from '../lib/vehicles'
@@ -1195,9 +1195,33 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
   useEffect(() => { if (carPage > carPages-1) setCarPage(0) }, [carPages, carPage])
   const pagedCars = useMemo(() => carGroups.slice(carPage*carPageSize,(carPage+1)*carPageSize), [carGroups,carPage,carPageSize])
 
-  const paged = useMemo(() => filtered.slice(page*PAGE,(page+1)*PAGE), [filtered,page])
+  // Effective cost per part — the SAME estimate model the Dashboard/Analytics use
+  // (recorded costs + acquisition base, labour, admin, storage). The raw costs
+  // jsonb is all-zeros for imported parts, so totalCost() showed $0 for the whole
+  // yard; this uses partEffectiveCost so the Cost/Profit columns are meaningful.
+  // Precomputed once per filtered set (partEffectiveCost isn't free to call in a sort).
+  const costMap = useMemo(() => { const m=new Map(); for(const p of filtered) m.set(p.id, partEffectiveCost(p, costing||{}).value); return m }, [filtered, costing])
+  const eff = (p) => costMap.get(p.id) ?? partEffectiveCost(p, costing||{}).value
+
+  // Click a column heading to sort the parts table by it.
+  const [sort, setSort] = useState({ key: null, dir: 'asc' })
+  const SORT_GETTERS = {
+    'SKU': p=>p.sku||'', 'Title': p=>p.title||'', 'Make': p=>p.make||'', 'Model': p=>p.model||'',
+    'Year': p=>p.year||'', 'Category': p=>(p.subcategory||p.category||''), 'Status': p=>p.status||'',
+    'List$': p=>+p.list_price||0, 'Cost': p=>eff(p), 'Profit': p=>(+p.list_price||0)-eff(p),
+  }
+  const toggleSort = (key) => { if (!SORT_GETTERS[key]) return; setSort(s => s.key===key ? { key, dir: s.dir==='asc'?'desc':'asc' } : { key, dir:'asc' }); setPage(0) }
+  const sortedFiltered = useMemo(() => {
+    const get = SORT_GETTERS[sort.key]
+    if (!get) return filtered
+    const dir = sort.dir==='asc'?1:-1
+    return [...filtered].sort((a,b)=>{ const av=get(a), bv=get(b); return (typeof av==='number'&&typeof bv==='number') ? (av-bv)*dir : String(av).localeCompare(String(bv))*dir })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtered, sort, costMap])
+
+  const paged = useMemo(() => sortedFiltered.slice(page*PAGE,(page+1)*PAGE), [sortedFiltered,page])
   const pages = Math.ceil(filtered.length/PAGE)
-  const totals = filtered.reduce((acc,p) => { const c=totalCost(p),lp=+p.list_price||0; return{cost:acc.cost+c,list:acc.list+lp,profit:acc.profit+(lp-c),count:acc.count+1} }, {cost:0,list:0,profit:0,count:0})
+  const totals = filtered.reduce((acc,p) => { const c=eff(p),lp=+p.list_price||0; return{cost:acc.cost+c,list:acc.list+lp,profit:acc.profit+(lp-c),count:acc.count+1} }, {cost:0,list:0,profit:0,count:0})
   const clearFilters = () => { setSearch('');setFilterMake('');setFilterModel('');setFilterYear('');setFilterCat('');setFilterStatus('');setFilterCond('');setPage(0);setCarPage(0) }
   const handleDeleteCar = async group => { await onDeleteCar(group.carId||null, group.parts.map(p=>p.id)); setDeleteCarTarget(null) }
 
@@ -1392,7 +1416,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
             const key=g.make+'|'+g.model+'|'+g.year+'|'+(g.carId||'')
             const isOpen=expandedCars.has(key)
             const gList=g.parts.reduce((a,p)=>a+(+p.list_price||0),0)
-            const gCost=g.parts.reduce((a,p)=>a+totalCost(p),0)
+            const gCost=g.parts.reduce((a,p)=>a+eff(p),0)
             const gProfit=gList-gCost
             const gStock=g.parts.filter(p=>p.status==='in_stock').length
             const gListed=g.parts.filter(p=>p.status==='listed').length
@@ -1432,7 +1456,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                       </thead>
                       <tbody>
                         {g.parts.map((p,i)=>{
-                          const cost=totalCost(p),lp=+p.list_price||0,pr=lp-cost
+                          const cost=eff(p),lp=+p.list_price||0,pr=lp-cost
                           return (
                             <tr key={p.id} style={{ background:i%2===0?'white':'#faf9f7', borderBottom:`1px solid ${C.border}` }}>
                               <td style={{ padding:'8px 12px', maxWidth:260, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
@@ -1500,21 +1524,24 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                 <tr style={{ background:'#f5f4f0' }}>
                   {/* Column widths are locked by the colgroup + table-layout:fixed, so the
                       grid is identical across By-Part / List / De-list. */}
-                  {BYPART_COLS.map(([h,w,align])=>(
-                    <th key={h} style={{ padding:'8px 8px', textAlign:align||'left', fontSize:10, fontWeight:700, textTransform:'uppercase', color:C.muted, background:'#f5f4f0', borderBottom:`2px solid ${C.accent}`, borderRight:`1px solid ${C.border}`, whiteSpace:'nowrap', overflow:'hidden' }}>
+                  {BYPART_COLS.map(([h,w,align])=>{
+                    const sortable = !!SORT_GETTERS[h]
+                    return (
+                    <th key={h} onClick={sortable?()=>toggleSort(h):undefined} title={sortable?`Sort by ${h}`:undefined}
+                      style={{ padding:'8px 8px', textAlign:align||'left', fontSize:10, fontWeight:700, textTransform:'uppercase', color: sort.key===h?C.accent:C.muted, background:'#f5f4f0', borderBottom:`2px solid ${C.accent}`, borderRight:`1px solid ${C.border}`, whiteSpace:'nowrap', overflow:'hidden', cursor: sortable?'pointer':'default', userSelect:'none' }}>
                       {h==='Edit' && ebayMode!=='off'
                         ? <span style={{ display:'inline-flex', alignItems:'center', gap:6 }}>
                             <input type="checkbox" title="Select all on this page" checked={paged.length>0 && paged.every(p=>sel.has(p.id))} onChange={()=>setSel(s=>{ const n=new Set(s); const all=paged.every(p=>n.has(p.id)); paged.forEach(p=>all?n.delete(p.id):n.add(p.id)); return n })} style={{ width:15, height:15, cursor:'pointer' }} />
                             {h}
                           </span>
-                        : h}
+                        : <>{h}{sortable && <span style={{ color: sort.key===h?C.accent:'#cbd5e1' }}>{sort.key===h?(sort.dir==='asc'?' ▲':' ▼'):' ↕'}</span>}</>}
                     </th>
-                  ))}
+                  )})}
                 </tr>
               </thead>
               <tbody>
                 {paged.map((p,i)=>{
-                  const cost=totalCost(p),lp=+p.list_price||0,pr=lp-cost
+                  const cost=eff(p),lp=+p.list_price||0,pr=lp-cost
                   const bg=p.deletedAt?'#fff5f5':p.status==='sold'?'#f0fdf4':i%2===0?'#ffffff':'#faf9f7'
                   const td=(v,col,bold,align)=><td style={{ padding:'4px 8px', fontSize:12, color:col||C.text, fontWeight:bold?700:400, textAlign:align||'left', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`, overflow:'hidden', whiteSpace:'nowrap', textOverflow:'ellipsis' }} title={String(v??'')}>{v||<span style={{color:C.border}}>—</span>}</td>
                   return (
