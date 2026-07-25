@@ -59,6 +59,12 @@ export function useParts(storeId) {
   const [syncStatus, setSyncStatus] = useState('connecting')
   const [totalCount, setTotalCount] = useState(0)
   const channelRef = useRef(null)
+  // Always holds the LATEST active store. A fetch started for store A is async and
+  // multi-step; if the user switches to B mid-flight, A's fetch must NOT write its
+  // results into state (that's how another company's parts flash in). Every fetch
+  // checks this before each setState and bails the moment it's been superseded.
+  const storeIdRef = useRef(storeId)
+  storeIdRef.current = storeId
 
   const fetch = useCallback(async () => {
     // No active store yet → nothing to show. (Prevents an unscoped query that
@@ -69,12 +75,16 @@ export function useParts(storeId) {
       setLoading(false)
       return
     }
+    // False once the active store has changed since this fetch began — so a stale
+    // response for the previous company can never overwrite the current one.
+    const mine = () => storeIdRef.current === storeId
 
     const { count, error: countErr } = await sb
       .from('parts')
       .select('id', { count: 'exact', head: true })
       .eq('store_id', storeId)
       .is('deleted_at', null)
+    if (!mine()) return
     if (countErr) {
       console.error('Parts count error:', countErr)
       setSyncStatus('error')
@@ -95,6 +105,7 @@ export function useParts(storeId) {
         .is('deleted_at', null)
         .order('created_at', { ascending: false })
         .range(from, to)
+      if (!mine()) return
       if (error) {
         console.error('Parts fetch error (page):', error)
         setSyncStatus('error')
@@ -118,16 +129,23 @@ export function useParts(storeId) {
       const r = rank(l.status)
       if (!prev || r > prev.r) itemMap.set(l.part_id, { id: l.platform_listing_id, r })
     }
+    if (!mine()) return   // store switched while we were loading — discard, don't cross-contaminate
     setParts(allRows.map(r => ({ ...mapRow(r), ebayItemId: itemMap.get(r.id)?.id || null })))
     setSyncStatus('live')
     setLoading(false)
   }, [storeId])
 
   useEffect(() => {
+    // Clear the previous store's parts IMMEDIATELY on switch so a different
+    // company's inventory can never linger on screen while the new one loads.
+    setParts([])
+    setTotalCount(0)
     setLoading(true)
     fetch()
-    // Scope realtime to this store so another store's edits don't trigger refetches
-    channelRef.current = sb.channel(`admin-parts-realtime-${storeId || 'none'}`)
+    // Scope realtime to this store so another store's edits don't trigger refetches.
+    // Keep the channel in a local const (not just channelRef) so the cleanup removes
+    // THIS store's channel even after channelRef has been reassigned by a later store.
+    const channel = sb.channel(`admin-parts-realtime-${storeId || 'none'}`)
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'parts', filter: storeId ? `store_id=eq.${storeId}` : undefined },
         () => { fetch() })
@@ -135,9 +153,8 @@ export function useParts(storeId) {
         if (status === 'SUBSCRIBED') setSyncStatus('live')
         if (status === 'CHANNEL_ERROR') setSyncStatus('error')
       })
-    return () => {
-      if (channelRef.current) sb.removeChannel(channelRef.current)
-    }
+    channelRef.current = channel
+    return () => { sb.removeChannel(channel) }
   }, [storeId, fetch])
 
   // PostgREST returns PGRST204 ("Could not find the 'X' column of 'parts' in the

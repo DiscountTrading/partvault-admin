@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { sb } from '../lib/supabase'
 
 // Reads the ebay_sales mirror — the source of truth for sold revenue + fees.
@@ -35,13 +35,19 @@ const mapRow = r => ({
 export function useSales(storeId) {
   const [sales, setSales] = useState([])
   const [loading, setLoading] = useState(true)
+  const storeIdRef = useRef(storeId)
+  storeIdRef.current = storeId
 
   const fetch = useCallback(async () => {
     if (!storeId) { setSales([]); setLoading(false); return }
+    // False once the active store changes — stop a previous company's sales from
+    // overwriting the current one's when a slow page resolves late.
+    const mine = () => storeIdRef.current === storeId
     setLoading(true)
     const { count } = await sb.from('ebay_sales')
       .select('id', { count: 'exact', head: true })
       .eq('store_id', storeId).eq('cancelled', false)
+    if (!mine()) return
     const total = count || 0
     const PAGE = 1000
     const all = []
@@ -50,14 +56,17 @@ export function useSales(storeId) {
         .select('*').eq('store_id', storeId).eq('cancelled', false)
         .order('sold_at', { ascending: false })
         .range(from, Math.min(from + PAGE - 1, total - 1))
+      if (!mine()) return
       if (error) { setLoading(false); return }
       if (data) all.push(...data)
     }
+    if (!mine()) return
     setSales(all.map(mapRow))
     setLoading(false)
   }, [storeId])
 
   useEffect(() => {
+    setSales([])   // clear the previous store's sales instantly on switch
     fetch()
     // Debounce so a bulk write (sync / fee backfill = many row events) triggers a
     // single refetch instead of one per row. Requires ebay_sales in the realtime

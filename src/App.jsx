@@ -242,6 +242,10 @@ export default function App() {
   const [tab, setTab] = useState('dashboard')
   const [toast, setToast] = useState(null)
   const lastFetchRef = useRef(Date.now())
+  // Always the current store, so async loads for a previous store can detect they've
+  // been superseded and skip their setState (prevents cross-company data bleed).
+  const storeIdRef = useRef(storeId)
+  storeIdRef.current = storeId
   const smartRefetch = useCallback(() => { lastFetchRef.current = Date.now(); refetch() }, [refetch])
   // Refresh on opening Inventory only if the data has gone stale (>60s) — avoids
   // re-downloading a big catalogue on every tab click while realtime keeps it warm.
@@ -285,6 +289,10 @@ export default function App() {
   // Load store settings and cars on mount / when the active store changes
   useEffect(() => {
     if (!storeId) return
+    // Guard against a slow load for the PREVIOUS store resolving after a switch and
+    // overwriting the new store's settings/cars (cross-company bleed).
+    const forStore = storeId
+    const mine = () => storeIdRef.current === forStore
     // Reset to defaults so a previous store's settings don't bleed into this one
     setAiSettings(DEFAULT_AI_SETTINGS)
     setFooter(DEFAULT_FOOTER)
@@ -292,6 +300,7 @@ export default function App() {
     setCars([])
     // Load AI settings + footer
     sb.from('stores').select('settings, plan').eq('id', storeId).single().then(({ data }) => {
+      if (!mine()) return
       setPlan(planState(data?.plan))
       if (data?.settings?.aiDescription) setAiSettings(s => ({ ...s, ...data.settings.aiDescription }))
       if (data?.settings?.footer) setFooter(data.settings.footer)
@@ -309,7 +318,7 @@ export default function App() {
     })
     // Load cars
     sb.from('cars').select('*').eq('store_id', storeId).is('deleted_at', null).order('created_at', { ascending: false })
-      .then(({ data }) => setCars(data || []))
+      .then(({ data }) => { if (mine()) setCars(data || []) })
   }, [storeId])
 
   const showToast = (msg, color = C.green) => { setToast({ msg, color }); setTimeout(() => setToast(null), 2500) }
