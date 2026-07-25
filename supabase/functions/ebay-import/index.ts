@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.36.58'
+const EDGE_FN_VERSION         = '3.36.59'
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  HARD BLOCK — EDITING LIVE eBay LISTINGS IS DISABLED AT THE CODE LEVEL.
@@ -267,6 +267,36 @@ async function callGemini(model: string, sys: string, content: any[], maxTokens 
   return { text, inTok: u.promptTokenCount || 0, outTok: u.candidatesTokenCount || 0 }
 }
 
+// ── AI metering (shared scheme with ai-assess) ──────────────────────────────
+// "ALL AI is metered": the specifics photo-fill costs 0.2 credits (0.4 on Opus)
+// when the AI actually runs — cache hits and the heuristic passes are free.
+// Peek-then-commit: check the allowance BEFORE calling the model, debit only
+// after a successful response (a failed call charges nothing). Fail-open on any
+// metering error so a hiccup never blocks a listing.
+const AI_FULL_LIMITS: Record<string, number> = { trial: 100, basic: 50, pro: 1000, business: 3000 }
+const CLAUDE_MODEL_IDS: Record<string, string> = {
+  haiku: 'claude-haiku-4-5-20251001', sonnet: 'claude-sonnet-5', opus: 'claude-opus-4-8',
+}
+async function meterAIOp(sb: any, storeId: string | undefined, w: number): Promise<{ allowed: boolean; commit: () => void }> {
+  const open = { allowed: true, commit: () => {} }
+  if (!sb || !storeId) return open
+  try {
+    const { data: st } = await sb.from('stores').select('plan').eq('id', storeId).single()
+    const plan = st?.plan || {}
+    const inc = () => sb.rpc('increment_ai_usage', { p_store_id: storeId, p_kind: 'full', p_amount: w }).then(() => {}, () => {})
+    if (plan.founder) return { allowed: true, commit: inc }
+    const limit = AI_FULL_LIMITS[plan.tier || 'business'] ?? AI_FULL_LIMITS.business
+    const month = new Date().toISOString().slice(0, 7)
+    const { data: usage } = await sb.from('ai_usage').select('full_count').eq('store_id', storeId).eq('month', month).maybeSingle()
+    if ((Number(usage?.full_count) || 0) < limit) return { allowed: true, commit: inc }
+    const { data: cr } = await sb.from('ai_credits').select('balance').eq('store_id', storeId).maybeSingle()
+    if ((Number(cr?.balance) || 0) >= w) {
+      return { allowed: true, commit: () => { sb.rpc('consume_ai_credit', { p_store_id: storeId, p_amount: w }).then(() => {}, () => {}); inc() } }
+    }
+    return { allowed: false, commit: () => {} }
+  } catch { return open }
+}
+
 // Build the eBay item specifics + confident fitment for a part, using the
 // Taxonomy aspect list for its leaf category. Three passes: derive from our
 // structured data, AI-fill the rest from the part photos, neutral fallback for
@@ -279,7 +309,7 @@ async function fillAspects(
   ebayHeaders: Record<string, string>,
   aiPhotos: string[],
   listingDefaults: any = {},
-  opts: { provider?: string; sb?: any; storeId?: string; partId?: string } = {},
+  opts: { provider?: string; model?: string; sb?: any; storeId?: string; partId?: string } = {},
 ): Promise<{ aspects: Record<string, string[]>; fitmentList: any[]; specs: any[] }> {
   const aspects: Record<string, string[]> = {}
   let fitmentList: any[] = []
@@ -336,11 +366,15 @@ async function fillAspects(
       const ANTHROPIC = Deno.env.get('ANTHROPIC_API_KEY')
       const geminiReady = !!Deno.env.get('GEMINI_API_KEY')
       // Provider routing: this token-heavy vision call defaults to Gemini (~10×
-      // cheaper); per-store override via settings.specificsProvider. On ANY
-      // Gemini error we fall back to Claude Haiku so a listing never loses its
-      // specifics. Either provider gets the identical prompt + JSON contract.
+      // cheaper); per-store override via settings.aiModels.specifics (legacy
+      // specificsProvider). On ANY Gemini error we fall back to Claude so a
+      // listing never loses its specifics. Metered 0.2 credits (0.4 Opus),
+      // charged only when the AI call succeeds.
       const wantGemini = (opts.provider ?? 'gemini') === 'gemini' && geminiReady
-      if ((ANTHROPIC || geminiReady) && aiPhotos.length && todo.length) {
+      const claudeModel = CLAUDE_MODEL_IDS[opts.model || ''] || CLAUDE_MODEL_IDS.haiku
+      const specW = opts.model === 'opus' ? 0.4 : 0.2
+      const gate = await meterAIOp(opts.sb, opts.storeId, specW)
+      if (gate.allowed && (ANTHROPIC || geminiReady) && aiPhotos.length && todo.length) {
         try {
           const aspList = todo.map((s: any) => s.selectionOnly && s.allowed.length
             ? `- ${s.name} (choose exactly one, verbatim: ${s.allowed.slice(0, 40).join(' | ')})`
@@ -365,11 +399,13 @@ async function fillAspects(
           }
 
           let raw = ''
+          let usedModel = ''
+          let usedTok = { inTok: 0, outTok: 0 }
           if (wantGemini) {
             try {
-              const gModel = await resolveGeminiModel(false)
+              const gModel = await resolveGeminiModel(opts.model === 'flash-lite')
               const g = await callGemini(gModel, sys, content, 1400)
-              raw = g.text
+              raw = g.text; usedModel = gModel; usedTok = { inTok: g.inTok, outTok: g.outTok }
             } catch (e) { await logGeminiMiss(e) }
           }
           if (!raw && ANTHROPIC) {
@@ -377,13 +413,27 @@ async function fillAspects(
               method: 'POST',
               headers: { 'x-api-key': ANTHROPIC, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
               body: JSON.stringify({
-                model: 'claude-haiku-4-5-20251001', max_tokens: 1400, system: sys,
+                model: wantGemini ? CLAUDE_MODEL_IDS.haiku : claudeModel, max_tokens: 1400, system: sys,
                 messages: [{ role: 'user', content }],
               }),
             })
             if (aiRes.ok) {
               const aiData = await aiRes.json()
               raw = (aiData.content || []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('').trim()
+              usedModel = wantGemini ? CLAUDE_MODEL_IDS.haiku : claudeModel
+              usedTok = { inTok: aiData.usage?.input_tokens || 0, outTok: aiData.usage?.output_tokens || 0 }
+            }
+          }
+          if (raw) {
+            // Success → debit the credits and log the op (both best-effort).
+            gate.commit()
+            if (opts.sb && opts.storeId) {
+              try {
+                opts.sb.from('ai_usage_log').insert({
+                  store_id: opts.storeId, part_id: opts.partId || null, operation: 'specifics', model: usedModel,
+                  input_tokens: usedTok.inTok, output_tokens: usedTok.outTok, cost_usd: 0, credits: specW, success: true,
+                }).then(() => {}, () => {})
+              } catch (_) { /* ignore */ }
             }
           }
           if (raw) {
@@ -3182,7 +3232,7 @@ async function handleRequest(req: Request): Promise<Response> {
       }
       const photos = [...new Set([...partUrls, ...carUrls, ...marketingImages.slice(0, marketingMax)])].slice(0, 24)
 
-      const { aspects, fitmentList, specs } = await fillAspects(part, categoryId, categoryTreeId, ebayHeaders, partUrls.slice(0, 2), settings.listingDefaults || {}, { provider: settings.specificsProvider ?? 'gemini', sb, storeId, partId })
+      const { aspects, fitmentList, specs } = await fillAspects(part, categoryId, categoryTreeId, ebayHeaders, partUrls.slice(0, 2), settings.listingDefaults || {}, { provider: settings.aiModels?.specifics?.provider ?? settings.specificsProvider ?? 'gemini', model: settings.aiModels?.specifics?.model, sb, storeId, partId })
       // Show EVERY aspect eBay offers for this category, with our filled value
       // (or empty), so the user sees the full set and what's still blank.
       const ovSpec = (part.ebay_overrides && part.ebay_overrides.specifics) || {}
@@ -3561,7 +3611,7 @@ async function handleRequest(req: Request): Promise<Response> {
           // Cap at 4 images — each costs ~1.5k Anthropic input tokens and the org
           // rate limit is 10k/min; 4 keeps identification quality with headroom.
           const aiPhotos = (partUrls.length ? partUrls : imageUrls).slice(0, 4)
-          const { aspects, fitmentList } = await fillAspects(part, categoryId, categoryTreeId, ebayHeaders, aiPhotos, storeRow?.settings?.listingDefaults || {}, { provider: storeRow?.settings?.specificsProvider ?? 'gemini', sb, storeId, partId: part.id })
+          const { aspects, fitmentList } = await fillAspects(part, categoryId, categoryTreeId, ebayHeaders, aiPhotos, storeRow?.settings?.listingDefaults || {}, { provider: storeRow?.settings?.aiModels?.specifics?.provider ?? storeRow?.settings?.specificsProvider ?? 'gemini', model: storeRow?.settings?.aiModels?.specifics?.model, sb, storeId, partId: part.id })
 
           // Full listing description: the part's description (or notes) + the
           // store's standard footer from settings.

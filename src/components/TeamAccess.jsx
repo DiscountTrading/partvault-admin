@@ -7,13 +7,14 @@ const CAPS = [
   ['delete', 'Delete'],
   ['publish', 'Publish to eBay'],
   ['settings', 'Settings'],
+  ['manage_ai', 'AI Settings'],
   ['manage_users', 'Manage Users'],
 ]
 
 const PRESETS = {
   Worker: { add_edit: true },
   VA: { add_edit: true, publish: true },
-  Admin: { add_edit: true, delete: true, publish: true, settings: true, manage_users: true },
+  Admin: { add_edit: true, delete: true, publish: true, settings: true, manage_ai: true, manage_users: true },
 }
 
 // What each preset grants, in plain English — shown when inviting so an owner

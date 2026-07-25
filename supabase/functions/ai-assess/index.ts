@@ -104,6 +104,61 @@ const AI_TIERS: Record<string, AiTier> = {
 }
 const resolveTier = (v: unknown): AiTier => AI_TIERS[(v === 'economy' || v === 'premium') ? v as string : 'standard']
 
+// ── Per-area model control (settings.aiModels) ──────────────────────────────
+// Paul's "full control over what model and what brand is used for the different
+// areas": settings.aiModels = { assess|specifics|descriptions|help|capture:
+// { provider: 'gemini'|'anthropic', model: 'flash'|'flash-lite'|'haiku'|'sonnet'|'opus' } }.
+// Falls back to the legacy per-store keys (assessProvider / aiModel) and then to
+// sensible defaults, so nothing changes for stores that never open the AI tab.
+const MODEL_IDS: Record<string, string> = {
+  haiku: 'claude-haiku-4-5-20251001',
+  sonnet: 'claude-sonnet-5',
+  opus: 'claude-opus-4-8',
+}
+type AreaChoice = { provider: 'gemini' | 'anthropic'; model: string }
+const AREA_DEFAULTS: Record<string, AreaChoice> = {
+  assess:       { provider: 'gemini',    model: 'flash' },
+  specifics:    { provider: 'gemini',    model: 'flash' },
+  descriptions: { provider: 'anthropic', model: 'sonnet' },
+  help:         { provider: 'anthropic', model: 'haiku' },
+  capture:      { provider: 'anthropic', model: 'haiku' },
+}
+function areaChoice(settings: any, area: string): AreaChoice {
+  const c = settings?.aiModels?.[area] || {}
+  let provider = c.provider, model = c.model
+  if (!provider) {
+    // Legacy fallbacks: assessProvider / specificsProvider ('gemini'|'anthropic'),
+    // and the Claude tier (aiModel) for the anthropic assess path.
+    if (area === 'assess' && settings?.assessProvider) provider = settings.assessProvider
+    if (area === 'specifics' && settings?.specificsProvider) provider = settings.specificsProvider
+  }
+  provider = provider === 'anthropic' ? 'anthropic' : provider === 'gemini' ? 'gemini' : AREA_DEFAULTS[area].provider
+  if (!model) {
+    if (provider === 'gemini') model = 'flash'
+    else if (area === 'assess' && settings?.aiModel) model = settings.aiModel === 'economy' ? 'haiku' : 'sonnet' // premium legacy → sonnet
+    else model = AREA_DEFAULTS[area].provider === 'anthropic' ? AREA_DEFAULTS[area].model : 'sonnet'
+  }
+  const valid = provider === 'gemini' ? ['flash', 'flash-lite'] : Object.keys(MODEL_IDS)
+  if (!valid.includes(model)) model = provider === 'gemini' ? 'flash' : AREA_DEFAULTS[area].provider === 'anthropic' ? AREA_DEFAULTS[area].model : 'sonnet'
+  return { provider, model }
+}
+// Credit weights ("ALL AI is metered", min 0.1 credit = 1¢ retail). Opus roughly
+// doubles the underlying cost of any op, so it doubles the weight.
+const OP_WEIGHTS: Record<string, number> = {
+  help: 0.1, 'quick-name': 0.1, 'parse-title': 0.1, 'identify-car': 0.3,
+  capture1: 0.2, describe1: 0.5, describeN: 1.0,
+}
+const ASSESS_WEIGHTS: Record<string, number> = { flash: 1, 'flash-lite': 1, haiku: 1, sonnet: 2, opus: 4 }
+const weightFor = (op: string, model: string) => (OP_WEIGHTS[op] ?? 0.1) * (model === 'opus' ? 2 : 1)
+// Full-assessment behaviour per model (image count is the main cost lever;
+// thinking only applies to the Claude reasoning models).
+const ASSESS_CFG: Record<string, { images: number; thinking: boolean; effort: string }> = {
+  flash: { images: 4, thinking: false, effort: 'low' }, 'flash-lite': { images: 4, thinking: false, effort: 'low' },
+  haiku: { images: 2, thinking: false, effort: 'low' },
+  sonnet: { images: 2, thinking: true, effort: 'low' },
+  opus: { images: 4, thinking: true, effort: 'high' },
+}
+
 // ── Gemini provider ─────────────────────────────────────────────────────────
 // Google Gemini is ~10× cheaper than Sonnet on the token-heavy vision work, so
 // the part assessment defaults to it (per-store overridable). Same JSON contract
@@ -160,16 +215,17 @@ async function toGeminiParts(content: any[]): Promise<any[]> {
   return parts
 }
 
-// Call Gemini generateContent in JSON mode. Returns concatenated text + token
-// usage, or throws (so the caller can fall back to Anthropic).
-async function callGemini(model: string, sys: string, content: any[], maxTokens = 6000): Promise<{ text: string; inTok: number; outTok: number }> {
+// Call Gemini generateContent (JSON mode by default; jsonMode:false for prose
+// like help answers / descriptions). Returns concatenated text + token usage, or
+// throws (so the caller can fall back to Anthropic).
+async function callGemini(model: string, sys: string, content: any[], maxTokens = 6000, jsonMode = true): Promise<{ text: string; inTok: number; outTok: number }> {
   const KEY = Deno.env.get('GEMINI_API_KEY')
   if (!KEY) throw new Error('GEMINI_API_KEY not set')
   const parts = await toGeminiParts(content)
   const req = {
     systemInstruction: { parts: [{ text: sys }] },
     contents: [{ role: 'user', parts }],
-    generationConfig: { responseMimeType: 'application/json', maxOutputTokens: maxTokens, temperature: 0.2 },
+    generationConfig: { ...(jsonMode ? { responseMimeType: 'application/json' } : {}), maxOutputTokens: maxTokens, temperature: 0.2 },
   }
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${KEY}`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(req),
@@ -187,7 +243,9 @@ async function callGemini(model: string, sys: string, content: any[], maxTokens 
 async function meterFullAI(url: string, storeId?: string, weight = 1): Promise<{ allowed: boolean; used: number; limit: number; tier: string; viaCredit?: boolean }> {
   const unlimited = { allowed: true, used: 0, limit: 0, tier: 'unknown' }
   if (!storeId) return unlimited
-  const w = Math.max(1, weight | 0)
+  // Fractional weights (0.1 = one-tenth of a credit) are valid since the
+  // 20260726 migration; before it runs, fractional RPC calls error → fail-open.
+  const w = Math.max(0.1, +weight || 1)
   try {
     const svc = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
     const { data: st } = await svc.from('stores').select('plan').eq('id', storeId).single()
@@ -197,7 +255,7 @@ async function meterFullAI(url: string, storeId?: string, weight = 1): Promise<{
     const limit = AI_FULL_LIMITS[tier] ?? AI_FULL_LIMITS.business
     const month = new Date().toISOString().slice(0, 7)
     const { data: usage } = await svc.from('ai_usage').select('full_count').eq('store_id', storeId).eq('month', month).maybeSingle()
-    const used = usage?.full_count || 0
+    const used = Number(usage?.full_count) || 0   // numeric columns arrive as strings
     if (used >= limit) {
       // Monthly allowance exhausted — fall back to purchased credit packs (weighted).
       const { data: consumed } = await svc.rpc('consume_ai_credit', { p_store_id: storeId, p_amount: w })
@@ -273,7 +331,18 @@ serve(async (req) => {
     if (mode === 'help') {
       const q = String(body.question || '').slice(0, 2000)
       if (!q) return json({ error: 'question required' }, 400)
-      meterLightAI(url, body.storeId)
+      // All AI is metered: a help question = 0.1 credit. Model honours the AI-tab
+      // choice (Claude models only — the multi-turn history stays on Anthropic).
+      let helpModel = MODEL_IDS.haiku
+      let helpW = OP_WEIGHTS.help
+      try {
+        const svc = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+        const { data: hs } = await svc.from('stores').select('settings').eq('id', body.storeId).single()
+        const hm = hs?.settings?.aiModels?.help?.model
+        if (hm && MODEL_IDS[hm]) { helpModel = MODEL_IDS[hm]; helpW = weightFor('help', hm) }
+      } catch (_) { /* default haiku */ }
+      const helpMeter = await meterFullAI(url, body.storeId, helpW)
+      if (!helpMeter.allowed) return json({ error: aiLimitMsg(helpMeter) }, 429)
       const history = (Array.isArray(body.history) ? body.history : []).slice(-6)
         .map((h: any) => ({ role: h.role === 'assistant' ? 'assistant' : 'user', content: String(h.content || '').slice(0, 2000) }))
       const sys = `You are the PartVault help assistant. PartVault is a car-parts inventory + eBay reselling platform: a mobile field app (app.partvault.app) to photograph donor cars and capture parts fast, and an admin app (admin.partvault.app) to review, price and publish parts to eBay. Key facts you can rely on:
@@ -284,12 +353,21 @@ serve(async (req) => {
 - Each store is tied to ONE eBay marketplace (AU/US/UK/CA), chosen at creation and locked once the first part is added; a different country = a new store.
 WHERE THINGS ARE (admin app navigation): main tabs = Dashboard (P&L, sales overview) · Sales (each sale, cost/fee breakdowns, CSV export) · Inventory (all parts, add/edit, AI description Options, print labels) · eBay (list/de-list parts to eBay) · Insights (analytics) · Vehicles (per-car profitability incl. generated cars) · Settings · Help (assistant + Message us). Settings sub-tabs: Account (profile, plan/billing/AI credits, store name, marketplace, timezone, delete store) · Descriptions (AI description config, footer) · eBay Sync (connect eBay, inventory location address, Sync now, one-time tools: CSV history import, historical costs, fee backfill, reconcile) · Shipping · User Access (invite workers/admins) · Activity (audit log). The store switcher is top-left in the nav bar. The mobile field app has Cars + Settings.${body.context ? `\nThe user is currently on the "${String(body.context).slice(0, 40)}" page — tailor directions from there.` : ''}
 Answer concisely and practically (1–4 sentences). If you're unsure or it needs a human, say so and tell them to use "Message us" on the Help tab. Never invent features.`
-      const aiRes = await callAnthropic({
-        model: 'claude-haiku-4-5-20251001', max_tokens: 500, system: sys,
+      const helpPayload: Record<string, unknown> = {
+        model: helpModel, max_tokens: 500, system: sys,
         messages: [...history, { role: 'user', content: q }],
-      })
+      }
+      if (helpModel !== MODEL_IDS.haiku) { helpPayload.thinking = { type: 'disabled' } } // keep answers snappy on reasoning models
+      const aiRes = await callAnthropic(helpPayload)
       const data = await aiRes.json()
       if (data.error) return json({ error: data.error.message || 'AI error' }, 400)
+      try {
+        const uu = data.usage || {}
+        createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!).from('ai_usage_log').insert({
+          store_id: body.storeId, operation: 'help', model: helpModel, input_tokens: uu.input_tokens || 0,
+          output_tokens: uu.output_tokens || 0, cost_usd: 0, credits: helpW, success: true,
+        }).then(() => {}, () => {})
+      } catch (_) { /* ignore */ }
       return json({ ok: true, answer: textOf(data) })
     }
 
@@ -333,14 +411,75 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
       if (!member) return json({ error: 'Not authorised' }, 403)
     }
 
+    // Store settings drive per-area model routing (settings.aiModels) — fetched
+    // once here for every mode. Best-effort: defaults apply if the read fails.
+    let storeSettings: any = {}
+    try {
+      const svc = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+      const { data: strow } = await svc.from('stores').select('settings').eq('id', storeId).single()
+      storeSettings = strow?.settings || {}
+    } catch (_) { /* defaults */ }
+
+    // Run one AI call for an area: routes to the chosen provider+model, falls
+    // back to Claude on ANY Gemini error (an op should never fail because the
+    // cheap provider hiccuped). Returns { text, provider, model, inTok, outTok }.
+    // `payloadExtra` carries Anthropic-only options (thinking / output_config /
+    // temperature); Gemini gets jsonMode + maxTokens.
+    const runAI = async (area: string, opts: { system?: string; content: any[]; maxTokens: number; jsonMode?: boolean; payloadExtra?: Record<string, unknown>; fallbackModel?: string }) => {
+      const choice = areaChoice(storeSettings, area)
+      if (choice.provider === 'gemini' && Deno.env.get('GEMINI_API_KEY')) {
+        try {
+          const gModel = await resolveGeminiModel(choice.model === 'flash-lite')
+          const g = await callGemini(gModel, opts.system || '', opts.content, opts.maxTokens, opts.jsonMode !== false)
+          return { text: g.text, provider: 'gemini', model: gModel, inTok: g.inTok, outTok: g.outTok }
+        } catch (_) { /* fall through to Claude */ }
+      }
+      const modelKey = choice.provider === 'anthropic' ? choice.model : (opts.fallbackModel || 'haiku')
+      const payload: Record<string, unknown> = {
+        model: MODEL_IDS[modelKey] || MODEL_IDS.haiku, max_tokens: opts.maxTokens,
+        ...(opts.system ? { system: opts.system } : {}),
+        messages: [{ role: 'user', content: opts.content }],
+        ...(opts.payloadExtra || {}),
+      }
+      // Param compatibility: sampling params 400 on the reasoning models (only
+      // Haiku takes temperature), and thinking/output_config 400 on Haiku.
+      if (modelKey !== 'haiku' && 'temperature' in payload) delete payload.temperature
+      if (modelKey === 'haiku') { delete payload.thinking; delete payload.output_config }
+      const res = await callAnthropic(payload)
+      const data = await res.json()
+      if (data.error) throw new Error(data.error.message || 'AI error')
+      const u = data.usage || {}
+      return { text: textOf(data), provider: 'anthropic', model: String(payload.model), inTok: u.input_tokens || 0, outTok: u.output_tokens || 0 }
+    }
+
+    // Log any metered op to ai_usage_log (fire-and-forget) with the credits charged.
+    const logAI = (operation: string, model: string, credits: number, success: boolean, extra: { inTok?: number; outTok?: number; partId?: string; err?: string } = {}) => {
+      try {
+        createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!).from('ai_usage_log').insert({
+          store_id: storeId, part_id: extra.partId || null, operation, model,
+          input_tokens: extra.inTok || 0, output_tokens: extra.outTok || 0, cost_usd: 0, credits,
+          success, error_message: success ? null : String(extra.err || '').slice(0, 400),
+        }).then(() => {}, () => {})
+      } catch (_) { /* ignore */ }
+    }
+    // Meter an op (weight in credits, fractional ok) — blocks with the standard
+    // top-up message when the allowance + packs are exhausted.
+    const meterOp = async (weight: number) => {
+      const m = await meterFullAI(url, storeId, weight)
+      return m.allowed ? null : json({ error: aiLimitMsg(m) }, 429)
+    }
+
     // Mode: write an eBay listing description from a prebuilt prompt. With
     // body.options > 1, returns several ranked variants ({descriptions:[...]})
     // for the seller to pick from; otherwise a single {text}.
     if (mode === 'describe') {
       const { prompt: rawPrompt } = body
       if (!rawPrompt) return json({ error: 'prompt required' }, 400)
-      const meter = await meterFullAI(url, body.storeId)
-      if (!meter.allowed) return json({ error: aiLimitMsg(meter) }, 429)
+      const dChoice = areaChoice(storeSettings, 'descriptions')
+      const dOptCount = Math.min(Math.max(Math.round(+body.options || 1), 1), 6)
+      const dW = weightFor(dOptCount > 1 ? 'describeN' : 'describe1', dChoice.provider === 'anthropic' ? dChoice.model : '')
+      const dBlock = await meterOp(dW)
+      if (dBlock) return dBlock
       // Learn from the store's own recent descriptions (style guide) + write in
       // the store's marketplace spelling (tyre/colour vs tire/color).
       let prompt = rawPrompt
@@ -352,26 +491,27 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
         ])
         prompt = rawPrompt + spellingLine(stRow?.settings?.marketplace) + styleBlock(ex)
       } catch { /* best effort */ }
-      const optionCount = Math.min(Math.max(Math.round(+body.options || 1), 1), 6)
-      if (optionCount > 1) {
-        const aiRes = await callAnthropic({
-          model: 'claude-sonnet-5', max_tokens: 2400, thinking: { type: 'disabled' },
-          messages: [{ role: 'user', content: `${prompt}\n\nProvide ${optionCount} DISTINCT description options, ranked best/most-likely first — genuinely vary the angle, emphasis and wording (not trivially reworded). If the part's side/position is uncertain (left vs right, driver vs passenger, front vs rear, upper vs lower), you MUST include options for BOTH sides — best guess first, the opposite side as another option. Return JSON only: {"descriptions":["...","..."]}` }],
+      try {
+        if (dOptCount > 1) {
+          const r = await runAI('descriptions', {
+            content: [{ type: 'text', text: `${prompt}\n\nProvide ${dOptCount} DISTINCT description options, ranked best/most-likely first — genuinely vary the angle, emphasis and wording (not trivially reworded). If the part's side/position is uncertain (left vs right, driver vs passenger, front vs rear, upper vs lower), you MUST include options for BOTH sides — best guess first, the opposite side as another option. Return JSON only: {"descriptions":["...","..."]}` }],
+            maxTokens: 2400, jsonMode: true, payloadExtra: { thinking: { type: 'disabled' } },
+            fallbackModel: 'sonnet',
+          })
+          logAI('describe-options', r.model, dW, true, { inTok: r.inTok, outTok: r.outTok, partId: body.partId })
+          const parsed = parseJson(r.text)
+          const descriptions = Array.isArray(parsed?.descriptions) ? parsed.descriptions.filter((x: any) => typeof x === 'string' && x.trim()).slice(0, dOptCount) : []
+          if (!descriptions.length) return json({ error: 'No options generated' }, 400)
+          return json({ ok: true, descriptions })
+        }
+        const r = await runAI('descriptions', {
+          content: [{ type: 'text', text: prompt }],
+          maxTokens: 4000, jsonMode: false, payloadExtra: { thinking: { type: 'adaptive' }, output_config: { effort: 'medium' } },
+          fallbackModel: 'sonnet',
         })
-        const data = await aiRes.json()
-        if (data.error) return json({ error: data.error.message || 'AI error' }, 400)
-        const parsed = parseJson(textOf(data))
-        const descriptions = Array.isArray(parsed?.descriptions) ? parsed.descriptions.filter((x: any) => typeof x === 'string' && x.trim()).slice(0, optionCount) : []
-        if (!descriptions.length) return json({ error: 'No options generated' }, 400)
-        return json({ ok: true, descriptions })
-      }
-      const aiRes = await callAnthropic({
-        model: 'claude-sonnet-5', max_tokens: 4000, thinking: { type: 'adaptive' }, output_config: { effort: 'medium' },
-        messages: [{ role: 'user', content: prompt }],
-      })
-      const data = await aiRes.json()
-      if (data.error) return json({ error: data.error.message || 'AI error' }, 400)
-      return json({ ok: true, text: textOf(data) })
+        logAI('describe', r.model, dW, true, { inTok: r.inTok, outTok: r.outTok, partId: body.partId })
+        return json({ ok: true, text: r.text })
+      } catch (e) { return json({ error: (e as Error).message || 'AI error' }, 400) }
     }
 
     // Mode: identify a car (make/model/year) from its photos — replaces VIN
@@ -384,7 +524,8 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
         ...carB64s.map((b: string) => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b } })),
       ]
       if (!blocks.length) return json({ error: 'At least one car photo is required' }, 400)
-      meterLightAI(url, body.storeId)
+      const icBlock = await meterOp(OP_WEIGHTS['identify-car'])
+      if (icBlock) return icBlock
       const mkCar = marketWords(await storeMarketplaceId(url, body.storeId))
       const aiRes = await callAnthropic({
         model: 'claude-sonnet-5', max_tokens: 300, thinking: { type: 'disabled' },
@@ -393,6 +534,7 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
       })
       const data = await aiRes.json()
       if (data.error) return json({ error: data.error.message || 'AI error' }, 400)
+      logAI('identify-car', 'claude-sonnet-5', OP_WEIGHTS['identify-car'], true, { inTok: data.usage?.input_tokens, outTok: data.usage?.output_tokens })
       const parsed = parseJson(textOf(data))
       if (!parsed) return json({ error: 'Could not identify the car' }, 502)
       return json({ ok: true, result: parsed })
@@ -413,64 +555,67 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
       const vehicleTxt = `Vehicle: ${car.make || ''} ${car.model || ''} ${car.year || ''}.`
       // Title spelling follows the marketplace — buyers search "tyre" in AU/UK
       // but "tire" in US/CA, so this directly affects search visibility.
-      meterLightAI(url, body.storeId)
+      const qnChoice = areaChoice(storeSettings, 'capture')
+      const qnW = weightFor('quick-name', qnChoice.provider === 'anthropic' ? qnChoice.model : '')
+      const qnBlock = await meterOp(qnW)
+      if (qnBlock) return qnBlock
       const nameSpell = spellingLine(await storeMarketplaceId(url, body.storeId))
-      if (nameCount > 1) {
-        const aiRes = await callAnthropic({
-          model: 'claude-haiku-4-5-20251001', max_tokens: 400,
-          system: `You name a used car part for an eBay listing. Return JSON only: {"titles":["max 80 chars", ...]}. Give ${nameCount} DISTINCT title options, best/most-likely first. CRITICAL: if the part has a side/position that cannot be certain from the photo — left vs right, driver vs passenger, front vs rear, upper vs lower — you MUST include BOTH variants among the options (your best guess first, the opposite side as another option). Otherwise vary the part type/variant/qualifier. Front-load Make Model Year(s) then the part type, then the key qualifier (side/position). No filler, no ALL CAPS.${nameSpell}`,
-          messages: [{ role: 'user', content: [...blocks, { type: 'text', text: `${vehicleTxt} Give ${nameCount} concise eBay product name options for this part.` }] }],
+      try {
+        if (nameCount > 1) {
+          const r = await runAI('capture', {
+            system: `You name a used car part for an eBay listing. Return JSON only: {"titles":["max 80 chars", ...]}. Give ${nameCount} DISTINCT title options, best/most-likely first. CRITICAL: if the part has a side/position that cannot be certain from the photo — left vs right, driver vs passenger, front vs rear, upper vs lower — you MUST include BOTH variants among the options (your best guess first, the opposite side as another option). Otherwise vary the part type/variant/qualifier. Front-load Make Model Year(s) then the part type, then the key qualifier (side/position). No filler, no ALL CAPS.${nameSpell}`,
+            content: [...blocks, { type: 'text', text: `${vehicleTxt} Give ${nameCount} concise eBay product name options for this part.` }],
+            maxTokens: 400, jsonMode: true,
+          })
+          logAI('quick-name', r.model, qnW, true, { inTok: r.inTok, outTok: r.outTok })
+          const parsed = parseJson(r.text)
+          const titles = Array.isArray(parsed?.titles) ? parsed.titles.filter((x: any) => typeof x === 'string' && x.trim()).slice(0, nameCount) : []
+          if (!titles.length) return json({ error: 'Could not name the part' }, 502)
+          return json({ ok: true, titles })
+        }
+        const r = await runAI('capture', {
+          system: `You name a used car part for an eBay listing. Return JSON only: {"title":"max 80 chars"}. Front-load Make Model Year(s) and the part type, then a key qualifier (side/position). No filler, no ALL CAPS.${nameSpell}`,
+          content: [...blocks, { type: 'text', text: `${vehicleTxt} Give a concise eBay product name for this part.` }],
+          maxTokens: 120, jsonMode: true,
         })
-        const data = await aiRes.json()
-        if (data.error) return json({ error: data.error.message || 'AI error' }, 400)
-        const parsed = parseJson(textOf(data))
-        const titles = Array.isArray(parsed?.titles) ? parsed.titles.filter((x: any) => typeof x === 'string' && x.trim()).slice(0, nameCount) : []
-        if (!titles.length) return json({ error: 'Could not name the part' }, 502)
-        return json({ ok: true, titles })
-      }
-      const aiRes = await callAnthropic({
-        model: 'claude-haiku-4-5-20251001', max_tokens: 120,
-        system: `You name a used car part for an eBay listing. Return JSON only: {"title":"max 80 chars"}. Front-load Make Model Year(s) and the part type, then a key qualifier (side/position). No filler, no ALL CAPS.${nameSpell}`,
-        messages: [{ role: 'user', content: [...blocks, { type: 'text', text: `${vehicleTxt} Give a concise eBay product name for this part.` }] }],
-      })
-      const data = await aiRes.json()
-      if (data.error) return json({ error: data.error.message || 'AI error' }, 400)
-      const parsed = parseJson(textOf(data))
-      if (!parsed?.title) return json({ error: 'Could not name the part' }, 502)
-      return json({ ok: true, title: parsed.title })
+        logAI('quick-name', r.model, qnW, true, { inTok: r.inTok, outTok: r.outTok })
+        const parsed = parseJson(r.text)
+        if (!parsed?.title) return json({ error: 'Could not name the part' }, 502)
+        return json({ ok: true, title: parsed.title })
+      } catch (e) { return json({ error: (e as Error).message || 'AI error' }, 400) }
     }
 
     // Mode: parse make/model/year from a listing title (cheap, Haiku).
     if (mode === 'parse-title') {
       const { title } = body
       if (!title) return json({ error: 'title required' }, 400)
-      const aiRes = await callAnthropic({
-        model: 'claude-haiku-4-5-20251001', max_tokens: 200,
-        messages: [{ role: 'user', content: `Extract make, model, and year range from this eBay car parts listing title. Return JSON only: {"make":"","model":"","year":""}\n\nThe "year" field should be a string like "2011-2017" for a range, or "2014" for a single year, or empty if unknown.\n\nTitle: ${title}` }],
-      })
-      const data = await aiRes.json()
-      if (data.error) return json({ error: data.error.message || 'AI error' }, 400)
-      const parsed = parseJson(textOf(data))
-      if (!parsed) return json({ error: 'Could not parse AI response' }, 502)
-      return json({ ok: true, result: parsed })
+      const ptChoice = areaChoice(storeSettings, 'capture')
+      const ptW = weightFor('parse-title', ptChoice.provider === 'anthropic' ? ptChoice.model : '')
+      const ptBlock = await meterOp(ptW)
+      if (ptBlock) return ptBlock
+      try {
+        const r = await runAI('capture', {
+          content: [{ type: 'text', text: `Extract make, model, and year range from this eBay car parts listing title. Return JSON only: {"make":"","model":"","year":""}\n\nThe "year" field should be a string like "2011-2017" for a range, or "2014" for a single year, or empty if unknown.\n\nTitle: ${title}` }],
+          maxTokens: 200, jsonMode: true,
+        })
+        logAI('parse-title', r.model, ptW, true, { inTok: r.inTok, outTok: r.outTok })
+        const parsed = parseJson(r.text)
+        if (!parsed) return json({ error: 'Could not parse AI response' }, 502)
+        return json({ ok: true, result: parsed })
+      } catch (e) { return json({ error: (e as Error).message || 'AI error' }, 400) }
     }
 
     // Mode: assess a part from its photos (default). Uses every part photo
     // (angles, label close-ups, part-number stamps) plus the donor car's photos
     // and details as context for a more accurate assessment.
     const { photoBase64, photoBase64s, photoUrl, photoUrls, car, carId, categories, partId, existingTitle, existingPrice } = body
-    // Per-store AI model tier (settings.aiModel) → model, image count, thinking and
-    // the credit weight. Default 'standard'. Sonnet 5 hi-res vision is ~3–5k input
-    // tokens PER image, so the image count is the main cost lever.
-    let TIER = AI_TIERS.standard
-    let storeSettings: any = {}
-    try {
-      const svc = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-      const { data: strow } = await svc.from('stores').select('settings').eq('id', storeId).single()
-      storeSettings = strow?.settings || {}
-      TIER = resolveTier(storeSettings.aiModel)
-    } catch (_) { /* default standard */ }
-    const MAX_PART_IMAGES = TIER.images
+    // Per-area model choice (settings.aiModels.assess, with legacy assessProvider/
+    // aiModel fallbacks) → provider, model, image count, thinking and the credit
+    // weight. Sonnet/Opus hi-res vision is ~3–5k input tokens PER image, so the
+    // image count is the main cost lever.
+    const assessChoice = areaChoice(storeSettings, 'assess')
+    const ASSESS = ASSESS_CFG[assessChoice.model] || ASSESS_CFG.sonnet
+    const MAX_PART_IMAGES = ASSESS.images
     const urls = (Array.isArray(photoUrls) ? photoUrls : (photoUrl ? [photoUrl] : [])).filter(Boolean).slice(0, MAX_PART_IMAGES)
     const b64s = (Array.isArray(photoBase64s) ? photoBase64s : (photoBase64 ? [photoBase64] : [])).filter(Boolean).slice(0, Math.max(0, MAX_PART_IMAGES - urls.length))
     const partBlocks: any[] = [
@@ -491,21 +636,31 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
     // not when the function returns, so nothing waits for stage 2.
     if (trusted && partId) {
       try {
-        const catList = Object.keys(CATEGORY_TREE).join(', ')
-        const lightSys = `You are an expert ${mw.adj} used car parts seller. Return JSON only: {"category":"exact","listPrice":number}. Pick the single best TOP-LEVEL category from: ${catList}. listPrice = a realistic ${mw.currency} used price.`
-        const carTxt = `${car?.make || ''} ${car?.model || ''} ${car?.year || ''}`.trim()
-        const aiRes = await callAnthropic({
-          model: 'claude-haiku-4-5-20251001', max_tokens: 120, temperature: 0, system: lightSys,
-          messages: [{ role: 'user', content: [partBlocks[0], { type: 'text', text: `Vehicle: ${carTxt}. Top category + fair used ${mw.currency} price.` }] }],
-        })
-        const d = await aiRes.json()
-        const q = d.error ? null : parseJson(textOf(d))
-        const stage1: Record<string, unknown> = { ai_pending: false }
-        if (q) {
-          if (capCfg.category && q.category) stage1.category = q.category
-          if (capCfg.price && !(+existingPrice > 0) && +q.listPrice > 0) stage1.list_price = +q.listPrice
+        // Metered at 0.2 credits. If the allowance is exhausted, skip stage 1
+        // quietly (no error to the phone) — stage 2's meter gives the real answer.
+        const s1Choice = areaChoice(storeSettings, 'capture')
+        const s1W = weightFor('capture1', s1Choice.provider === 'anthropic' ? s1Choice.model : '')
+        const s1Meter = await meterFullAI(url, storeId, s1W)
+        if (s1Meter.allowed) {
+          const catList = Object.keys(CATEGORY_TREE).join(', ')
+          const lightSys = `You are an expert ${mw.adj} used car parts seller. Return JSON only: {"category":"exact","listPrice":number}. Pick the single best TOP-LEVEL category from: ${catList}. listPrice = a realistic ${mw.currency} used price.`
+          const carTxt = `${car?.make || ''} ${car?.model || ''} ${car?.year || ''}`.trim()
+          const r = await runAI('capture', {
+            system: lightSys,
+            content: [partBlocks[0], { type: 'text', text: `Vehicle: ${carTxt}. Top category + fair used ${mw.currency} price.` }],
+            maxTokens: 120, jsonMode: true, payloadExtra: { temperature: 0 },
+          })
+          logAI('capture1', r.model, s1W, true, { inTok: r.inTok, outTok: r.outTok, partId })
+          const q = parseJson(r.text)
+          const stage1: Record<string, unknown> = { ai_pending: false }
+          if (q) {
+            if (capCfg.category && q.category) stage1.category = q.category
+            if (capCfg.price && !(+existingPrice > 0) && +q.listPrice > 0) stage1.list_price = +q.listPrice
+          }
+          await createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!).from('parts').update(stage1).eq('id', partId).eq('store_id', storeId)
+        } else {
+          await createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!).from('parts').update({ ai_pending: false }).eq('id', partId)
         }
-        await createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!).from('parts').update(stage1).eq('id', partId).eq('store_id', storeId)
       } catch (_) {
         try { await createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!).from('parts').update({ ai_pending: false }).eq('id', partId) } catch (__) { /* ignore */ }
       }
@@ -581,14 +736,15 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
         try { await createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!).from('parts').update({ ai_pending: false }).eq('id', partId) } catch (_) { /* ignore */ }
       }
     }
-    // Provider routing: the token-heavy vision assessment defaults to Gemini
-    // (~10× cheaper); per-store override via settings.assessProvider ('gemini' |
-    // 'anthropic'). A Gemini failure falls back to Anthropic so a part is never
-    // left unassessed. The metered unit is 1 credit on Gemini vs the tier weight
-    // on Anthropic (Gemini is far cheaper).
+    // Provider routing: the chosen area model (settings.aiModels.assess; legacy
+    // assessProvider/aiModel fallbacks; default Gemini Flash — ~10× cheaper). A
+    // Gemini failure falls back to Claude so a part is never left unassessed.
+    // Credit weight follows the MODEL: Gemini/Haiku 1, Sonnet 2, Opus 4.
     const geminiReady = !!Deno.env.get('GEMINI_API_KEY')
-    const wantGemini = (storeSettings.assessProvider ?? 'gemini') === 'gemini' && geminiReady
-    const meter = await meterFullAI(url, storeId, wantGemini ? 1 : TIER.weight)
+    const wantGemini = assessChoice.provider === 'gemini' && geminiReady
+    const anthropicModelKey = assessChoice.provider === 'anthropic' ? assessChoice.model : 'sonnet' // gemini's fallback = sonnet
+    const assessW = ASSESS_WEIGHTS[assessChoice.model] ?? 2
+    const meter = await meterFullAI(url, storeId, assessW)
     if (!meter.allowed) {
       await clearPendingOnFail()
       if (trusted && partId) return json({ ok: true, skipped: 'ai_limit', message: aiLimitMsg(meter) })
@@ -596,7 +752,7 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
     }
 
     let usedProvider = 'anthropic'
-    let usedModel = TIER.model
+    let usedModel = MODEL_IDS[anthropicModelKey] || MODEL_IDS.sonnet
     let assessText = ''
     let inTok = 0, outTok = 0
     const svcLog = () => createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
@@ -604,7 +760,7 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
       try {
         await svcLog().from('ai_usage_log').insert({
           store_id: storeId, part_id: partId || null, operation: 'assess', model: usedModel,
-          input_tokens: inTok, output_tokens: outTok, cost_usd: 0, success,
+          input_tokens: inTok, output_tokens: outTok, cost_usd: 0, credits: assessW, success,
           error_message: success ? null : String(msg || '').slice(0, 400),
         })
       } catch (_) { /* ignore */ }
@@ -612,7 +768,7 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
 
     if (wantGemini) {
       try {
-        const gModel = await resolveGeminiModel(false)
+        const gModel = await resolveGeminiModel(assessChoice.model === 'flash-lite')
         const g = await callGemini(gModel, sys, content, 6000)
         assessText = g.text; usedProvider = 'gemini'; usedModel = gModel; inTok = g.inTok; outTok = g.outTok
       } catch (e) {
@@ -622,11 +778,12 @@ Answer concisely and practically (1–4 sentences). If you're unsure or it needs
     }
 
     if (!assessText) {
-      // Anthropic path. Sonnet tiers use adaptive thinking (temperature omitted —
-      // it 400s on Sonnet 5); Haiku (economy) runs plain. textOf() ignores thinking.
-      usedProvider = 'anthropic'; usedModel = TIER.model
-      const assessPayload: Record<string, unknown> = { model: TIER.model, max_tokens: 6000, system: sys, messages: [{ role: 'user', content }] }
-      if (TIER.thinking) { assessPayload.thinking = { type: 'adaptive' }; assessPayload.output_config = { effort: TIER.effort } }
+      // Anthropic path. Sonnet/Opus use adaptive thinking (temperature omitted —
+      // it 400s on the reasoning models); Haiku runs plain. textOf() ignores thinking.
+      usedProvider = 'anthropic'; usedModel = MODEL_IDS[anthropicModelKey] || MODEL_IDS.sonnet
+      const aCfg = ASSESS_CFG[anthropicModelKey] || ASSESS_CFG.sonnet
+      const assessPayload: Record<string, unknown> = { model: usedModel, max_tokens: 6000, system: sys, messages: [{ role: 'user', content }] }
+      if (aCfg.thinking) { assessPayload.thinking = { type: 'adaptive' }; assessPayload.output_config = { effort: aCfg.effort } }
       const aiRes = await callAnthropic(assessPayload)
       const data = await aiRes.json()
       if (data.error) {

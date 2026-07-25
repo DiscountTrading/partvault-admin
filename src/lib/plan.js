@@ -4,10 +4,10 @@
 // gates UI/features and explains what each tier unlocks.
 
 export const PLAN_LIMITS = {
-  trial:    { label: 'Free Trial', aiFull: 100,  seats: 99, items: 99999, stockControl: true,  history: true,  analytics: true,  multiStore: false },
-  basic:    { label: 'Basic',      aiFull: 50,   seats: 1,  items: 500,   stockControl: false, history: false, analytics: false, multiStore: false },
-  pro:      { label: 'Pro',        aiFull: 1000, seats: 3,  items: 5000,  stockControl: true,  history: true,  analytics: true,  multiStore: false },
-  business: { label: 'Business',   aiFull: 3000, seats: 10, items: 25000, stockControl: true,  history: true,  analytics: true,  multiStore: true },
+  trial:    { label: 'Free Trial', aiFull: 100,  seats: 99, items: 99999, stockControl: true,  history: true,  analytics: true,  multiStore: false, aiControl: true },
+  basic:    { label: 'Basic',      aiFull: 50,   seats: 1,  items: 500,   stockControl: false, history: false, analytics: false, multiStore: false, aiControl: false },
+  pro:      { label: 'Pro',        aiFull: 1000, seats: 3,  items: 5000,  stockControl: true,  history: true,  analytics: true,  multiStore: false, aiControl: true },
+  business: { label: 'Business',   aiFull: 3000, seats: 10, items: 25000, stockControl: true,  history: true,  analytics: true,  multiStore: true,  aiControl: true },
 }
 
 // Resolve a store's plan row into an effective state the UI can act on.

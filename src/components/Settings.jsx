@@ -60,6 +60,34 @@ const EBAY_RUNAME = 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
 const EBAY_OAUTH_URL = `https://auth.ebay.com/oauth2/authorize?client_id=${EBAY_CLIENT_ID}&response_type=code&redirect_uri=${encodeURIComponent(EBAY_RUNAME)}&prompt=login&scope=${encodeURIComponent('https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.inventory.readonly https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly https://api.ebay.com/oauth/api_scope/sell.finances https://api.ebay.com/oauth/api_scope/sell.account.readonly')}`
 const EDGE_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import'
 
+// ── Per-area AI control (the 🧠 AI tab) ─────────────────────────────────────
+// One row per AI job. Credits/use mirror the edge-function weights (ALL AI is
+// metered): assess 1 (Gemini/Haiku) / 2 (Sonnet) / 4 (Opus); specifics 0.2;
+// description 0.5 (options 1.0); capture ops ≈0.1–0.2; help 0.1. Opus doubles a
+// non-assess weight. 1 credit = 10¢ retail.
+const AI_BRANDS = [
+  { id: 'gemini', name: '⚡ Gemini', models: [['flash', 'Gemini Flash'], ['flash-lite', 'Gemini Flash-Lite']] },
+  { id: 'anthropic', name: '🎯 Claude', models: [['haiku', 'Claude Haiku 4.5'], ['sonnet', 'Claude Sonnet 5'], ['opus', 'Claude Opus 4.8']] },
+]
+const AI_AREAS = [
+  { id: 'assess', name: '🔍 Part assessment', desc: 'Identifies each part from its photos — title, category, condition, price, part number. The token-heavy vision job.',
+    def: { provider: 'gemini', model: 'flash' }, claudeDefault: 'sonnet', geminiOk: true,
+    credits: (p, m) => p === 'gemini' || m === 'haiku' ? 1 : m === 'opus' ? 4 : 2, unit: 'part' },
+  { id: 'specifics', name: '🛒 eBay item specifics', desc: 'Fills the eBay item specifics + vehicle fitment from the photos when previewing/publishing a listing.',
+    def: { provider: 'gemini', model: 'flash' }, claudeDefault: 'haiku', geminiOk: true,
+    credits: (p, m) => m === 'opus' ? 0.4 : 0.2, unit: 'listing' },
+  { id: 'descriptions', name: '📝 Descriptions', desc: 'Writes the listing description (and the ✨ Options variants), learning from your recent listings.',
+    def: { provider: 'anthropic', model: 'sonnet' }, claudeDefault: 'sonnet', geminiOk: true,
+    credits: (p, m) => m === 'opus' ? 1 : 0.5, unit: 'description' },
+  { id: 'capture', name: '📱 Mobile capture & quick tools', desc: 'Instant category/price at phone capture, quick part naming and title parsing.',
+    def: { provider: 'anthropic', model: 'haiku' }, claudeDefault: 'haiku', geminiOk: true,
+    credits: (p, m) => m === 'opus' ? 0.4 : 0.2, unit: 'capture' },
+  { id: 'help', name: '💬 Help assistant', desc: 'Answers "how do I…" questions on the Help tab. Claude only for now (multi-turn chat).',
+    def: { provider: 'anthropic', model: 'haiku' }, claudeDefault: 'haiku', geminiOk: false,
+    credits: (p, m) => m === 'opus' ? 0.2 : 0.1, unit: 'question' },
+]
+const fmtCredits = (n) => `${n % 1 === 0 ? n : n.toFixed(1)} credit${n === 1 ? '' : 's'} (~${Math.round(n * 10)}¢)`
+
 function Section({ title, children }) {
   return (
     <div style={{ ...S.card, marginBottom: 16 }}>
@@ -254,6 +282,39 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       setApSaved(true); setTimeout(() => setApSaved(false), 2000)
     } catch (e) { console.error('AI provider save failed', e) }
   }
+  // Per-area AI control (the 🧠 AI tab): settings.aiModels = { area: { provider,
+  // model } }. Saving an area also syncs the legacy keys (assessProvider /
+  // specificsProvider / aiModel) so the mobile app + any not-yet-updated reader
+  // keeps working. Gated by plan.can('aiControl') + the manage_ai permission.
+  const [aiModels, setAiModels] = useState({})
+  const [aiAreaSaved, setAiAreaSaved] = useState(null) // area id that just saved
+  const [canManageAi, setCanManageAi] = useState(true)
+  useEffect(() => {
+    if (!storeId) return
+    sb.rpc('has_permission', { p_store_id: storeId, p_capability: 'manage_ai' })
+      .then(({ data, error }) => { if (!error) setCanManageAi(!!data) })
+  }, [storeId])
+  const saveAiArea = async (area, patch) => {
+    const next = { ...aiModels, [area]: { ...(aiModels[area] || {}), ...patch } }
+    // Switching provider needs a valid model for that provider.
+    const cur = next[area]
+    if (cur.provider === 'gemini' && !['flash', 'flash-lite'].includes(cur.model)) cur.model = 'flash'
+    if (cur.provider === 'anthropic' && !['haiku', 'sonnet', 'opus'].includes(cur.model)) cur.model = AI_AREAS.find(a => a.id === area)?.claudeDefault || 'haiku'
+    setAiModels(next)
+    if (!storeId) return
+    try {
+      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      const legacy = {}
+      if (area === 'assess') {
+        legacy.assessProvider = cur.provider
+        if (cur.provider === 'anthropic') legacy.aiModel = cur.model === 'haiku' ? 'economy' : cur.model === 'opus' ? 'premium' : 'standard'
+      }
+      if (area === 'specifics') legacy.specificsProvider = cur.provider
+      await sb.from('stores').update({ settings: { ...(current?.settings || {}), aiModels: next, ...legacy } }).eq('id', storeId)
+      setAiAreaSaved(area); setTimeout(() => setAiAreaSaved(null), 2000)
+    } catch (e) { console.error('AI area save failed', e) }
+  }
+
   // Which AI engine fills the eBay item-specifics + fitment from the part photos
   // (the token-heavy publish-adjacent vision call). Gemini (cheap) is the
   // default; either way it falls back to Claude on any error so a listing never
@@ -446,6 +507,19 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         if (data.settings.aiModel) setAiModel(data.settings.aiModel)
         if (data.settings.assessProvider) setAssessProvider(data.settings.assessProvider)
         if (data.settings.specificsProvider) setSpecificsProvider(data.settings.specificsProvider)
+        // Per-area AI picks; seed missing areas from the legacy keys so the AI tab
+        // reflects what the edge fns will actually do.
+        {
+          const am = { ...(data.settings.aiModels || {}) }
+          if (!am.assess) {
+            const p = data.settings.assessProvider || 'gemini'
+            am.assess = p === 'anthropic'
+              ? { provider: 'anthropic', model: data.settings.aiModel === 'economy' ? 'haiku' : 'sonnet' }
+              : { provider: 'gemini', model: 'flash' }
+          }
+          if (!am.specifics) am.specifics = { provider: data.settings.specificsProvider || 'gemini', model: (data.settings.specificsProvider || 'gemini') === 'anthropic' ? 'haiku' : 'flash' }
+          setAiModels(am)
+        }
         setMarketplace(data.settings.marketplace || 'EBAY_AU')
       }
       // Marketplace locks once the store has any part (DB-enforced too).
@@ -1440,6 +1514,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
 
   const SETTING_TABS = [
     { id: 'account', label: '👤 Account' },
+    { id: 'ai', label: '🧠 AI' },
     { id: 'descriptions', label: '📝 Descriptions' },
     { id: 'ebay', label: '🛒 eBay Sync' },
     { id: 'shipping', label: '📦 Shipping' },
@@ -2061,133 +2136,94 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
               </div>
 
 
-          <Section title="AI">
-            <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.5 }}>
-              AI assessment and title parsing are provided by PartVault — there's no key to configure. Requests run server-side so your credentials are never exposed in the browser.
-            </div>
-          </Section>
-          <Section title="SKU Format">
-            <div style={{ fontSize: 13, color: C.muted, marginBottom: 12, lineHeight: 1.5 }}>
-              The template used to auto-generate SKUs for new parts. The running number is store-wide and never reused. Tokens for a part with no linked car simply render empty.
-            </div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'stretch', flexWrap: 'wrap', marginBottom: 12 }}>
-              <input
-                value={skuTemplate}
-                onChange={e => setSkuTemplate(e.target.value)}
-                placeholder={DEFAULT_SKU_TEMPLATE}
-                style={{ ...S.input, flex: '1 1 320px', minWidth: 0, fontFamily: 'monospace', fontSize: 13 }}
-              />
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <label style={{ fontSize: 12, color: C.muted }}>Pad</label>
-                <input
-                  type="number" min={1} max={8} value={skuPad}
-                  onChange={e => setSkuPad(e.target.value)}
-                  style={{ ...S.input, width: 64, fontSize: 13 }}
-                />
-              </div>
-              <button
-                onClick={saveSkuFormat}
-                disabled={skuSaving}
-                style={{ ...S.btn(skuSaved ? 'success' : 'primary'), padding: '0 20px', whiteSpace: 'nowrap' }}
-              >
-                {skuSaving ? 'Saving…' : skuSaved ? '✓ Saved' : 'Save'}
-              </button>
-            </div>
-            <div style={{ fontSize: 13, marginBottom: 12 }}>
-              <span style={{ color: C.muted }}>Preview: </span>
-              <span style={{ fontFamily: 'monospace', fontWeight: 700, color: C.text, background: '#f4f4f5', borderRadius: 6, padding: '3px 8px' }}>
-                {buildSkuPreview(skuTemplate, skuPad)}
-              </span>
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {SKU_TOKENS.map(([tok, desc]) => (
-                <button key={tok} type="button" onClick={() => setSkuTemplate(t => t + tok)}
-                  title={desc}
-                  style={{ fontFamily: 'monospace', fontSize: 12, background: '#fff', border: `1px solid ${C.border}`, borderRadius: 6, padding: '4px 8px', cursor: 'pointer', color: C.text }}>
-                  {tok}
-                </button>
-              ))}
-            </div>
-          </Section>
-
-          <Section title="📱 Mobile capture AI">
-            <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
-              What the AI fills in automatically when a part is captured on the phone. The part name is always pre-filled. Everything else (description, item specifics, fitment) is done here in admin.
-            </p>
-            <Toggle label="Assess category at capture" desc="Auto-pick the part category from the photo." value={captureAssess.category} onChange={v => setCaptureAssess(s => ({ ...s, category: v }))} />
-            <Toggle label="Suggest a sale price at capture" desc="Fill a suggested list price (only when none was entered)." value={captureAssess.price} onChange={v => setCaptureAssess(s => ({ ...s, price: v }))} />
-          </Section>
-
-          <Section title="🧠 AI model">
-            {/* Assessment engine: Gemini (cheap, default) vs Claude. */}
-            <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 6 }}>Assessment engine</div>
-            <p style={{ fontSize: 12, color: C.muted, marginBottom: 8, lineHeight: 1.5 }}>
-              Which AI identifies parts from photos — the token-heavy job. <strong>Gemini</strong> is ~10× cheaper; <strong>Claude</strong> uses the tier below. Either way, price and description tasks still use Claude.
-            </p>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 18 }}>
-              {[
-                { id: 'gemini', name: '⚡ Gemini', blurb: 'Google Gemini Flash — lowest cost, great vision. Recommended.' },
-                { id: 'anthropic', name: '🎯 Claude', blurb: 'Anthropic Claude — uses the quality tier below.' },
-              ].map(t => (
-                <button key={t.id} onClick={() => saveAssessProvider(t.id)}
-                  style={{ flex: '1 1 220px', textAlign: 'left', cursor: 'pointer', borderRadius: 10, padding: '12px 14px',
-                    border: `2px solid ${assessProvider === t.id ? C.accent : C.border}`, background: assessProvider === t.id ? C.accent + '12' : '#fff' }}>
-                  <div style={{ fontWeight: 700, fontSize: 14, color: C.text }}>{t.name}</div>
-                  <div style={{ fontSize: 12, color: C.muted, marginTop: 5, lineHeight: 1.5 }}>{t.blurb}</div>
-                </button>
-              ))}
-            </div>
-            {apSaved && <div style={{ fontSize: 12, color: C.green, marginBottom: 10 }}>✓ saved</div>}
-
-            {/* eBay item-specifics engine: Gemini (cheap, default) vs Claude. */}
-            <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 6 }}>eBay item-specifics engine</div>
-            <p style={{ fontSize: 12, color: C.muted, marginBottom: 8, lineHeight: 1.5 }}>
-              Which AI fills the eBay item specifics + vehicle fitment from the part photos when previewing or publishing a listing. <strong>Gemini</strong> is ~10× cheaper; either way it falls back to Claude if Gemini is unavailable.
-            </p>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 18 }}>
-              {[
-                { id: 'gemini', name: '⚡ Gemini', blurb: 'Google Gemini Flash — lowest cost, great vision. Recommended.' },
-                { id: 'anthropic', name: '🎯 Claude', blurb: 'Anthropic Claude Haiku — reads photos for specifics.' },
-              ].map(t => (
-                <button key={t.id} onClick={() => saveSpecificsProvider(t.id)}
-                  style={{ flex: '1 1 220px', textAlign: 'left', cursor: 'pointer', borderRadius: 10, padding: '12px 14px',
-                    border: `2px solid ${specificsProvider === t.id ? C.accent : C.border}`, background: specificsProvider === t.id ? C.accent + '12' : '#fff' }}>
-                  <div style={{ fontWeight: 700, fontSize: 14, color: C.text }}>{t.name}</div>
-                  <div style={{ fontSize: 12, color: C.muted, marginTop: 5, lineHeight: 1.5 }}>{t.blurb}</div>
-                </button>
-              ))}
-            </div>
-            {spSaved && <div style={{ fontSize: 12, color: C.green, marginBottom: 10 }}>✓ saved</div>}
-
-            <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 6, opacity: assessProvider === 'anthropic' ? 1 : 0.55 }}>Claude quality tier {assessProvider !== 'anthropic' && <span style={{ fontWeight: 400, fontSize: 11 }}>(applies when Claude is the engine)</span>}</div>
-            <p style={{ fontSize: 13, color: C.muted, marginBottom: 14, lineHeight: 1.6 }}>
-              Which Claude model does the full part assessment. Higher quality costs more AI credits per part.
-            </p>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', opacity: assessProvider === 'anthropic' ? 1 : 0.55 }}>
-              {[
-                { id: 'economy',  name: 'Economy',  weight: 1, blurb: 'Fast, lowest cost. Good for simple/common parts.' },
-                { id: 'standard', name: 'Standard',  weight: 2, blurb: 'Balanced quality — recommended for most listings.' },
-                { id: 'premium',  name: 'Premium',  weight: 4, blurb: 'Deepest reasoning + more photos. Best detail.' },
-              ].map(t => (
-                <button key={t.id} onClick={() => saveAiModel(t.id)}
-                  style={{ flex: '1 1 200px', textAlign: 'left', cursor: 'pointer', borderRadius: 10, padding: '12px 14px',
-                    border: `2px solid ${aiModel === t.id ? C.accent : C.border}`, background: aiModel === t.id ? C.accent + '12' : '#fff' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontWeight: 700, fontSize: 14, color: C.text }}>{t.name}</span>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: C.accent, background: C.accent + '18', borderRadius: 6, padding: '2px 7px' }}>{t.weight} credit{t.weight === 1 ? '' : 's'}/part</span>
-                  </div>
-                  <div style={{ fontSize: 12, color: C.muted, marginTop: 5, lineHeight: 1.5 }}>{t.blurb}</div>
-                </button>
-              ))}
-            </div>
-            {amSaved && <div style={{ fontSize: 12, color: C.green, marginTop: 8 }}>✓ saved</div>}
-            <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>Credits come from your monthly plan allowance, then top-up packs. Premium uses your allowance ~4× faster than Economy.</div>
-          </Section>
+          {/* SKU format now lives under Descriptions; AI engine/model control has
+              its own 🧠 AI tab (per-area brand+model + credit costs). */}
           <div style={S.card}>
             <div style={{ fontSize: 12, color: C.muted }}>PartVault Admin v{APP_VERSION}</div>
           </div>
         </>
       )}
+
+      {/* AI TAB — per-area brand + model control. Every AI job is metered in
+          credits (1 credit = 10¢); the badge on each row shows what a use costs. */}
+      {tab === 'ai' && !loading && (() => {
+        const planLocked = !plan.can('aiControl')
+        const readOnly = planLocked || !canManageAi
+        return (
+          <>
+            {planLocked && (
+              <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '12px 16px', marginBottom: 14, fontSize: 13, color: '#1d4ed8', fontWeight: 600 }}>
+                🔒 Choosing AI engines &amp; models is part of the Pro plan. Your store runs on the recommended defaults — upgrade to take control.
+              </div>
+            )}
+            {!planLocked && !canManageAi && (
+              <div style={{ background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 10, padding: '12px 16px', marginBottom: 14, fontSize: 13, color: '#92400e', fontWeight: 600 }}>
+                🔒 You don't have the <strong>AI Settings</strong> permission for this store — settings are shown read-only. An admin can grant it under Settings → User Access.
+              </div>
+            )}
+
+            <Section title="🧠 AI engines by area">
+              <p style={{ fontSize: 13, color: C.muted, marginBottom: 6, lineHeight: 1.6 }}>
+                Pick the AI brand and model for each job. <strong>Every AI use is metered in credits</strong> — 1 credit ≈ 10¢, from your monthly plan allowance first, then top-up packs. Gemini is the budget engine; Claude models trade cost for depth. If Gemini is ever unavailable, the job automatically falls back to Claude so nothing stops.
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                {AI_AREAS.map((a, i) => {
+                  const cur = { ...a.def, ...(aiModels[a.id] || {}) }
+                  const brand = AI_BRANDS.find(b => b.id === cur.provider) || AI_BRANDS[0]
+                  const cr = a.credits(cur.provider, cur.model)
+                  return (
+                    <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', padding: '13px 2px', borderTop: i > 0 ? `1px solid ${C.border}` : 'none' }}>
+                      <div style={{ flex: '1 1 260px', minWidth: 220 }}>
+                        <div style={{ fontSize: 13.5, fontWeight: 700, color: C.text }}>{a.name}</div>
+                        <div style={{ fontSize: 12, color: C.muted, marginTop: 2, lineHeight: 1.45 }}>{a.desc}</div>
+                      </div>
+                      <select value={cur.provider} disabled={readOnly || !a.geminiOk}
+                        onChange={e => saveAiArea(a.id, { provider: e.target.value })}
+                        style={{ border: `1.5px solid ${C.border}`, borderRadius: 8, padding: '7px 10px', fontSize: 13, background: '#fff', fontWeight: 600, opacity: readOnly ? 0.6 : 1 }}>
+                        {AI_BRANDS.filter(b => a.geminiOk || b.id === 'anthropic').map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                      </select>
+                      <select value={cur.model} disabled={readOnly}
+                        onChange={e => saveAiArea(a.id, { model: e.target.value })}
+                        style={{ border: `1.5px solid ${C.border}`, borderRadius: 8, padding: '7px 10px', fontSize: 13, background: '#fff', minWidth: 160, opacity: readOnly ? 0.6 : 1 }}>
+                        {brand.models.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+                      </select>
+                      <span title={`Approximate charge each time this job runs (1 credit = 10¢). Charged only when the AI actually runs — cached results are free.`}
+                        style={{ fontSize: 11.5, fontWeight: 700, color: C.accent, background: C.accent + '15', border: `1px solid ${C.accent}44`, borderRadius: 6, padding: '3px 9px', whiteSpace: 'nowrap' }}>
+                        ≈ {fmtCredits(cr)}/{a.unit}
+                      </span>
+                      <span style={{ width: 54, fontSize: 12, color: C.green }}>{aiAreaSaved === a.id ? '✓ saved' : ''}</span>
+                    </div>
+                  )
+                })}
+              </div>
+              <div style={{ fontSize: 11.5, color: C.muted, marginTop: 10, lineHeight: 1.5 }}>
+                Charges apply only when a model actually runs — cached previews, manual edits and failed calls are free. A photo → listing-ready part on the defaults ≈ 1.2 credits (assessment + eBay specifics).
+              </div>
+            </Section>
+
+            <Section title="📱 Mobile capture AI">
+              <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
+                What the AI fills in automatically when a part is captured on the phone. The part name is always pre-filled. Everything else (description, item specifics, fitment) is done here in admin.
+              </p>
+              <Toggle label="Assess category at capture" desc="Auto-pick the part category from the photo." value={captureAssess.category} onChange={v => { if (readOnly) return; const next = { ...captureAssess, category: v }; setCaptureAssess(next); sb.from('stores').select('settings').eq('id', storeId).single().then(({ data: cu }) => sb.from('stores').update({ settings: { ...(cu?.settings || {}), captureAssess: next } }).eq('id', storeId)) }} />
+              <Toggle label="Suggest a sale price at capture" desc="Fill a suggested list price (only when none was entered)." value={captureAssess.price} onChange={v => { if (readOnly) return; const next = { ...captureAssess, price: v }; setCaptureAssess(next); sb.from('stores').select('settings').eq('id', storeId).single().then(({ data: cu }) => sb.from('stores').update({ settings: { ...(cu?.settings || {}), captureAssess: next } }).eq('id', storeId)) }} />
+            </Section>
+
+            <Section title="📊 Credits this month">
+              <div style={{ fontSize: 13, color: C.text, lineHeight: 1.7 }}>
+                {aiUsage == null ? 'Loading…' : (
+                  <>
+                    <strong>{(Number(aiUsage.full_count) || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}</strong> of your <strong>{plan.limits.aiFull.toLocaleString()}</strong>-credit monthly allowance used
+                    {aiCredits != null && <> · top-up balance <strong>{(Number(aiCredits) || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}</strong> credits</>}
+                    {plan.founder && <span style={{ color: C.muted }}> · founder store — usage tracked, never blocked</span>}
+                  </>
+                )}
+              </div>
+              <div style={{ fontSize: 11.5, color: C.muted, marginTop: 6 }}>Allowance resets monthly. When it and any top-up credits run out, AI jobs pause until you top up or the month rolls over.</div>
+            </Section>
+          </>
+        )
+      })()}
 
       {/* COSTS TAB */}
       {tab === 'costs' && !loading && (
@@ -2386,6 +2422,50 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       {/* DESCRIPTIONS TAB */}
       {tab === 'descriptions' && !loading && (
         <>
+          <Section title="SKU Format">
+            <div style={{ fontSize: 13, color: C.muted, marginBottom: 12, lineHeight: 1.5 }}>
+              The template used to auto-generate SKUs for new parts. The running number is store-wide and never reused. Tokens for a part with no linked car simply render empty. (Saves with its own button — independent of the Save Settings above.)
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'stretch', flexWrap: 'wrap', marginBottom: 12 }}>
+              <input
+                value={skuTemplate}
+                onChange={e => setSkuTemplate(e.target.value)}
+                placeholder={DEFAULT_SKU_TEMPLATE}
+                style={{ ...S.input, flex: '1 1 320px', minWidth: 0, fontFamily: 'monospace', fontSize: 13 }}
+              />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <label style={{ fontSize: 12, color: C.muted }}>Pad</label>
+                <input
+                  type="number" min={1} max={8} value={skuPad}
+                  onChange={e => setSkuPad(e.target.value)}
+                  style={{ ...S.input, width: 64, fontSize: 13 }}
+                />
+              </div>
+              <button
+                onClick={saveSkuFormat}
+                disabled={skuSaving}
+                style={{ ...S.btn(skuSaved ? 'success' : 'primary'), padding: '0 20px', whiteSpace: 'nowrap' }}
+              >
+                {skuSaving ? 'Saving…' : skuSaved ? '✓ Saved' : 'Save'}
+              </button>
+            </div>
+            <div style={{ fontSize: 13, marginBottom: 12 }}>
+              <span style={{ color: C.muted }}>Preview: </span>
+              <span style={{ fontFamily: 'monospace', fontWeight: 700, color: C.text, background: '#f4f4f5', borderRadius: 6, padding: '3px 8px' }}>
+                {buildSkuPreview(skuTemplate, skuPad)}
+              </span>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {SKU_TOKENS.map(([tok, desc]) => (
+                <button key={tok} type="button" onClick={() => setSkuTemplate(t => t + tok)}
+                  title={desc}
+                  style={{ fontFamily: 'monospace', fontSize: 12, background: '#fff', border: `1px solid ${C.border}`, borderRadius: 6, padding: '4px 8px', cursor: 'pointer', color: C.text }}>
+                  {tok}
+                </button>
+              ))}
+            </div>
+          </Section>
+
           <Section title="🤖 AI Description Template">
             <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
               Configure what information the AI includes when generating part descriptions.
