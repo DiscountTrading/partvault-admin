@@ -93,11 +93,18 @@ export function useParts(storeId) {
     }
     setTotalCount(count || 0)
 
+    // Stream rows in so the grid paints almost immediately instead of blocking on
+    // the whole yard: a small first page renders straight away, then the rest fill
+    // in behind it. Newest-first (matches the default view) so the first page is
+    // stable as more load. Each page is store-guarded (isolation).
+    const FIRST_PAGE = 100
     const PAGE_SIZE_FETCH = 1000
     const totalRows = count || 0
     const allRows = []
-    for (let from = 0; from < totalRows; from += PAGE_SIZE_FETCH) {
-      const to = Math.min(from + PAGE_SIZE_FETCH - 1, totalRows - 1)
+    let from = 0
+    while (from < totalRows) {
+      const size = from === 0 ? FIRST_PAGE : PAGE_SIZE_FETCH
+      const to = Math.min(from + size - 1, totalRows - 1)
       const { data, error } = await sb
         .from('parts')
         .select('*')
@@ -113,7 +120,11 @@ export function useParts(storeId) {
         return
       }
       if (data) allRows.push(...data)
+      setParts(allRows.map(mapRow))                 // progressive paint (eBay item ids merged below)
+      if (from === 0) { setSyncStatus('live'); setLoading(false) } // first page on screen ASAP
+      from += size
     }
+    if (!totalRows) setLoading(false)
     // Attach each part's live eBay item id (for the "view on eBay" link). It lives
     // on the listings table keyed by part_id — a relisted part can have several, so
     // prefer a live/active one. Best-effort: a failure here just omits the links.

@@ -7,7 +7,7 @@ import { useAssessQueue } from './hooks/useAssessQueue'
 import { useSyncRunner } from './hooks/useSyncRunner'
 import { sb } from './lib/supabase'
 import { C, S, APP_VERSION, rentPerDay } from './lib/constants'
-import { MARKETPLACE_LIST, guessMarketplace, setActiveMarketplace } from './lib/marketplaces'
+import { MARKETPLACE_LIST, guessMarketplace, setActiveMarketplace, getActiveMarketplace } from './lib/marketplaces'
 import { planState } from './lib/plan'
 import { DEFAULT_LABELS } from './lib/labels'
 import { WAREHOUSE_DEFAULTS } from './lib/warehouse'
@@ -264,6 +264,7 @@ export default function App() {
   const [cars, setCars] = useState([])
   const [marketplaceId, setMarketplaceId] = useState('EBAY_AU') // re-render trigger for currency
   const [plan, setPlan] = useState(() => planState(null)) // store's subscription plan (defaults open)
+  const [ebayUsername, setEbayUsername] = useState(null) // for the nav "eBay store" link
 
   // App-level background AI assessment — runs on any tab so parts created in the
   // admin form / mobile / import get assessed silently. Counter lives in the nav.
@@ -298,10 +299,12 @@ export default function App() {
     setFooter(DEFAULT_FOOTER)
     setShipping(null)
     setCars([])
+    setEbayUsername(null)
     // Load AI settings + footer
     sb.from('stores').select('settings, plan').eq('id', storeId).single().then(({ data }) => {
       if (!mine()) return
       setPlan(planState(data?.plan))
+      setEbayUsername(data?.settings?.ebayUsername || null)
       if (data?.settings?.aiDescription) setAiSettings(s => ({ ...s, ...data.settings.aiDescription }))
       if (data?.settings?.footer) setFooter(data.settings.footer)
       if (data?.settings?.costing) setCosting(s => ({ ...s, ...data.settings.costing }))
@@ -342,6 +345,13 @@ export default function App() {
       <nav style={S.nav}>
         <div style={S.logo}>⚙ PartVault Admin</div>
         <StoreSwitcher stores={stores} activeStoreId={activeStoreId} setActiveStore={setActiveStore} refreshStores={refreshStores} />
+        {ebayUsername && (
+          <a href={`https://www.${getActiveMarketplace()?.ebayDomain || 'ebay.com.au'}/usr/${encodeURIComponent(ebayUsername)}`}
+            target="_blank" rel="noopener noreferrer" title={`Open this company's eBay store (${ebayUsername})`}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.85)', textDecoration: 'none', background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 6, padding: '4px 9px' }}>
+            🛒 eBay store ↗
+          </a>
+        )}
         {TABS.map(t => {
           // The Analytics tab is Pro+ — Basic sees it locked.
           const gated = t.id === 'analytics' && !plan.can('analytics')

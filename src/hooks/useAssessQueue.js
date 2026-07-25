@@ -153,10 +153,14 @@ export function useAssessQueue({ storeId, parts, cars, refetch }) {
     return () => clearInterval(iv)
   }, [retryAt])
 
-  // New store → start fresh and abort any in-flight run for the old store.
+  // New store → start fresh and abort any in-flight run for the old store. Also
+  // wipe the visible counter state IMMEDIATELY so the previous company's
+  // "Preparing X/Y" chip doesn't linger in the nav until the new store loads; the
+  // queue re-evaluates and restarts for the new store's parts on its own.
   useEffect(() => {
     tried.current = new Set(); seen.current = new Set(); durations.current = []; round.current = 0
     abort.current = true; setBlocked(null); setRetryAt(null)
+    setRunning(false); setDone(0); setTotal(0); setEtaMs(null)
     if (retryTimer.current) { clearTimeout(retryTimer.current); retryTimer.current = null }
   }, [storeId])
 
