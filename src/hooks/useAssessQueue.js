@@ -68,6 +68,12 @@ export function useAssessQueue({ storeId, parts, cars, refetch }) {
   const seen = useRef(new Set())        // part ids we've ever queued (to reset the round cap on genuinely new work)
   const needWorkRef = useRef([])
 
+  // Opt-in gate: the queue no longer auto-runs. On login / store switch the app
+  // asks whether to assess (all / some / none); until the user chooses, mode is
+  // null and nothing runs. 'some' processes only the approved ids.
+  const [mode, setMode] = useState(null)          // null (undecided) | 'all' | 'some' | 'none'
+  const [approvedIds, setApprovedIds] = useState(null) // Set of part ids for 'some'
+
   const partUrlsOf = (p) => (p.photos || []).map(urlFrom).filter(Boolean)
   // A part needs work if it's in stock with a photo and is missing its assessment
   // OR its eBay specifics.
@@ -76,13 +82,22 @@ export function useAssessQueue({ storeId, parts, cars, refetch }) {
     [parts])
   needWorkRef.current = needWork
 
+  // What the queue is actually allowed to process, given the user's choice.
+  const approvedWork = useMemo(() => {
+    if (mode === 'all') return needWork
+    if (mode === 'some' && approvedIds) return needWork.filter(p => approvedIds.has(p.id))
+    return []
+  }, [needWork, mode, approvedIds])
+  const approvedWorkRef = useRef([])
+  approvedWorkRef.current = approvedWork
+
   const avgMs = () => durations.current.length ? durations.current.reduce((a, b) => a + b, 0) / durations.current.length : DEFAULT_PART_MS
 
   const run = useCallback(async () => {
     if (busy.current || paused) return
     if (retryTimer.current) { clearTimeout(retryTimer.current); retryTimer.current = null }
     setRetryAt(null)
-    const queue = needWork
+    const queue = approvedWorkRef.current
       .filter(p => !tried.current.has(p.id))
       .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))) // newest first
     if (!queue.length) return
@@ -132,19 +147,20 @@ export function useAssessQueue({ storeId, parts, cars, refetch }) {
       setRetryAt(Date.now() + delay)
       retryTimer.current = setTimeout(() => {
         setRetryAt(null); retryTimer.current = null
-        if (needWorkRef.current.length) { tried.current = new Set(); run() }
+        if (approvedWorkRef.current.length) { tried.current = new Set(); run() }
       }, delay)
     }
-  }, [needWork, paused, cars, storeId, refetch])
+  }, [paused, cars, storeId, refetch])
 
-  // Auto-start when there's untried work (and not paused / not mid-retry). New part
-  // ids reset the retry-round cap so fresh work always gets a full set of attempts.
+  // Start once the user has approved work (all/some) and there's untried work left.
+  // Nothing runs while mode is null/none, so it's fully opt-in. New approved ids
+  // reset the retry-round cap so fresh work always gets a full set of attempts.
   useEffect(() => {
     if (paused || busy.current || retryAt != null) return
-    const fresh = needWork.filter(p => !seen.current.has(p.id))
+    const fresh = approvedWork.filter(p => !seen.current.has(p.id))
     if (fresh.length) { fresh.forEach(p => seen.current.add(p.id)); round.current = 0 }
-    if (needWork.some(p => !tried.current.has(p.id))) run()
-  }, [needWork, paused, retryAt, storeId, run])
+    if (approvedWork.some(p => !tried.current.has(p.id))) run()
+  }, [approvedWork, paused, retryAt, storeId, run])
 
   // Tick every second while a retry is counting down, so the countdown updates.
   useEffect(() => {
@@ -161,6 +177,7 @@ export function useAssessQueue({ storeId, parts, cars, refetch }) {
     tried.current = new Set(); seen.current = new Set(); durations.current = []; round.current = 0
     abort.current = true; setBlocked(null); setRetryAt(null)
     setRunning(false); setDone(0); setTotal(0); setEtaMs(null)
+    setMode(null); setApprovedIds(null)   // re-ask (assess all/some/none) for the new store
     if (retryTimer.current) { clearTimeout(retryTimer.current); retryTimer.current = null }
   }, [storeId])
 
@@ -172,6 +189,15 @@ export function useAssessQueue({ storeId, parts, cars, refetch }) {
     return nv
   })
 
+  // The prompt's choices.
+  const assessAll = useCallback(() => setMode('all'), [])
+  const assessNone = useCallback(() => setMode('none'), [])
+  const assessSome = useCallback((ids) => { setApprovedIds(new Set(ids)); setMode('some') }, [])
+
   const retrySec = retryAt != null ? Math.max(0, Math.ceil((retryAt - Date.now()) / 1000)) : null
-  return { running, done, total, paused, togglePaused, remaining: needWork.length, etaMs, retrySec, blocked }
+  return {
+    running, done, total, paused, togglePaused, remaining: needWork.length, etaMs, retrySec, blocked,
+    // opt-in prompt surface
+    pending: needWork, mode, promptNeeded: mode === null && needWork.length > 0, assessAll, assessNone, assessSome,
+  }
 }

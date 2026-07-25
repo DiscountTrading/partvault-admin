@@ -234,6 +234,66 @@ function SyncProgressBadge({ sync }) {
   )
 }
 
+// Opt-in AI-assessment prompt. When a store loads with un-assessed parts, ask
+// once (per login / store switch) whether to assess All / Some / None, instead of
+// the queue silently running. "Choose some" opens a checklist. Making any choice
+// clears assess.promptNeeded, which closes this.
+function AssessPrompt({ assess, storeName, loading }) {
+  const [choosing, setChoosing] = useState(false)
+  const [sel, setSel] = useState(() => new Set())
+  const pending = assess?.pending || []
+  useEffect(() => { if (!assess?.promptNeeded) setChoosing(false) }, [assess?.promptNeeded])
+  if (loading || !assess?.promptNeeded) return null
+  const n = pending.length
+  const overlay = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300, padding: 20 }
+  const card = { background: '#fff', borderRadius: 14, padding: 24, maxWidth: 520, width: '100%', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }
+  const linkBtn = { background: 'none', border: 'none', color: C.accent, cursor: 'pointer', fontWeight: 600, fontSize: 12, padding: 0, textDecoration: 'underline' }
+
+  if (!choosing) return (
+    <div style={overlay}>
+      <div style={card}>
+        <div style={{ fontSize: 18, fontWeight: 800, color: C.text, marginBottom: 8 }}>🧠 Assess with AI?</div>
+        <div style={{ fontSize: 14, color: C.text, lineHeight: 1.6, marginBottom: 18 }}>
+          <b>{n}</b> part{n === 1 ? '' : 's'} in <b>{storeName}</b> {n === 1 ? 'is' : 'are'} ready to be AI-assessed — title, category, price, condition &amp; eBay specifics. Each part uses AI credits.
+        </div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <button onClick={() => assess.assessNone()} style={{ ...S.btn('secondary'), padding: '9px 16px' }}>Not now</button>
+          <button onClick={() => { setSel(new Set(pending.map(p => p.id))); setChoosing(true) }} style={{ ...S.btn('secondary'), padding: '9px 16px' }}>Choose some…</button>
+          <button onClick={() => assess.assessAll()} style={{ ...S.btn('primary'), padding: '9px 16px' }}>Assess all {n}</button>
+        </div>
+      </div>
+    </div>
+  )
+
+  const toggle = (id) => setSel(s => { const nx = new Set(s); nx.has(id) ? nx.delete(id) : nx.add(id); return nx })
+  return (
+    <div style={overlay}>
+      <div style={{ ...card, maxWidth: 580, display: 'flex', flexDirection: 'column', maxHeight: '82vh' }}>
+        <div style={{ fontSize: 17, fontWeight: 800, color: C.text, marginBottom: 4 }}>Choose parts to assess</div>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', fontSize: 12, color: C.muted, marginBottom: 10 }}>
+          <span>{sel.size} of {n} selected</span>
+          <button onClick={() => setSel(new Set(pending.map(p => p.id)))} style={linkBtn}>Select all</button>
+          <button onClick={() => setSel(new Set())} style={linkBtn}>Clear</button>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', border: `1px solid ${C.border}`, borderRadius: 8 }}>
+          {pending.map((p, i) => (
+            <label key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderTop: i > 0 ? `1px solid ${C.border}` : 'none', cursor: 'pointer', fontSize: 13 }}>
+              <input type="checkbox" checked={sel.has(p.id)} onChange={() => toggle(p.id)} />
+              <span style={{ fontFamily: 'monospace', color: C.muted, fontSize: 11, minWidth: 60 }}>{p.sku || '—'}</span>
+              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.title || 'Untitled'}</span>
+              <span style={{ color: C.muted, fontSize: 11, whiteSpace: 'nowrap' }}>{[p.make, p.model, p.year].filter(Boolean).join(' ')}</span>
+            </label>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 14 }}>
+          <button onClick={() => setChoosing(false)} style={{ ...S.btn('secondary'), padding: '9px 16px' }}>← Back</button>
+          <button disabled={sel.size === 0} onClick={() => assess.assessSome([...sel])} style={{ ...S.btn('primary'), padding: '9px 16px', opacity: sel.size === 0 ? 0.5 : 1 }}>Assess {sel.size} selected</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function App() {
   const { session, profile, storeId, stores, activeStoreId, setActiveStore, refreshStores, authReady, signOut } = useAuth()
   const { parts, loading, syncStatus, totalCount, addPart, editPart, softDelete, softDeleteCar, refetch } = useParts(storeId)
@@ -402,6 +462,9 @@ export default function App() {
           onSettingsSaved={s => { if (s?.costing) setCosting(c => ({ ...c, ...s.costing })); if (s?.inventory) setInventory(i => ({ ...i, ...s.inventory })); if (s?.storage) setStorage(st => ({ ...st, ...s.storage })); if (s?.shipping) setShipping(s.shipping); if (s?.warehouse) setWarehouse(w => ({ ...w, ...s.warehouse })); if (s?.labels) setLabels(l => ({ ...l, ...s.labels })) }} />}
         {tab === 'help' && <Help storeId={storeId} />}
       </main>
+      {/* Opt-in AI-assessment prompt on login / store switch when parts need assessing */}
+      <AssessPrompt assess={assess} storeName={stores?.find(s => s.id === storeId)?.name || 'this store'} loading={loading} />
+
       {/* Floating context-aware help on every page (hidden on the Help tab itself) */}
       {tab !== 'help' && <FloatingHelp storeId={storeId} context={TABS.find(t => t.id === tab)?.label || tab} onOpenHelp={() => setTab('help')} />}
       {toast && (
