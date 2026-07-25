@@ -227,6 +227,24 @@ const secondaryLabel = (grain, ms) => {
   if (grain === 'month') return String(d.getFullYear())
   return ''
 }
+// Last day (inclusive) of the bucket that starts at `k` — so a multi-day bar can
+// show the whole period it covers, not just its first date.
+const bucketEndMs = (grain, k) => {
+  const d = new Date(k)
+  if (grain === 'day') return startOfDayMs(k)
+  if (grain === 'week') return startOfDayMs(k + 6 * DAY)
+  if (grain === 'month') return startOfDayMs(new Date(d.getFullYear(), d.getMonth() + 1, 0).getTime())
+  return startOfDayMs(new Date(d.getFullYear(), 11, 31).getTime())
+}
+// "1 Jul – 7 Jul 2026" (drops the year on the start when both ends share it); a
+// single-day bucket collapses to one date.
+const fmtRangeLabel = (a, b) => {
+  const da = new Date(a), db = new Date(b)
+  const withYear = { day: 'numeric', month: 'short', year: 'numeric' }
+  if (startOfDayMs(a) === startOfDayMs(b)) return db.toLocaleDateString('en-AU', withYear)
+  const startOpt = da.getFullYear() === db.getFullYear() ? { day: 'numeric', month: 'short' } : withYear
+  return `${da.toLocaleDateString('en-AU', startOpt)} – ${db.toLocaleDateString('en-AU', withYear)}`
+}
 const METRICS = [
   { id: 'net', label: 'Net sales', money: true },
   { id: 'profit', label: 'Profit', money: true },
@@ -355,7 +373,7 @@ function BarChart({ bars, money }) {
         const totalN = b.organicN + b.lowN + b.medN + b.highN
         return (
           <div ref={tipRef} style={{ position: 'absolute', bottom: H + 6, left: tipPos ? tipPos.left : 0, transform: 'none', visibility: tipPos ? 'visible' : 'hidden', background: '#1c1c1e', color: '#fff', borderRadius: 8, padding: '8px 11px', fontSize: 11.5, lineHeight: 1.6, whiteSpace: 'nowrap', zIndex: 5, pointerEvents: 'none', boxShadow: '0 6px 18px rgba(0,0,0,0.28)' }}>
-            <div style={{ fontWeight: 700, marginBottom: 3 }}>{b.secondary ? `${b.primary} ${b.secondary}` : b.primary}</div>
+            <div style={{ fontWeight: 700, marginBottom: 3 }}>{b.rangeLabel || (b.secondary ? `${b.primary} ${b.secondary}` : b.primary)}</div>
             {SEG_ROWS.map(([key, label]) => row(key, label))}
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, borderTop: '1px solid rgba(255,255,255,0.22)', marginTop: 3, paddingTop: 3, fontWeight: 700 }}>
               <span>Total</span><span>{fmtV(b.value)}{money ? ` · ${totalN}` : ''}</span>
@@ -625,10 +643,14 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
       a[g] += metricVal(metric, x); a[g + 'N'] += 1
     }
     const m = METRICS.find(x => x.id === metric)
+    const today = startOfDayMs(now)
     const bars = keys.map((k) => {
       const a = acc.get(k)
+      // Full period the bar covers (end clamped to today for the current bucket).
+      // Only meaningful for multi-day grains; day grain shows a single date already.
+      const rangeLabel = eg === 'day' ? null : fmtRangeLabel(k, Math.min(bucketEndMs(eg, k), today))
       return {
-        primary: primaryLabel(eg, k), secondary: secondaryLabel(eg, k),
+        primary: primaryLabel(eg, k), secondary: secondaryLabel(eg, k), rangeLabel,
         ...a, value: a.organic + a.low + a.med + a.high,
         current: k === nowKey,
       }
