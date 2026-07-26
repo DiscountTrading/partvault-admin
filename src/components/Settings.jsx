@@ -69,22 +69,23 @@ const AI_BRANDS = [
   { id: 'gemini', name: '⚡ Gemini', models: [['flash', 'Gemini Flash'], ['flash-lite', 'Gemini Flash-Lite']] },
   { id: 'anthropic', name: '🎯 Claude', models: [['haiku', 'Claude Haiku 4.5'], ['sonnet', 'Claude Sonnet 5'], ['opus', 'Claude Opus 4.8']] },
 ]
-const AI_AREAS = [
-  { id: 'assess', name: '🔍 Part assessment', desc: 'Identifies each part from its photos — title, category, condition, price, part number. The token-heavy vision job.',
+// TWO simple controls instead of five rows — Paul's feedback: five separate
+// credit badges read like costs that stack, when a normal part only ever pays
+// the listing bundle. "Listing AI" = ONE brand+model choice driving assessment
+// + eBay specifics + descriptions together; "Quick helpers" = the penny stuff.
+// The Help assistant is deliberately NOT shown (platform tool, budget model).
+// A group writes all its areas' settings keys — the edge fns still read per-area.
+const AI_GROUPS = [
+  { id: 'listing', name: '📦 Listing AI', areas: ['assess', 'specifics', 'descriptions'],
+    desc: 'Does the real work: identifies each part from its photos (title, category, condition, price, part number), fills the eBay item specifics + vehicle fitment, and writes descriptions.',
     def: { provider: 'gemini', model: 'flash' }, claudeDefault: 'sonnet', geminiOk: true,
-    credits: (p, m) => p === 'gemini' || m === 'haiku' ? 1 : m === 'opus' ? 4 : 2, unit: 'part' },
-  { id: 'specifics', name: '🛒 eBay item specifics', desc: 'Fills the eBay item specifics + vehicle fitment from the photos when previewing/publishing a listing.',
-    def: { provider: 'gemini', model: 'flash' }, claudeDefault: 'haiku', geminiOk: true,
-    credits: (p, m) => m === 'opus' ? 0.4 : 0.2, unit: 'listing' },
-  { id: 'descriptions', name: '📝 Descriptions', desc: 'Writes the listing description (and the ✨ Options variants), learning from your recent listings.',
-    def: { provider: 'anthropic', model: 'sonnet' }, claudeDefault: 'sonnet', geminiOk: true,
-    credits: (p, m) => m === 'opus' ? 1 : 0.5, unit: 'description' },
-  { id: 'capture', name: '📱 Mobile capture & quick tools', desc: 'Instant category/price at phone capture, quick part naming and title parsing.',
-    def: { provider: 'anthropic', model: 'haiku' }, claudeDefault: 'haiku', geminiOk: true,
-    credits: (p, m) => m === 'opus' ? 0.4 : 0.2, unit: 'capture' },
-  { id: 'help', name: '💬 Help assistant', desc: 'Answers "how do I…" questions on the Help tab. Claude only for now (multi-turn chat).',
-    def: { provider: 'anthropic', model: 'haiku' }, claudeDefault: 'haiku', geminiOk: false,
-    credits: (p, m) => m === 'opus' ? 0.2 : 0.1, unit: 'question' },
+    // per listing-ready part = assessment + specifics (runs once, automatically)
+    perPart: (p, m) => (p === 'gemini' || m === 'haiku' ? 1 : m === 'opus' ? 4 : 2) + (m === 'opus' ? 0.4 : 0.2),
+    // per description = only when ✨ Generate is clicked
+    perDesc: (p, m) => (m === 'opus' ? 1 : 0.5) },
+  { id: 'quick', name: '✨ Quick helpers', areas: ['capture'],
+    desc: 'The little stuff — instant category/price at phone capture, quick part naming, title parsing.',
+    def: { provider: 'anthropic', model: 'haiku' }, claudeDefault: 'haiku', geminiOk: true },
 ]
 const fmtCredits = (n) => `${n % 1 === 0 ? n : n.toFixed(1)} credit${n === 1 ? '' : 's'} (~${Math.round(n * 10)}¢)`
 
@@ -294,25 +295,29 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     sb.rpc('has_permission', { p_store_id: storeId, p_capability: 'manage_ai' })
       .then(({ data, error }) => { if (!error) setCanManageAi(!!data) })
   }, [storeId])
-  const saveAiArea = async (area, patch) => {
-    const next = { ...aiModels, [area]: { ...(aiModels[area] || {}), ...patch } }
-    // Switching provider needs a valid model for that provider.
-    const cur = next[area]
+  const saveAiGroup = async (groupId, patch) => {
+    const g = AI_GROUPS.find(x => x.id === groupId)
+    if (!g) return
+    // One choice per group; validate the model belongs to the chosen provider.
+    const cur = { ...g.def, ...(aiModels[g.areas[0]] || {}), ...patch }
     if (cur.provider === 'gemini' && !['flash', 'flash-lite'].includes(cur.model)) cur.model = 'flash'
-    if (cur.provider === 'anthropic' && !['haiku', 'sonnet', 'opus'].includes(cur.model)) cur.model = AI_AREAS.find(a => a.id === area)?.claudeDefault || 'haiku'
+    if (cur.provider === 'anthropic' && !['haiku', 'sonnet', 'opus'].includes(cur.model)) cur.model = g.claudeDefault
+    const next = { ...aiModels }
+    for (const area of g.areas) next[area] = { provider: cur.provider, model: cur.model }
     setAiModels(next)
     if (!storeId) return
     try {
       const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
       const legacy = {}
-      if (area === 'assess') {
+      if (g.areas.includes('assess')) {
         legacy.assessProvider = cur.provider
         if (cur.provider === 'anthropic') legacy.aiModel = cur.model === 'haiku' ? 'economy' : cur.model === 'opus' ? 'premium' : 'standard'
       }
-      if (area === 'specifics') legacy.specificsProvider = cur.provider
+      if (g.areas.includes('specifics')) legacy.specificsProvider = cur.provider
+      // Keep the stored aiModels' help entry untouched (no UI for it — platform tool).
       await sb.from('stores').update({ settings: { ...(current?.settings || {}), aiModels: next, ...legacy } }).eq('id', storeId)
-      setAiAreaSaved(area); setTimeout(() => setAiAreaSaved(null), 2000)
-    } catch (e) { console.error('AI area save failed', e) }
+      setAiAreaSaved(groupId); setTimeout(() => setAiAreaSaved(null), 2000)
+    } catch (e) { console.error('AI group save failed', e) }
   }
 
   // Which AI engine fills the eBay item-specifics + fitment from the part photos
@@ -2162,42 +2167,61 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
               </div>
             )}
 
-            <Section title="🧠 AI engines by area">
+            {(() => {
+              const listing = AI_GROUPS[0]
+              const lCur = { ...listing.def, ...(aiModels.assess || {}) }
+              const perPart = listing.perPart(lCur.provider, lCur.model)
+              const perDesc = listing.perDesc(lCur.provider, lCur.model)
+              return (
+                <div style={{ background: C.accent + '0d', border: `1.5px solid ${C.accent}55`, borderRadius: 12, padding: '16px 20px', marginBottom: 14, display: 'flex', alignItems: 'baseline', gap: 16, flexWrap: 'wrap' }}>
+                  <div>
+                    <span style={{ fontSize: 26, fontWeight: 800, color: C.accent }}>≈ {Math.round(perPart * 10)}¢</span>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}> per listing-ready part</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.5 }}>
+                    That's the whole job — photos → assessment + eBay specifics ({fmtCredits(perPart)}). A ✨ description, when you ask for one, adds {fmtCredits(perDesc)}. Nothing else adds up on its own.
+                  </div>
+                </div>
+              )
+            })()}
+
+            <Section title="🧠 AI engine">
               <p style={{ fontSize: 13, color: C.muted, marginBottom: 6, lineHeight: 1.6 }}>
-                Pick the AI brand and model for each job. <strong>Every AI use is metered in credits</strong> — 1 credit ≈ 10¢, from your monthly plan allowance first, then top-up packs. Gemini is the budget engine; Claude models trade cost for depth. If Gemini is ever unavailable, the job automatically falls back to Claude so nothing stops.
+                One choice does it: pick the engine that prepares your listings. <strong>Gemini</strong> is the budget engine and does a great job; the <strong>Claude</strong> models trade a higher cost for more depth on hard parts. Credits come from your monthly allowance first, then top-up packs — and if Gemini is ever unavailable, jobs automatically fall back to Claude so nothing stops.
               </p>
               <div style={{ display: 'flex', flexDirection: 'column' }}>
-                {AI_AREAS.map((a, i) => {
-                  const cur = { ...a.def, ...(aiModels[a.id] || {}) }
+                {AI_GROUPS.map((g, i) => {
+                  const cur = { ...g.def, ...(aiModels[g.areas[0]] || {}) }
                   const brand = AI_BRANDS.find(b => b.id === cur.provider) || AI_BRANDS[0]
-                  const cr = a.credits(cur.provider, cur.model)
                   return (
-                    <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', padding: '13px 2px', borderTop: i > 0 ? `1px solid ${C.border}` : 'none' }}>
-                      <div style={{ flex: '1 1 260px', minWidth: 220 }}>
-                        <div style={{ fontSize: 13.5, fontWeight: 700, color: C.text }}>{a.name}</div>
-                        <div style={{ fontSize: 12, color: C.muted, marginTop: 2, lineHeight: 1.45 }}>{a.desc}</div>
+                    <div key={g.id} style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', padding: '13px 2px', borderTop: i > 0 ? `1px solid ${C.border}` : 'none' }}>
+                      <div style={{ flex: '1 1 280px', minWidth: 230 }}>
+                        <div style={{ fontSize: 13.5, fontWeight: 700, color: C.text }}>{g.name}</div>
+                        <div style={{ fontSize: 12, color: C.muted, marginTop: 2, lineHeight: 1.45 }}>{g.desc}</div>
                       </div>
-                      <select value={cur.provider} disabled={readOnly || !a.geminiOk}
-                        onChange={e => saveAiArea(a.id, { provider: e.target.value })}
+                      <select value={cur.provider} disabled={readOnly}
+                        onChange={e => saveAiGroup(g.id, { provider: e.target.value })}
                         style={{ border: `1.5px solid ${C.border}`, borderRadius: 8, padding: '7px 10px', fontSize: 13, background: '#fff', fontWeight: 600, opacity: readOnly ? 0.6 : 1 }}>
-                        {AI_BRANDS.filter(b => a.geminiOk || b.id === 'anthropic').map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                        {AI_BRANDS.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
                       </select>
                       <select value={cur.model} disabled={readOnly}
-                        onChange={e => saveAiArea(a.id, { model: e.target.value })}
+                        onChange={e => saveAiGroup(g.id, { model: e.target.value })}
                         style={{ border: `1.5px solid ${C.border}`, borderRadius: 8, padding: '7px 10px', fontSize: 13, background: '#fff', minWidth: 160, opacity: readOnly ? 0.6 : 1 }}>
                         {brand.models.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
                       </select>
-                      <span title={`Approximate charge each time this job runs (1 credit = 10¢). Charged only when the AI actually runs — cached results are free.`}
+                      <span title="Approximate charge when this runs (1 credit = 10¢). Charged only when the AI actually runs — cached results, manual edits and failures are free."
                         style={{ fontSize: 11.5, fontWeight: 700, color: C.accent, background: C.accent + '15', border: `1px solid ${C.accent}44`, borderRadius: 6, padding: '3px 9px', whiteSpace: 'nowrap' }}>
-                        ≈ {fmtCredits(cr)}/{a.unit}
+                        {g.id === 'listing'
+                          ? `≈ ${fmtCredits(g.perPart({ ...g.def, ...(aiModels.assess || {}) }.provider, { ...g.def, ...(aiModels.assess || {}) }.model))}/part`
+                          : '≈ 0.1–0.2 credits (1–2¢)/use'}
                       </span>
-                      <span style={{ width: 54, fontSize: 12, color: C.green }}>{aiAreaSaved === a.id ? '✓ saved' : ''}</span>
+                      <span style={{ width: 54, fontSize: 12, color: C.green }}>{aiAreaSaved === g.id ? '✓ saved' : ''}</span>
                     </div>
                   )
                 })}
               </div>
               <div style={{ fontSize: 11.5, color: C.muted, marginTop: 10, lineHeight: 1.5 }}>
-                Charges apply only when a model actually runs — cached previews, manual edits and failed calls are free. A photo → listing-ready part on the defaults ≈ 1.2 credits (assessment + eBay specifics).
+                These are per-use prices, not add-ons that stack: a part pays the Listing AI price once, and the quick helpers only fire on the phone or when you use them.
               </div>
             </Section>
 
@@ -2210,16 +2234,59 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
             </Section>
 
             <Section title="📊 Credits this month">
-              <div style={{ fontSize: 13, color: C.text, lineHeight: 1.7 }}>
-                {aiUsage == null ? 'Loading…' : (
+              {aiUsage == null ? <div style={{ fontSize: 13, color: C.muted }}>Loading…</div> : (() => {
+                const nowD = new Date()
+                const y = nowD.getFullYear(), mo = nowD.getMonth()
+                const daysInMonth = new Date(y, mo + 1, 0).getDate()
+                const dayN = nowD.getDate()
+                const startStr = new Date(y, mo, 1).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })
+                const endStr = new Date(y, mo, daysInMonth).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })
+                const used = Number(aiUsage.full_count) || 0
+                const limit = plan.limits.aiFull || 1
+                const timePct = Math.min(100, (dayN / daysInMonth) * 100)
+                const usedPct = Math.min(100, (used / limit) * 100)
+                const projected = dayN > 0 ? (used / dayN) * daysInMonth : 0
+                const hot = usedPct > timePct + 1 // meaningfully ahead of the calendar
+                const bar = (pct, color) => (
+                  <div style={{ position: 'relative', height: 14, background: '#eceae4', borderRadius: 7, overflow: 'hidden' }}>
+                    <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 7, transition: 'width .3s' }} />
+                  </div>
+                )
+                return (
                   <>
-                    <strong>{(Number(aiUsage.full_count) || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}</strong> of your <strong>{plan.limits.aiFull.toLocaleString()}</strong>-credit monthly allowance used
-                    {aiCredits != null && <> · top-up balance <strong>{(Number(aiCredits) || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}</strong> credits</>}
-                    {plan.founder && <span style={{ color: C.muted }}> · founder store — usage tracked, never blocked</span>}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+                      <div style={{ fontSize: 13, color: C.text }}>
+                        Allowance period: <strong>{startStr} – {endStr}</strong> <span style={{ color: C.muted }}>· day {dayN} of {daysInMonth}</span>
+                      </div>
+                      <div style={{ fontSize: 12.5, fontWeight: 700, color: hot ? C.yellow : C.green }}>
+                        {hot ? '⚠ Ahead of expected pace' : '✓ On or below expected pace'}
+                      </div>
+                    </div>
+
+                    {/* Pace graph: month elapsed vs allowance used — if the orange bar
+                        leads the grey marker, usage is running ahead of the calendar. */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: '6px 12px', alignItems: 'center', fontSize: 12, color: C.muted }}>
+                      <span>Month elapsed</span>
+                      <div style={{ position: 'relative' }}>{bar(timePct, '#c8c4ba')}</div>
+                      <span style={{ fontWeight: 700, color: C.text }}>{Math.round(timePct)}%</span>
+                      <span>Credits used</span>
+                      <div style={{ position: 'relative' }}>
+                        {bar(usedPct, hot ? C.yellow : C.green)}
+                        {/* expected-usage marker at the month-elapsed position */}
+                        <div title="Expected usage at this point in the month" style={{ position: 'absolute', left: `${timePct}%`, top: -2, bottom: -2, width: 2, background: '#6b7280', borderRadius: 1 }} />
+                      </div>
+                      <span style={{ fontWeight: 700, color: C.text }}>{used.toLocaleString(undefined, { maximumFractionDigits: 1 })} / {limit.toLocaleString()}</span>
+                    </div>
+
+                    <div style={{ fontSize: 12, color: C.text, marginTop: 10 }}>
+                      At this pace you'll use <strong>≈ {Math.round(projected).toLocaleString()}</strong> of your <strong>{limit.toLocaleString()}</strong>-credit allowance by {endStr}.
+                      {aiCredits != null && <> Top-up balance: <strong>{(Number(aiCredits) || 0).toLocaleString(undefined, { maximumFractionDigits: 1 })}</strong> credits.</>}
+                      {plan.founder && <span style={{ color: C.muted }}> Founder store — usage tracked, never blocked.</span>}
+                    </div>
+                    <div style={{ fontSize: 11.5, color: C.muted, marginTop: 6 }}>Allowance resets on the 1st. When it and any top-up credits run out, AI jobs pause until you top up or the month rolls over.</div>
                   </>
-                )}
-              </div>
-              <div style={{ fontSize: 11.5, color: C.muted, marginTop: 6 }}>Allowance resets monthly. When it and any top-up credits run out, AI jobs pause until you top up or the month rolls over.</div>
+                )
+              })()}
             </Section>
           </>
         )
