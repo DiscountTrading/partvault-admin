@@ -47,6 +47,46 @@ function StatusPill({ part, fontSize = 11, padding }) {
 // eBay-style accent + section card (mirrors eBay's "Create your listing" layout)
 const EBAY_BLUE = '#3665f3'
 
+// Spreadsheet-style cell for the By-Part table: click to edit in place (no need
+// to open the part form). Enter or click-away saves; Esc cancels. `display`
+// overrides how the value renders when not editing (e.g. "$120", a status pill).
+function EditableTd({ value, display, type = 'text', options, align, color, bold, onSave, title }) {
+  const [editing, setEditing] = useState(false)
+  const [v, setV] = useState(value ?? '')
+  const skip = useRef(false)
+  useEffect(() => { if (!editing) setV(value ?? '') }, [value, editing])
+  const baseStyle = { padding: '4px 8px', fontSize: 12, color: color || C.text, fontWeight: bold ? 700 : 400, textAlign: align || 'left', borderBottom: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}`, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }
+  if (!editing) {
+    return (
+      <td style={{ ...baseStyle, cursor: 'text' }} title={`${title ?? value ?? ''}${title ?? value ? ' — ' : ''}click to edit`}
+        onClick={() => { skip.current = false; setV(value ?? ''); setEditing(true) }}>
+        {display ?? (value || <span style={{ color: C.border }}>—</span>)}
+      </td>
+    )
+  }
+  const done = (val) => {
+    setEditing(false)
+    if (skip.current) { skip.current = false; return }
+    if (String(val ?? '') !== String(value ?? '')) onSave(val)
+  }
+  const keys = (e) => {
+    if (e.key === 'Enter') e.currentTarget.blur()
+    if (e.key === 'Escape') { skip.current = true; e.currentTarget.blur() }
+  }
+  const inStyle = { width: '100%', fontSize: 12, padding: '2px 4px', border: `1.5px solid ${C.accent}`, borderRadius: 4, boxSizing: 'border-box', textAlign: align || 'left', background: '#fff' }
+  return (
+    <td style={{ ...baseStyle, padding: '2px 4px' }}>
+      {type === 'select' ? (
+        <select autoFocus value={v} onChange={e => setV(e.target.value)} onBlur={e => done(e.target.value)} onKeyDown={keys} style={inStyle}>
+          {(options || []).map(([ov, ol]) => <option key={ov} value={ov}>{ol}</option>)}
+        </select>
+      ) : (
+        <input autoFocus type={type} value={v} onChange={e => setV(e.target.value)} onBlur={e => done(e.target.value)} onKeyDown={keys} style={inStyle} />
+      )}
+    </td>
+  )
+}
+
 // By-Part table columns [label, width, align]. Locked via table-layout:fixed so
 // the grid is IDENTICAL across By-Part / List / De-list — switching modes changes
 // the row contents, never the column positions. Money columns are right-aligned
@@ -1219,6 +1259,10 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filtered, sort, costMap])
 
+  // Inline cell save (spreadsheet-style editing in the By-Part table). Errors
+  // surface via the app-level toast in onEdit; concurrency guard included there.
+  const saveField = async (p, patch) => { try { await onEdit({ ...p, ...patch }) } catch (_) { /* toast shown upstream */ } }
+
   const paged = useMemo(() => sortedFiltered.slice(page*PAGE,(page+1)*PAGE), [sortedFiltered,page])
   const pages = Math.ceil(filtered.length/PAGE)
   const totals = filtered.reduce((acc,p) => { const c=eff(p),lp=+p.list_price||0; return{cost:acc.cost+c,list:acc.list+lp,profit:acc.profit+(lp-c),count:acc.count+1} }, {cost:0,list:0,profit:0,count:0})
@@ -1508,6 +1552,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
               <span style={{ fontSize:13, color:C.muted }}>Page {page+1} of {pages} ({filtered.length} parts)</span>
               <button disabled={page===pages-1} onClick={()=>setPage(p=>p+1)} style={{ ...S.btn('secondary'), padding:'4px 12px', fontSize:12 }}>Next →</button>
             </>)}
+            <span style={{ fontSize:12, color:C.muted }}>💡 Click any cell to edit it in place — Enter saves, Esc cancels. Use ✏️ Bulk edit for mass changes.</span>
             <div style={{ flex:1 }} />
             <label style={{ fontSize:12, color:C.muted, display:'flex', alignItems:'center', gap:6 }}>
               Show
@@ -1553,16 +1598,24 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                         {p.sku && <button onClick={()=>printLabels(p, labels)} title="Print stock label" style={{ fontSize:11, padding:'2px 6px', background:'#fff', color:C.text, border:`1px solid ${C.border}`, borderRadius:4, cursor:'pointer' }}>🏷️</button>}
                         <EbayLink part={p} style={{ padding:'2px 6px', background:'#fff', border:`1px solid ${C.border}`, borderRadius:4, marginLeft:4 }} />
                       </td>
-                      {td(p.sku)}{td(p.title)}{td(p.make)}{td(p.model)}{td(p.year)}{td(p.subcategory||p.category)}
-                      <td style={{ padding:'4px 8px', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}` }}>
-                        <StatusPill part={p} fontSize={10} padding="1px 6px" />
-                      </td>
+                      <EditableTd value={p.sku} onSave={v => saveField(p, { sku: v })} />
+                      <EditableTd value={p.title} title={p.title} onSave={v => saveField(p, { title: v })} />
+                      <EditableTd value={p.make} onSave={v => saveField(p, { make: v })} />
+                      <EditableTd value={p.model} onSave={v => saveField(p, { model: v })} />
+                      <EditableTd value={p.year} onSave={v => saveField(p, { year: v })} />
+                      <EditableTd value={canonicalCategory(p.category)} display={p.subcategory || p.category || undefined} title={p.subcategory || p.category}
+                        type="select" options={CATEGORY_NAMES.map(c => [c, c])}
+                        onSave={v => saveField(p, { category: v, subcategory: '' })} />
+                      <EditableTd value={p.status} display={<StatusPill part={p} fontSize={10} padding="1px 6px" />}
+                        type="select" options={Object.entries(STATUS_LABELS)}
+                        onSave={v => saveField(p, { status: v })} />
                       <td style={{ padding:'4px 8px', textAlign:'center', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}` }}>
                         {!partHasPhoto(p)
                           ? <span title="Add a photo — AI assessment needs one">📷</span>
                           : <span title={p.ai_assessed?'AI Assessed':'Needs AI'}>{p.ai_assessed?'✅':'⬜'}</span>}
                       </td>
-                      {td(lp>0?`$${lp.toFixed(0)}`:'',C.text,true,'right')}
+                      <EditableTd value={p.list_price || ''} display={lp > 0 ? `$${lp.toFixed(0)}` : undefined} type="number" align="right" bold
+                        onSave={v => saveField(p, { listPrice: +v || 0, list_price: +v || 0 })} />
                       {td(`$${cost.toFixed(0)}`,C.red,false,'right')}
                       {td(`$${pr.toFixed(0)}`,pr>=0?C.green:C.red,true,'right')}
                       <td style={{ padding:'4px 6px', textAlign:'center', borderBottom:`1px solid ${C.border}` }}>
