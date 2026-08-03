@@ -296,7 +296,7 @@ function AssessPrompt({ assess, storeName, loading }) {
 
 export default function App() {
   const { session, profile, storeId, stores, activeStoreId, setActiveStore, refreshStores, authReady, signOut } = useAuth()
-  const { parts, loading, syncStatus, totalCount, addPart, editPart, softDelete, softDeleteCar, refetch } = useParts(storeId)
+  const { parts, loading, syncStatus, totalCount, listingStats, addPart, editPart, softDelete, softDeleteCar, refetch } = useParts(storeId)
   const { sales } = useSales(storeId)
   const { wf, setStage } = useSaleWorkflow(storeId)
   const [tab, setTab] = useState('dashboard')
@@ -445,7 +445,7 @@ export default function App() {
         </div>
       )}
       <main style={S.main} key={marketplaceId}>{/* re-mounts content when the active store's currency changes */}
-        {tab === 'dashboard' && <Dashboard parts={parts} sales={sales} costing={costingFull} inventory={inventory} storeId={storeId} onDrill={drillToInsights} onSeeSales={() => setTab('sales')} />}
+        {tab === 'dashboard' && <Dashboard parts={parts} sales={sales} costing={costingFull} inventory={inventory} listingStats={listingStats} storeId={storeId} onDrill={drillToInsights} onSeeSales={() => setTab('sales')} />}
         {tab === 'sales' && <Sales sales={sales} parts={parts} costing={costingFull} wf={wf} setStage={setStage} />}
         {tab === 'inventory' && (
           <Inventory

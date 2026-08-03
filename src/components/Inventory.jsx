@@ -1286,6 +1286,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
           setShowForm(false); setEditingPart(null)
         } catch (e) {
           if (e?.code === 'STALE') { alert('This part was changed by someone else since you opened it.\n\nYour edits have NOT been saved. Close and reopen the part to see their changes, then re-apply yours.') }
+          else if (e?.code === 'DUP_SKU') { alert(e.message) }   // already plain English, no "Save failed" noise
           else { alert('Save failed: ' + (e?.message || 'unknown error')); }
           // keep the form open so edits aren't lost
         }

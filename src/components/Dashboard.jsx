@@ -2,17 +2,23 @@ import { useState } from 'react'
 import { C, S, fmt, pct, totalCost, postageCostFor, estimatePostage, partEffectiveCost, bucketByAge, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS, CATEGORY_NAMES } from '../lib/constants'
 import useFitScale from '../hooks/useFitScale'
 
-function StatCard({ label, value, sub, color }) {
+function StatCard({ label, value, sub, color, title, warn, onWarnClick }) {
   return (
-    <div style={{ background:C.card, border:`1px solid ${C.border}`, borderTop:`3px solid ${color||C.accent}`, borderRadius:10, padding:'8px 14px' }}>
+    <div title={title} style={{ background:C.card, border:`1px solid ${C.border}`, borderTop:`3px solid ${color||C.accent}`, borderRadius:10, padding:'8px 14px' }}>
       <div style={S.statLbl}>{label}</div>
       <div style={{ ...S.statVal, color:color||C.accent, fontSize:20, lineHeight:1.15 }}>{value}</div>
       {sub && <div style={{ fontSize:11, color:C.muted, marginTop:1 }}>{sub}</div>}
+      {warn && (
+        <div onClick={onWarnClick}
+          style={{ fontSize:11, color:C.yellow, marginTop:1, cursor:onWarnClick?'pointer':'default', textDecoration:onWarnClick?'underline':'none' }}>
+          {warn}
+        </div>
+      )}
     </div>
   )
 }
 
-export default function Dashboard({ parts, sales = [], costing, inventory, onDrill, onSeeSales, storeId }) {
+export default function Dashboard({ parts, sales = [], costing, inventory, listingStats, onDrill, onSeeSales, storeId }) {
   // Fit the whole dashboard to the viewport height — "at a glance", no scroll,
   // on any subscriber's screen size.
   const { wrapRef, contentRef, wrapStyle, contentStyle } = useFitScale({ bottomMargin: 34, minScale: 0.55 })
@@ -101,6 +107,24 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
   const shipModel = shipModelOverride || (mostlyFreeShip ? 'included' : 'separate')
   const stockVal = [...inStock,...listed].reduce((a,p)=>a+partEffectiveCost(p, costing||{}).value,0)
 
+  // "Listed" means two different things in the two systems: PartVault counts PARTS,
+  // eBay's Seller Hub counts LISTINGS. They only match when every part has exactly
+  // one listing — reuse one SKU across a box of items and many listings fold into a
+  // single part. Show eBay's own number underneath so the two can be compared
+  // directly, and flag parts marked sold that still have a listing running (one item
+  // in a shared-SKU box sold, but the rest are still live on eBay).
+  const liveListings = listingStats?.live ?? null
+  const soldWithLive = listingStats?.soldPartIds || []
+  const listingsDiffer = liveListings != null && liveListings !== listed.length
+  const listedSub = listingsDiffer ? `${liveListings.toLocaleString()} live listings on eBay` : null
+  const listedWarn = soldWithLive.length
+    ? `⚠ ${soldWithLive.length} sold ${soldWithLive.length===1?'part is':'parts are'} still listed`
+    : null
+  const listedTitle = liveListings == null ? undefined
+    : `PartVault counts parts (${listed.length.toLocaleString()}); eBay counts listings (${liveListings.toLocaleString()}). `
+      + `They differ when one SKU covers several listings — reusing a box label puts many eBay listings on a single part.`
+      + (soldWithLive.length ? ` ${soldWithLive.length} part(s) are marked sold but still have a live listing: one item from a shared-SKU box sold and flagged the whole box. Click to review them.` : '')
+
   const catBreak = CATEGORY_NAMES.map(cat=>({ cat, count:active.filter(p=>p.category===cat).length }))
     .filter(x=>x.count>0).sort((a,b)=>b.count-a.count).slice(0,6)
 
@@ -143,7 +167,9 @@ export default function Dashboard({ parts, sales = [], costing, inventory, onDri
       </div>
       <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:14, marginBottom:12 }}>
         <StatCard label="Total Parts" value={active.length} sub={`${inStock.length} in stock`} />
-        <StatCard label="Listed on eBay" value={listed.length} color={C.accent} />
+        <StatCard label="Listed on eBay" value={listed.length} color={C.accent}
+          sub={listedSub} title={listedTitle} warn={listedWarn}
+          onWarnClick={soldWithLive.length ? () => onDrill?.({ partIds: soldWithLive, label:'Sold but still listed on eBay' }) : undefined} />
         <StatCard label="Sold" value={sold.length} color={C.blue} sub={periodLabel} />
         <StatCard label="Net sales" value={fmt(netSales)} color={C.green} sub={`after refunds & fees · ${periodLabel}`} />
         <StatCard label="Profit" value={fmt(profit)} color={margin>30?C.green:C.yellow} sub={pct(margin)+' margin'+(cogsEstimated?' · incl. est. cost':'')} />

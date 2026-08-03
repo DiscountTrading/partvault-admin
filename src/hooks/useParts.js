@@ -58,6 +58,10 @@ export function useParts(storeId) {
   const [loading, setLoading] = useState(true)
   const [syncStatus, setSyncStatus] = useState('connecting')
   const [totalCount, setTotalCount] = useState(0)
+  // eBay counts listings, PartVault counts parts — and they are NOT the same number
+  // when one SKU (a box label like "SP23") covers many listings. Carry the listing-
+  // side totals so the UI can show a like-for-like figure next to Seller Hub.
+  const [listingStats, setListingStats] = useState(null)
   const channelRef = useRef(null)
   // Always holds the LATEST active store. A fetch started for store A is async and
   // multi-step; if the user switches to B mid-flight, A's fetch must NOT write its
@@ -72,6 +76,7 @@ export function useParts(storeId) {
     if (!storeId) {
       setParts([])
       setTotalCount(0)
+      setListingStats(null)
       setLoading(false)
       return
     }
@@ -134,13 +139,29 @@ export function useParts(storeId) {
       .select('part_id, platform_listing_id, status')
       .eq('store_id', storeId)
       .not('platform_listing_id', 'is', null)
-    const rank = s => (s === 'live' || s === 'active' || s === 'listed') ? 2 : 1
+    const isLive = s => s === 'live' || s === 'active' || s === 'listed'
+    const rank = s => isLive(s) ? 2 : 1
     for (const l of lst || []) {
       const prev = itemMap.get(l.part_id)
       const r = rank(l.status)
       if (!prev || r > prev.r) itemMap.set(l.part_id, { id: l.platform_listing_id, r })
     }
     if (!mine()) return   // store switched while we were loading — discard, don't cross-contaminate
+    // Live-listing tallies, measured the way eBay measures them (one per listing).
+    // `soldParts` = parts marked sold that STILL have a live listing — the tell-tale
+    // of a shared box SKU where one sale flagged the whole box.
+    const statusById = new Map(allRows.map(r => [r.id, r.status]))
+    const liveParts = new Set()
+    const soldPartsWithLive = new Set()
+    let live = 0
+    for (const l of lst || []) {
+      if (!isLive(l.status)) continue
+      live++
+      if (!l.part_id) continue
+      liveParts.add(l.part_id)
+      if (statusById.get(l.part_id) === 'sold') soldPartsWithLive.add(l.part_id)
+    }
+    setListingStats({ live, parts: liveParts.size, soldPartIds: [...soldPartsWithLive] })
     setParts(allRows.map(r => ({ ...mapRow(r), ebayItemId: itemMap.get(r.id)?.id || null })))
     setSyncStatus('live')
     setLoading(false)
@@ -151,6 +172,7 @@ export function useParts(storeId) {
     // company's inventory can never linger on screen while the new one loads.
     setParts([])
     setTotalCount(0)
+    setListingStats(null)
     setLoading(true)
     fetch()
     // Scope realtime to this store so another store's edits don't trigger refetches.
@@ -173,6 +195,24 @@ export function useParts(storeId) {
   // applied yet (e.g. container_id before 20260712). Strip that column and let the
   // caller retry, so a pending migration never blocks saving a part. The proper
   // fix is still running the migration — this is just a safety net.
+  // A SKU is unique per store (parts_sku_store_unique). Postgres reports a clash as
+  // raw 23505 constraint text, which means nothing to a seller — translate it into
+  // the one thing they need to know: which part already owns that SKU.
+  const friendlySkuClash = async (error, row) => {
+    if (error?.code !== '23505' || !/sku/i.test(error?.message || '') || !row.sku) return error
+    const { data } = await sb
+      .from('parts')
+      .select('title')
+      .eq('store_id', storeId)
+      .eq('sku', row.sku)
+      .is('deleted_at', null)
+      .limit(1)
+    const owner = data?.[0]?.title
+    const e = new Error(`SKU "${row.sku}" is already used${owner ? ` by "${owner}"` : ' by another part'}. Pick a different SKU.`)
+    e.code = 'DUP_SKU'
+    return e
+  }
+
   const stripMissingColumn = (error, row) => {
     const m = /Could not find the '([^']+)' column/.exec(error?.message || '')
     if (!m || !(m[1] in row)) return null
@@ -187,7 +227,7 @@ export function useParts(storeId) {
       const { data, error } = await sb.from('parts').insert(row).select().single()
       if (!error) { setParts(ps => [mapRow(data), ...ps]); return mapRow(data) }
       const stripped = stripMissingColumn(error, row)
-      if (!stripped) throw error
+      if (!stripped) throw await friendlySkuClash(error, row)
       row = stripped
     }
     throw new Error('Save failed')
@@ -204,7 +244,7 @@ export function useParts(storeId) {
       const { data, error } = await q.select()
       if (error) {
         const stripped = stripMissingColumn(error, row)
-        if (!stripped) throw error
+        if (!stripped) throw await friendlySkuClash(error, row)
         row = stripped
         continue
       }
@@ -233,5 +273,5 @@ export function useParts(storeId) {
     setParts(ps => ps.filter(p => !partIds.includes(p.id)))
   }
 
-  return { parts, loading, syncStatus, totalCount, addPart, editPart, softDelete, softDeleteCar, refetch: fetch }
+  return { parts, loading, syncStatus, totalCount, listingStats, addPart, editPart, softDelete, softDeleteCar, refetch: fetch }
 }
