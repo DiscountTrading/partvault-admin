@@ -246,11 +246,12 @@ const fmtRangeLabel = (a, b) => {
   return `${da.toLocaleDateString('en-AU', startOpt)} – ${db.toLocaleDateString('en-AU', withYear)}`
 }
 const METRICS = [
+  { id: 'gross', label: 'Gross sales', money: true },
   { id: 'net', label: 'Net sales', money: true },
   { id: 'profit', label: 'Profit', money: true },
   { id: 'orders', label: 'Orders', money: false },
 ]
-const metricVal = (id, x) => id === 'orders' ? 1 : id === 'profit' ? (x.profit == null ? 0 : x.profit) : x.net
+const metricVal = (id, x) => id === 'orders' ? 1 : id === 'gross' ? (x.gross || 0) : id === 'profit' ? (x.profit == null ? 0 : x.profit) : x.net
 const signedMoney = v => (v < 0 ? '−' : '') + fmt(Math.abs(v))
 const showMetric = (v, money) => money ? signedMoney(v) : String(Math.round(v))
 
