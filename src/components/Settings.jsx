@@ -1131,6 +1131,46 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     throw new Error(`${label}: still rate-limited after retries — wait a minute and try again`)
   }
 
+  // ── Shared box-SKU repair ──────────────────────────────────────────────────
+  // Old imports folded every listing that shared a custom label ("box SKU") into
+  // one part — so one sale marked the whole box sold. This checks how many live
+  // listings are still sharing a part and, on demand, splits each one out into
+  // its own part (nothing changes on eBay; the box label is kept as the new
+  // part's location and on the listing's custom label).
+  const [boxSplit, setBoxSplit] = useState({ info: null, running: false, progress: null, error: null })
+  const checkBoxSkus = async () => {
+    setBoxSplit(b => ({ ...b, error: null, info: { checking: true } }))
+    try {
+      const d = await callEdge({ action: 'split_shared_skus', storeId, dryRun: true }, 'Box-SKU check')
+      setBoxSplit(b => ({ ...b, info: d }))
+    } catch (e) { setBoxSplit(b => ({ ...b, info: null, error: e.message })) }
+  }
+  const runBoxSplit = async () => {
+    if (!confirm('Split shared box SKUs?\n\nEvery live eBay listing currently sharing a part gets its own part row (with the box label kept as its location). Nothing changes on eBay. This cannot be merged back automatically.')) return
+    setBoxSplit(b => ({ ...b, running: true, error: null, progress: { split: 0, statusFixed: 0, failed: 0 } }))
+    try {
+      let total = { split: 0, statusFixed: 0, failed: 0 }
+      for (let round = 0; round < 60; round++) {
+        const d = await callEdge({ action: 'split_shared_skus', storeId }, 'Box-SKU split')
+        total = { split: total.split + (d.split || 0), statusFixed: total.statusFixed + (d.statusFixed || 0), failed: total.failed + (d.failed || 0) }
+        setBoxSplit(b => ({ ...b, progress: { ...total, remaining: d.remaining } }))
+        if (!d.hasMore) break
+        // Only failures left → stop rather than retrying them forever.
+        if ((d.split || 0) + (d.statusFixed || 0) === 0) break
+      }
+      setBoxSplit({ info: null, running: false, progress: null, error: null,
+        done: `✓ Split ${total.split} listing${total.split === 1 ? '' : 's'} into their own parts` +
+              (total.statusFixed ? ` · corrected ${total.statusFixed} drifted status${total.statusFixed === 1 ? '' : 'es'}` : '') +
+              (total.failed ? ` · ${total.failed} failed (re-run to retry)` : '') })
+      checkBoxSkus()
+    } catch (e) { setBoxSplit(b => ({ ...b, running: false, error: e.message })) }
+  }
+  // Auto-check on opening the eBay tab (DB-only, no eBay calls — cheap).
+  useEffect(() => {
+    if (tab === 'ebay' && ebayConnected && storeId) checkBoxSkus()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, ebayConnected, storeId])
+
   // One-click full sync: import new listings → update sold orders (last ~4
   // months) → reconcile against eBay. Each step shows its own progress below.
   // Order-complete sold import via eBay getOrders (matches Seller Hub exactly).
@@ -2991,6 +3031,55 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                       </div>
                     )}
                     {s?.error && <div style={{ fontSize: 12, color: C.red, marginTop: 6 }}>{s.error}</div>}
+                  </div>
+                )
+              })()}
+
+              {/* Shared box-SKU repair — split listings that share one part. */}
+              {ebayConnected && (() => {
+                const info = boxSplit.info
+                const n = info && !info.checking ? info.toSplit : null
+                return (
+                  <div style={{ background: n > 0 ? '#fffbeb' : '#f9f8f5', border: `1px solid ${n > 0 ? '#fcd34d' : C.border}`, borderRadius: 10, padding: '12px 14px', marginBottom: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>
+                        📦 Shared box SKUs
+                        {info?.checking ? ' — checking…' : n != null ? (n > 0 ? ` — ${n} listing${n === 1 ? '' : 's'} sharing a part` : ' — ✓ every listing has its own part') : ''}
+                      </div>
+                      {!boxSplit.running && (
+                        <button onClick={checkBoxSkus} disabled={!!info?.checking}
+                          style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: 6, padding: '3px 10px', fontSize: 11, color: C.muted, cursor: 'pointer' }}>
+                          {info?.checking ? 'Checking…' : '↻ Check'}
+                        </button>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 12, color: C.muted, marginTop: 6, lineHeight: 1.55 }}>
+                      Reusing one custom label across a box of items makes the import stack those listings on a single part —
+                      then one sale marks the whole box sold. Splitting gives each live listing its own part.
+                      The box label stays on the listing and becomes the new part's <strong>location</strong>. Nothing changes on eBay.
+                    </div>
+                    {n > 0 && !boxSplit.running && (
+                      <div style={{ marginTop: 10 }}>
+                        <button onClick={runBoxSplit} style={{ ...S.btn('primary'), fontSize: 13, padding: '7px 16px' }}>
+                          Split {n} listing{n === 1 ? '' : 's'} into their own parts →
+                        </button>
+                        {info.boxCount > 0 && (
+                          <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>
+                            Box labels involved: {info.boxSkus.join(', ')}{info.boxCount > info.boxSkus.length ? ` +${info.boxCount - info.boxSkus.length} more` : ''}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {boxSplit.running && boxSplit.progress && (
+                      <div style={{ fontSize: 12.5, color: C.text, marginTop: 8 }}>
+                        ⏳ Splitting… {boxSplit.progress.split} done
+                        {boxSplit.progress.statusFixed > 0 ? ` · ${boxSplit.progress.statusFixed} statuses corrected` : ''}
+                        {boxSplit.progress.failed > 0 ? ` · ${boxSplit.progress.failed} failed` : ''}
+                        {boxSplit.progress.remaining != null ? ` · ${boxSplit.progress.remaining} to go` : ''}
+                      </div>
+                    )}
+                    {boxSplit.done && <div style={{ fontSize: 12.5, color: C.green, marginTop: 8 }}>{boxSplit.done}</div>}
+                    {boxSplit.error && <div style={{ fontSize: 12, color: C.red, marginTop: 6 }}>{boxSplit.error}</div>}
                   </div>
                 )
               })()}

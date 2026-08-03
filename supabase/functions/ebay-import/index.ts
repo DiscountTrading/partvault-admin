@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.36.63'
+const EDGE_FN_VERSION         = '3.36.64'
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  HARD BLOCK — EDITING LIVE eBay LISTINGS IS DISABLED AT THE CODE LEVEL.
@@ -2399,6 +2399,125 @@ async function handleRequest(req: Request): Promise<Response> {
       }
       await touchLiveSync(storeId, `Live listings check · ${imported} new`)
       return json({ ok: true, version: EDGE_FN_VERSION, checked: recent.length, missing: missing.length, imported, failed })
+    }
+
+    // ── SHARED BOX-SKU SPLIT ────────────────────────────────────────────────────
+    // Historical imports matched listings→parts BY SKU, so a reused custom label
+    // (one box label like "SP23" across 30 listings) folded many live listings into
+    // ONE part row — and one sale then marked the whole "box" sold while its other
+    // listings stayed live on eBay. The import has since been fixed to give every
+    // live listing its own part; this action repairs the data it left behind:
+    //   • a part with >1 live listing keeps its oldest one, the rest each get a
+    //     brand-new part;
+    //   • a SOLD part with live listings keeps none of them (the part row IS the
+    //     item that sold) — every live listing moves to a new part.
+    // New parts get a unique EB-<itemId> store SKU; the shared box label is kept
+    // as the part's free-text location (it's a warehouse locator) AND stays on the
+    // listing's platform_sku. NOTHING is written to eBay — a listing is only split
+    // once GetItem confirms it is still Active; if eBay says it actually ended or
+    // sold, we just correct the listing row's status instead (sync drift).
+    if (action === 'split_shared_skus') {
+      const dryRun = !!body.dryRun
+
+      // Everything currently recorded as live, grouped per part. Paginated —
+      // PostgREST caps a single select at 1000 rows and there are ~4k live.
+      const liveRows: any[] = []
+      for (let from = 0; ; from += 1000) {
+        const { data: page, error: lErr } = await sb.from('listings')
+          .select('id, part_id, platform_listing_id, platform_sku, listed_at')
+          .eq('store_id', storeId).eq('platform', 'ebay')
+          .in('status', ['live', 'active', 'listed']).is('deleted_at', null)
+          .not('part_id', 'is', null).order('id').range(from, from + 999)
+        if (lErr) throw new Error(`Live-listing lookup failed: ${lErr.message}`)
+        liveRows.push(...(page ?? []))
+        if (!page || page.length < 1000) break
+      }
+      const byPart = new Map<string, any[]>()
+      for (const l of liveRows ?? []) {
+        if (!byPart.has(l.part_id)) byPart.set(l.part_id, [])
+        byPart.get(l.part_id)!.push(l)
+      }
+      // Which of those parts are sold? Query by STATUS, paginated — an .in() over
+      // thousands of part ids overflows the URL and fails, silently reading every
+      // part as unsold.
+      const soldIds = new Set<string>()
+      for (let from = 0; ; from += 1000) {
+        const { data: ps, error: psErr } = await sb.from('parts').select('id')
+          .eq('store_id', storeId).eq('status', 'sold').range(from, from + 999)
+        if (psErr) throw new Error(`Sold-part lookup failed: ${psErr.message}`)
+        for (const p of ps ?? []) soldIds.add(p.id)
+        if (!ps || ps.length < 1000) break
+      }
+
+      // Work list: every live listing that shouldn't be sharing its part.
+      const toSplit: any[] = []
+      for (const [pid, ls] of byPart) {
+        const sold = soldIds.has(pid)
+        if (!sold && ls.length <= 1) continue
+        ls.sort((a: any, b: any) => String(a.listed_at || '').localeCompare(String(b.listed_at || '')))
+        toSplit.push(...(sold ? ls : ls.slice(1)))   // sold part keeps none, else keep the oldest
+      }
+
+      if (dryRun) {
+        const boxes = [...new Set(toSplit.map(l => l.platform_sku).filter(Boolean))]
+        return json({ ok: true, version: EDGE_FN_VERSION, toSplit: toSplit.length,
+          parts: byPart.size, boxSkus: boxes.slice(0, 30), boxCount: boxes.length })
+      }
+
+      const { token, certId } = await getToken()
+      const SOFT_LIMIT_MS = 18 * 1000
+      const startedAt = Date.now()
+      let split = 0, statusFixed = 0, failed = 0
+      const failedReasons: Record<string, string> = {}
+
+      for (const l of toSplit) {
+        if (Date.now() - startedAt > SOFT_LIMIT_MS) break
+        const itemId = l.platform_listing_id
+        try {
+          const xml = await trading(token, certId, 'GetItem', `<?xml version="1.0" encoding="utf-8"?>
+<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <ItemID>${itemId}</ItemID><DetailLevel>ReturnAll</DetailLevel>
+</GetItemRequest>`)
+          if (!xml.includes('<Ack>Success</Ack>') && !xml.includes('<Ack>Warning</Ack>')) {
+            throw new Error(getTag(xml, 'LongMessage') || 'eBay API error')
+          }
+
+          if (getTag(xml, 'ListingStatus') !== 'Active') {
+            // Not actually live any more — our mirror drifted. Correct the listing
+            // row only; the sale/end belongs to the part it's already linked to.
+            const sold = getTag(xml, 'SellingState') === 'EndedWithSales' || getTag(xml, 'SellingState') === 'Sold'
+            await sb.from('listings').update({
+              status: sold ? 'sold' : 'ended',
+              ended_at: getTag(xml, 'EndTime') || null,
+              ...(sold ? { sold_price: parseFloat(getTag(xml, 'ConvertedCurrentPrice') || getTag(xml, 'CurrentPrice')) || null, sold_at: getTag(xml, 'PaidTime') || null } : {}),
+            }).eq('id', l.id)
+            statusFixed++
+            continue
+          }
+
+          // Confirmed live → its own part. Unique store SKU; box label → location.
+          let newPartId: string | null = null
+          for (let attempt = 0; attempt < 4 && !newPartId; attempt++) {
+            const candidate = attempt === 0 ? `EB-${itemId}` : `EB-${itemId}-${attempt}`
+            const row = { ...buildPartRow(xml, candidate), location: l.platform_sku || null }
+            const { data: np, error: pErr } = await sb.from('parts').insert(row).select('id').single()
+            if (!pErr) { newPartId = np.id as string; break }
+            if (!(pErr.code === '23505' || /parts_sku_store_unique|duplicate key/i.test(pErr.message || ''))) throw pErr
+          }
+          if (!newPartId) throw new Error('Could not allocate a unique SKU')
+          const { error: updErr } = await sb.from('listings').update({ part_id: newPartId }).eq('id', l.id)
+          if (updErr) throw updErr
+          await syncPhotosForPart(xml, newPartId)
+          split++
+        } catch (e: any) {
+          failed++
+          failedReasons[itemId] = (e as Error).message
+        }
+      }
+
+      const done = split + statusFixed + failed
+      return json({ ok: true, version: EDGE_FN_VERSION, split, statusFixed, failed,
+        failedReasons, remaining: toSplit.length - done, hasMore: done < toSplit.length })
     }
 
     // Fill blank make/model (and a missing year) from the part title — one bounded,
