@@ -133,8 +133,11 @@ function StatCard({ label, value, color, sub }) {
   )
 }
 
-export default function Settings({ profile, storeId, onSignOut, refreshStores, onSettingsSaved, parts = [], onChanged, sync }) {
-  const [tab, setTab] = useState('account')
+export default function Settings({ profile, storeId, onSignOut, refreshStores, onSettingsSaved, parts = [], onChanged, sync, initialTab }) {
+  const [tab, setTab] = useState(initialTab?.tab || 'account')
+  // Banner deep-links (e.g. "Connect your store →") re-target the open Settings
+  // page too — the ts nonce makes each click land even on the same tab twice.
+  useEffect(() => { if (initialTab?.tab) setTab(initialTab.tab) }, [initialTab])
   const [footer, setFooter] = useState(DEFAULT_FOOTER)
   // eBay listing defaults applied at publish time (warranty aspect + condition
   // description blurb). Duration is always GTC for fixed-price listings.

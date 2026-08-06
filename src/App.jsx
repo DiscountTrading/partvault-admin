@@ -116,7 +116,7 @@ function StoreSwitcher({ stores, activeStoreId, setActiveStore, refreshStores })
       </button>
       {open && (
         <>
-          <div onClick={() => { setOpen(false); setCreating(false) }} style={{ position: 'fixed', inset: 0, zIndex: 50 }} />
+          <div onClick={() => { setOpen(false); setCreating(false); setJoining(false); setErr('') }} style={{ position: 'fixed', inset: 0, zIndex: 50 }} />
           <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 6, minWidth: 270, background: '#fff', border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: '0 10px 40px rgba(0,0,0,0.18)', zIndex: 51, overflow: 'hidden' }}>
             <div style={{ padding: '8px 12px', fontSize: 11, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Your stores</div>
             {stores.map(s => {
@@ -135,10 +135,13 @@ function StoreSwitcher({ stores, activeStoreId, setActiveStore, refreshStores })
             {creating ? (
               <div style={{ borderTop: `1px solid ${C.border}`, padding: 10 }}>
                 <div style={{ display: 'flex', gap: 6 }}>
-                  <input autoFocus value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => e.key === 'Enter' && createStore()}
+                  <input autoFocus value={newName} onChange={e => setNewName(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') createStore(); if (e.key === 'Escape') { setCreating(false); setNewName(''); setErr('') } }}
                     placeholder="New store name" style={{ flex: 1, border: `1.5px solid ${C.border}`, borderRadius: 6, padding: '7px 10px', fontSize: 13, outline: 'none' }} />
                   <button onClick={createStore} disabled={busy || !newName.trim()}
                     style={{ background: C.accent, color: '#fff', border: 'none', borderRadius: 6, padding: '7px 12px', fontSize: 13, fontWeight: 700, cursor: 'pointer', opacity: (busy || !newName.trim()) ? 0.6 : 1 }}>{busy ? '…' : 'Create'}</button>
+                  <button onClick={() => { setCreating(false); setNewName(''); setErr('') }} title="Cancel — back to the store list"
+                    style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: 6, padding: '7px 10px', fontSize: 13, color: C.muted, cursor: 'pointer' }}>✕</button>
                 </div>
                 <select value={newMarketplace} onChange={e => setNewMarketplace(e.target.value)}
                   style={{ width: '100%', marginTop: 6, border: `1.5px solid ${C.border}`, borderRadius: 6, padding: '7px 10px', fontSize: 13, outline: 'none', background: '#fff' }}>
@@ -150,10 +153,13 @@ function StoreSwitcher({ stores, activeStoreId, setActiveStore, refreshStores })
             ) : joining ? (
               <div style={{ borderTop: `1px solid ${C.border}`, padding: 10 }}>
                 <div style={{ display: 'flex', gap: 6 }}>
-                  <input autoFocus value={joinCode} onChange={e => setJoinCode(e.target.value.toUpperCase())} onKeyDown={e => e.key === 'Enter' && joinStore()}
+                  <input autoFocus value={joinCode} onChange={e => setJoinCode(e.target.value.toUpperCase())}
+                    onKeyDown={e => { if (e.key === 'Enter') joinStore(); if (e.key === 'Escape') { setJoining(false); setJoinCode(''); setErr('') } }}
                     placeholder="Join code" style={{ flex: 1, border: `1.5px solid ${C.border}`, borderRadius: 6, padding: '7px 10px', fontSize: 13, outline: 'none', fontFamily: 'monospace', fontWeight: 700, letterSpacing: 1 }} />
                   <button onClick={joinStore} disabled={busy || !joinCode.trim()}
                     style={{ background: C.accent, color: '#fff', border: 'none', borderRadius: 6, padding: '7px 12px', fontSize: 13, fontWeight: 700, cursor: 'pointer', opacity: (busy || !joinCode.trim()) ? 0.6 : 1 }}>{busy ? '…' : 'Join'}</button>
+                  <button onClick={() => { setJoining(false); setJoinCode(''); setErr('') }} title="Cancel — back to the store list"
+                    style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: 6, padding: '7px 10px', fontSize: 13, color: C.muted, cursor: 'pointer' }}>✕</button>
                 </div>
                 {err && <div style={{ fontSize: 11, color: C.red, marginTop: 6 }}>{err}</div>}
               </div>
@@ -325,6 +331,7 @@ export default function App() {
   const [marketplaceId, setMarketplaceId] = useState('EBAY_AU') // re-render trigger for currency
   const [plan, setPlan] = useState(() => planState(null)) // store's subscription plan (defaults open)
   const [ebayUsername, setEbayUsername] = useState(null) // for the nav "eBay store" link
+  const [settingsInit, setSettingsInit] = useState(null) // banner deep-links open Settings on a specific tab
 
   // App-level background AI assessment — runs on any tab so parts created in the
   // admin form / mobile / import get assessed silently. Counter lives in the nav.
@@ -457,13 +464,30 @@ export default function App() {
         </div>
       </nav>
       {plan.tier === 'trial' && !plan.expired && (
-        <div style={{ background: '#eff6ff', borderBottom: '1px solid #bfdbfe', padding: '8px 24px', fontSize: 13, color: '#1d4ed8', fontWeight: 600 }}>
-          ✨ Free trial — {Math.max(plan.trialDaysLeft ?? 0, 0)} day{(plan.trialDaysLeft ?? 0) === 1 ? '' : 's'} left with full access. Pick a plan before it ends to keep going without interruption.
+        <div style={{ background: '#eff6ff', borderBottom: '1px solid #bfdbfe', padding: '8px 24px', fontSize: 13, color: '#1d4ed8', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span>✨ Free trial — {Math.max(plan.trialDaysLeft ?? 0, 0)} day{(plan.trialDaysLeft ?? 0) === 1 ? '' : 's'} left with full access.</span>
+          <button onClick={() => { setSettingsInit({ tab: 'account', ts: Date.now() }); setTab('settings') }}
+            style={{ background: '#1d4ed8', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+            Start your subscription →
+          </button>
         </div>
       )}
       {plan.expired && (
-        <div style={{ background: '#fef2f2', borderBottom: '1px solid #fecaca', padding: '8px 24px', fontSize: 13, color: '#b91c1c', fontWeight: 600 }}>
-          ⏰ Your free trial has ended. Your data is safe — choose a plan to keep capturing and listing parts.
+        <div style={{ background: '#fef2f2', borderBottom: '1px solid #fecaca', padding: '8px 24px', fontSize: 13, color: '#b91c1c', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span>⏰ Your free trial has ended. Your data is safe — choose a plan to keep capturing and listing parts.</span>
+          <button onClick={() => { setSettingsInit({ tab: 'account', ts: Date.now() }); setTab('settings') }}
+            style={{ background: '#b91c1c', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+            Choose a plan →
+          </button>
+        </div>
+      )}
+      {!ebayUsername && (
+        <div style={{ background: '#f0f7ff', borderBottom: '1px solid #bcd7f5', padding: '8px 24px', fontSize: 13, color: '#1b5e9e', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span>🔌 Your eBay store isn't connected yet — connect it to import your real listings and sales.</span>
+          <button onClick={() => { setSettingsInit({ tab: 'ebay', ts: Date.now() }); setTab('settings') }}
+            style={{ background: '#1b5e9e', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+            Connect your store →
+          </button>
         </div>
       )}
       {sampleActive && (
@@ -489,7 +513,7 @@ export default function App() {
         )}
         {tab === 'analytics' && <Analytics storeId={storeId} initial={insightsInit} parts={parts} cars={cars} sales={sales} costing={costingFull}
           onVehiclesChanged={() => { refetch(); sb.from('cars').select('*').eq('store_id', storeId).is('deleted_at', null).order('created_at', { ascending: false }).then(({ data }) => setCars(data || [])) }} />}
-        {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores} parts={parts} onChanged={smartRefetch} sync={sync}
+        {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores} parts={parts} onChanged={smartRefetch} sync={sync} initialTab={settingsInit}
           onSettingsSaved={s => { if (s?.costing) setCosting(c => ({ ...c, ...s.costing })); if (s?.inventory) setInventory(i => ({ ...i, ...s.inventory })); if (s?.storage) setStorage(st => ({ ...st, ...s.storage })); if (s?.shipping) setShipping(s.shipping); if (s?.warehouse) setWarehouse(w => ({ ...w, ...s.warehouse })); if (s?.labels) setLabels(l => ({ ...l, ...s.labels })) }} />}
         {tab === 'help' && <Help storeId={storeId} />}
       </main>

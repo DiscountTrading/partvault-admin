@@ -26,8 +26,9 @@ function EbayLogo() {
   )
 }
 // Small eBay-logo link button (icon only) — opens the live listing in a new tab.
+// Sample parts carry a fake SAMPLE-… item id, so there's no real listing to open.
 function EbayLink({ part, style }) {
-  if (!(part.status === 'listed' && part.ebayItemId)) return null
+  if (!(part.status === 'listed' && part.ebayItemId) || part.isSample) return null
   return (
     <a href={ebayItmUrl(part.ebayItemId)} target="_blank" rel="noreferrer" title="View this listing on eBay"
        style={{ display:'inline-flex', alignItems:'center', textDecoration:'none', cursor:'pointer', ...style }}>
@@ -1099,7 +1100,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
         <span style={{ fontSize:12, color:C.muted, marginRight:'auto' }}>Saved as draft — not published to eBay until you list it.</span>
         <button style={ebayBtn('secondary')} onClick={onCancel}>Cancel</button>
         {part && form.sku && <button style={ebayBtn('secondary')} title="Print a stock label for this part" onClick={() => printLabels({ id: part.id, sku: form.sku, title: form.title, make: form.make, model: form.model, year: form.year, listPrice: form.listPrice }, labels)}>🏷️ Label</button>}
-        {part?.status === 'listed' && part?.ebayItemId && <a href={ebayItmUrl(part.ebayItemId)} target="_blank" rel="noreferrer" style={{ ...ebayBtn('secondary'), textDecoration:'none', display:'inline-flex', alignItems:'center' }} title="Open this listing on eBay">🔗 View on eBay ↗</a>}
+        {part?.status === 'listed' && part?.ebayItemId && !part?.isSample && <a href={ebayItmUrl(part.ebayItemId)} target="_blank" rel="noreferrer" style={{ ...ebayBtn('secondary'), textDecoration:'none', display:'inline-flex', alignItems:'center' }} title="Open this listing on eBay">🔗 View on eBay ↗</a>}
         {!part && <button style={ebayBtn('secondary')} onClick={handleSaveAndAdd}>Save & add another</button>}
         <button style={ebayBtn('primary')} onClick={handleSave}>{part ? 'Save changes' : 'Save draft'}</button>
       </div>
@@ -1182,6 +1183,11 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
   // "eBay mode" that filters to parts to list (in-stock) or de-list (listed).
   const [sel, setSel] = useState(() => new Set())
   const [previewPart, setPreviewPart] = useState(null)
+  // The listing preview talks to eBay, which needs a connected account and a real
+  // listing — a sample part has neither, so explain instead of "token not found".
+  const openPreview = p => p.isSample
+    ? alert('This is a sample part — there\'s no real eBay listing behind it, so there\'s nothing to preview.\n\nConnect your eBay store (Settings → eBay) and import your own listings to use this.')
+    : setPreviewPart(p)
   const [ebayMode, setEbayMode] = useState('off') // off | list | delist
   useEffect(() => { setSel(new Set()) }, [storeId, ebayMode])
   const toggleSel = (id) => setSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
@@ -1564,7 +1570,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                               <td style={{ padding:'8px 12px', fontWeight:600, color:pr>=0?C.green:C.red, whiteSpace:'nowrap' }}>${pr.toFixed(0)}</td>
                               <td style={{ padding:'8px 12px', whiteSpace:'nowrap' }}>
                                 <button onClick={()=>{setEditingPart(p);setShowForm(true)}} title="Edit this part's details" style={{ ...S.btn('secondary'), padding:'3px 10px', fontSize:11, marginRight:6 }}>Edit</button>
-                                <button onClick={()=>setPreviewPart(p)} title="Preview the eBay listing (category, specifics, fitment) — and edit it" style={{ ...S.btn('secondary'), padding:'3px 8px', fontSize:11, marginRight:6 }}>👁</button>
+                                <button onClick={()=>openPreview(p)} title="Preview the eBay listing (category, specifics, fitment) — and edit it" style={{ ...S.btn('secondary'), padding:'3px 8px', fontSize:11, marginRight:6 }}>👁</button>
                                 {p.sku && <button onClick={()=>printLabels(p, labels)} title="Print stock label" style={{ ...S.btn('secondary'), padding:'3px 8px', fontSize:11, marginRight:6 }}>🏷️</button>}
                                 <EbayLink part={p} style={{ ...S.btn('secondary'), padding:'3px 8px', marginRight:6 }} />
                                 <button onClick={()=>setDeleteTarget(p)} title="Delete this part" style={{ ...S.btn('danger'), padding:'3px 8px', fontSize:11 }}>🗑</button>
@@ -1640,7 +1646,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                       <td style={{ padding:'4px 6px', borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`, whiteSpace:'nowrap' }}>
                         {ebayMode!=='off' && <input type="checkbox" checked={sel.has(p.id)} onChange={()=>toggleSel(p.id)} style={{ width:15, height:15, cursor:'pointer', marginRight:6, verticalAlign:'middle' }} />}
                         <button onClick={()=>{setEditingPart(p);setShowForm(true)}} title="Edit this part's details" style={{ fontSize:11, padding:'2px 8px', background:'#eff6ff', color:C.blue, border:`1px solid ${C.blue}44`, borderRadius:4, cursor:'pointer', marginRight:4 }}>Edit</button>
-                        <button onClick={()=>setPreviewPart(p)} title="Preview the eBay listing (category, specifics, fitment) — and edit it" style={{ fontSize:11, padding:'2px 6px', background:'#fff', color:C.text, border:`1px solid ${C.border}`, borderRadius:4, cursor:'pointer', marginRight:4 }}>👁</button>
+                        <button onClick={()=>openPreview(p)} title="Preview the eBay listing (category, specifics, fitment) — and edit it" style={{ fontSize:11, padding:'2px 6px', background:'#fff', color:C.text, border:`1px solid ${C.border}`, borderRadius:4, cursor:'pointer', marginRight:4 }}>👁</button>
                         {p.sku && <button onClick={()=>printLabels(p, labels)} title="Print stock label" style={{ fontSize:11, padding:'2px 6px', background:'#fff', color:C.text, border:`1px solid ${C.border}`, borderRadius:4, cursor:'pointer' }}>🏷️</button>}
                         <EbayLink part={p} style={{ padding:'2px 6px', background:'#fff', border:`1px solid ${C.border}`, borderRadius:4, marginLeft:4 }} />
                       </td>
