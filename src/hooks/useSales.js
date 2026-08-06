@@ -24,7 +24,8 @@ const mapRow = r => ({
   soldAt: r.sold_at || null,
   cancelled: !!r.cancelled,
   partId: r.part_id || null,
-  source: r.source || 'api',          // 'api' (live sync) or 'csv_orders_report' (history import)
+  source: r.source || 'api',          // 'api' (live sync), 'csv_orders_report' (history import) or 'sample' (demo)
+  isSample: !!r.is_sample,            // demo row — removable in one pass with the rest of the sample set
   costs: r.costs || null,             // snapshotted per-category cost for imported history
   feeDetail: r.fee_detail || null,    // per-type eBay fee split { FEE_TYPE: amount }
   fulfillmentStatus: r.fulfillment_status || null, // NOT_STARTED | IN_PROGRESS | FULFILLED

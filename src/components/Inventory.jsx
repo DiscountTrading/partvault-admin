@@ -1155,7 +1155,7 @@ function BulkAIPanel({ group, onComplete, aiSettings, footer, storeId }) {
 }
 
 // ─── Main Inventory ────────────────────────────────────────────────────────
-export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDeleteCar, onAddCar, storeId, aiSettings, footer, costing, labels = DEFAULT_LABELS, warehouse = WAREHOUSE_DEFAULTS, refetch, assess }) {
+export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDeleteCar, onAddCar, storeId, aiSettings, footer, costing, labels = DEFAULT_LABELS, warehouse = WAREHOUSE_DEFAULTS, refetch, assess, sampleActive = false }) {
   const [viewMode, setViewMode] = useState('parts')
   const [tableRef, tableH] = useFillHeight(28)  // By-Part grid fills to the viewport bottom
   const [search, setSearch] = useState('')
@@ -1272,17 +1272,60 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
   const inputSm = { ...S.input, height:30, padding:'0 8px', fontSize:12 }
   const selSm = { ...S.select, height:30, padding:'0 8px', fontSize:12 }
 
-  const handleSaveAndAdd = async p => {
+  // While the store still holds sample data, every NEW part asks whether it's
+  // more demo data or the user's first real record — so real inventory never
+  // gets mixed into (and deleted with) the sample set. `pendingAdd` holds the
+  // part + what to do after saving while the question is on screen.
+  const [pendingAdd, setPendingAdd] = useState(null)
+  const askOrAdd = async (p, after) => {
+    if (sampleActive && p.isSample === undefined) { setPendingAdd({ p, after }); return }
     await onAdd(p)
-    setEditingPart(null); setShowForm(false)
-    setTimeout(() => setShowForm(true), 50)
+    after?.()
+  }
+  const resolvePendingAdd = async isSample => {
+    const { p, after } = pendingAdd
+    setPendingAdd(null)
+    try {
+      await onAdd({ ...p, isSample })
+      after?.()
+    } catch (_) { /* toast shown upstream; form stays open */ }
   }
 
+  const handleSaveAndAdd = async p => {
+    await askOrAdd(p, () => {
+      setEditingPart(null); setShowForm(false)
+      setTimeout(() => setShowForm(true), 50)
+    })
+  }
+
+  const samplePrompt = pendingAdd && (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center', padding:20 }}>
+      <div style={{ background:'#fff', borderRadius:14, padding:'22px 24px', maxWidth:440, width:'100%', boxShadow:'0 20px 50px rgba(0,0,0,0.3)' }}>
+        <div style={{ fontSize:17, fontWeight:800, color:C.text, marginBottom:8 }}>🧪 Sample data is still in your store</div>
+        <div style={{ fontSize:13.5, color:C.muted, lineHeight:1.6, marginBottom:18 }}>
+          Is <strong style={{ color:C.text }}>{pendingAdd.p.title || 'this part'}</strong> more sample data to play with,
+          or a permanent record of a real part? Sample data is deleted when you click
+          "Remove sample data" in the banner — permanent records stay.
+        </div>
+        <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
+          <button onClick={() => resolvePendingAdd(false)} style={{ ...S.btn(), flex:1, padding:'11px 0', fontSize:14 }}>✅ Permanent record</button>
+          <button onClick={() => resolvePendingAdd(true)} style={{ ...S.btn('secondary'), flex:1, padding:'11px 0', fontSize:14 }}>🧪 More sample data</button>
+        </div>
+        <div style={{ textAlign:'center', marginTop:12 }}>
+          <span style={{ fontSize:12.5, color:C.muted, cursor:'pointer' }} onClick={() => setPendingAdd(null)}>Cancel — keep editing</span>
+        </div>
+      </div>
+    </div>
+  )
+
   if (showForm) return (
+    <>
+    {samplePrompt}
     <PartForm part={editingPart} cars={cars} storeId={storeId} aiSettings={aiSettings} footer={footer} costing={costing} labels={labels} warehouse={warehouse} allParts={parts}
       onSave={async p => {
         try {
-          if (editingPart) await onEdit({ ...editingPart, ...p }); else await onAdd(p)
+          if (editingPart) await onEdit({ ...editingPart, ...p })
+          else { await askOrAdd(p, () => { setShowForm(false); setEditingPart(null) }); return }
           setShowForm(false); setEditingPart(null)
         } catch (e) {
           if (e?.code === 'STALE') { alert('This part was changed by someone else since you opened it.\n\nYour edits have NOT been saved. Close and reopen the part to see their changes, then re-apply yours.') }
@@ -1294,10 +1337,12 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
       onSaveAndAdd={handleSaveAndAdd}
       onCancel={() => { setShowForm(false); setEditingPart(null) }}
     />
+    </>
   )
 
   return (
     <div>
+      {samplePrompt}
       {showAddCar && <AddCarModal storeId={storeId} onSave={car => { onAddCar(car); setShowAddCar(false) }} onCancel={() => setShowAddCar(false)} />}
 
       {deleteCarTarget && (
@@ -1600,7 +1645,9 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                         <EbayLink part={p} style={{ padding:'2px 6px', background:'#fff', border:`1px solid ${C.border}`, borderRadius:4, marginLeft:4 }} />
                       </td>
                       <EditableTd value={p.sku} onSave={v => saveField(p, { sku: v })} />
-                      <EditableTd value={p.title} title={p.title} onSave={v => saveField(p, { title: v })} />
+                      <EditableTd value={p.title} title={p.isSample ? `SAMPLE DATA — ${p.title}` : p.title}
+                        display={p.isSample ? <span>🧪 {p.title}</span> : undefined}
+                        onSave={v => saveField(p, { title: v })} />
                       <EditableTd value={p.make} onSave={v => saveField(p, { make: v })} />
                       <EditableTd value={p.model} onSave={v => saveField(p, { model: v })} />
                       <EditableTd value={p.year} onSave={v => saveField(p, { year: v })} />

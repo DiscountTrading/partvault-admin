@@ -28,6 +28,7 @@ const mapRow = r => ({
   marketCheckedAt: r.market_checked_at || null,
   shippingCharged: r.shipping_charged ?? null,
   ebaySpecifics: r.ebay_specifics || null,   // background-generated eBay specifics/fitment snapshot
+  isSample: !!r.is_sample,   // demo row — flagged so all sample data can be removed in one pass
   ebayItemId: null,   // live eBay item id, attached from the listings table in fetch()
 })
 
@@ -51,6 +52,9 @@ const mapToRow = p => ({
   ai_assessed: p.ai_assessed||false,
   removal_minutes: p.removalMinutes ?? null,
   shipping_charged: p.shippingCharged ?? null,
+  // Only write is_sample when the caller decided it (the add-part prompt while
+  // demo data is present). Omitting it on ordinary edits keeps the flag as-is.
+  ...(p.isSample !== undefined ? { is_sample: !!p.isSample } : {}),
 })
 
 export function useParts(storeId) {

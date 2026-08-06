@@ -297,7 +297,7 @@ function AssessPrompt({ assess, storeName, loading }) {
 export default function App() {
   const { session, profile, storeId, stores, activeStoreId, setActiveStore, refreshStores, authReady, signOut } = useAuth()
   const { parts, loading, syncStatus, totalCount, listingStats, addPart, editPart, softDelete, softDeleteCar, refetch } = useParts(storeId)
-  const { sales } = useSales(storeId)
+  const { sales, refetchSales } = useSales(storeId)
   const { wf, setStage } = useSaleWorkflow(storeId)
   const [tab, setTab] = useState('dashboard')
   const [toast, setToast] = useState(null)
@@ -385,6 +385,28 @@ export default function App() {
   }, [storeId])
 
   const showToast = (msg, color = C.green) => { setToast({ msg, color }); setTimeout(() => setToast(null), 2500) }
+
+  // Demo mode: any flagged row still in the store keeps the sample banner up.
+  // New parts added while it's up ask "sample or permanent?" (see Inventory).
+  const sampleActive = parts.some(p => p.isSample) || sales.some(s => s.isSample)
+  const [removingSample, setRemovingSample] = useState(false)
+  const removeSampleData = async () => {
+    if (!confirm('Remove ALL sample data?\n\nEvery demo car, part, listing and sale will be permanently deleted. Anything you saved as a permanent record stays. This can\'t be undone.')) return
+    setRemovingSample(true)
+    try {
+      const { data: { session } } = await sb.auth.getSession()
+      const res = await fetch('https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ action: 'remove_sample_data', storeId }),
+      })
+      const d = await res.json()
+      if (!res.ok || d.error) throw new Error(d.error || 'Remove failed')
+      showToast(`Sample data removed ✓ (${d.removed?.parts ?? 0} parts, ${d.removed?.sales ?? 0} sales)`)
+      refetch(); refetchSales()
+    } catch (e) { showToast(e.message, C.red) }
+    setRemovingSample(false)
+  }
   const handleAdd = async p => { try { await addPart(p); showToast('Part added ✓') } catch(e) { showToast(e.message, C.red); throw e } }
   const handleEdit = async p => { try { await editPart(p); showToast('Saved ✓') } catch(e) { showToast(e.message, C.red); throw e } }
   const handleDel = async id => { try { await softDelete(id); showToast('Deleted ✓', C.red) } catch(e) { showToast(e.message, C.red) } }
@@ -444,6 +466,15 @@ export default function App() {
           ⏰ Your free trial has ended. Your data is safe — choose a plan to keep capturing and listing parts.
         </div>
       )}
+      {sampleActive && (
+        <div style={{ background: '#fffbeb', borderBottom: '1px solid #fcd34d', padding: '8px 24px', fontSize: 13, color: '#92400e', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span>🧪 Sample data in use — the demo cars, parts and sales are here so you can explore. They're clearly flagged and never touch eBay.</span>
+          <button onClick={removeSampleData} disabled={removingSample}
+            style={{ background: '#92400e', color: '#fff', border: 'none', borderRadius: 6, padding: '4px 12px', fontSize: 12, fontWeight: 700, cursor: removingSample ? 'default' : 'pointer', opacity: removingSample ? 0.6 : 1 }}>
+            {removingSample ? '⏳ Removing…' : 'Remove sample data'}
+          </button>
+        </div>
+      )}
       <main style={S.main} key={marketplaceId}>{/* re-mounts content when the active store's currency changes */}
         {tab === 'dashboard' && <Dashboard parts={parts} sales={sales} costing={costingFull} inventory={inventory} listingStats={listingStats} storeId={storeId} onDrill={drillToInsights} onSeeSales={() => setTab('sales')} />}
         {tab === 'sales' && <Sales sales={sales} parts={parts} costing={costingFull} wf={wf} setStage={setStage} />}
@@ -453,7 +484,7 @@ export default function App() {
             onAdd={handleAdd} onEdit={handleEdit} onDelete={handleDel}
             onDeleteCar={softDeleteCar} onAddCar={handleAddCar}
             aiSettings={aiSettings} footer={footer} costing={costingFull} labels={labels} warehouse={warehouse} refetch={smartRefetch}
-            assess={assess}
+            assess={assess} sampleActive={sampleActive}
           />
         )}
         {tab === 'analytics' && <Analytics storeId={storeId} initial={insightsInit} parts={parts} cars={cars} sales={sales} costing={costingFull}

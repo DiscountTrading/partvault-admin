@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.36.64'
+const EDGE_FN_VERSION         = '3.36.65'
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  HARD BLOCK — EDITING LIVE eBay LISTINGS IS DISABLED AT THE CODE LEVEL.
@@ -2399,6 +2399,149 @@ async function handleRequest(req: Request): Promise<Response> {
       }
       await touchLiveSync(storeId, `Live listings check · ${imported} new`)
       return json({ ok: true, version: EDGE_FN_VERSION, checked: recent.length, missing: missing.length, imported, failed })
+    }
+
+    // ── SAMPLE (DEMO) DATA ──────────────────────────────────────────────────────
+    // A brand-new store has nothing to look at until eBay is connected — so new
+    // users can seed a clearly-flagged demo dataset (cars, parts, listings, sales;
+    // every row is_sample=true) to explore the whole app with zero personal data,
+    // then delete it all in one pass. ebay_sales has no client write policy, so
+    // both actions run here under the service role — gated on the caller being a
+    // signed-in member of the store.
+    const requireStoreMember = async () => {
+      const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '')
+      if (!jwt) throw new Error('Sign-in required')
+      const { data: u, error: uErr } = await sb.auth.getUser(jwt)
+      if (uErr || !u?.user) throw new Error('Sign-in required')
+      const { data: m } = await sb.from('store_members').select('user_id')
+        .eq('store_id', storeId).eq('user_id', u.user.id).limit(1)
+      if (!m?.length) throw new Error('Not a member of this store')
+    }
+
+    if (action === 'seed_sample_data') {
+      await requireStoreMember()
+      // One demo set per store — re-seeding after a partial explore would duplicate.
+      const { data: existing } = await sb.from('parts').select('id')
+        .eq('store_id', storeId).eq('is_sample', true).limit(1)
+      if (existing?.length) return json({ ok: true, version: EDGE_FN_VERSION, already: true })
+
+      const day = 24 * 60 * 60 * 1000
+      const iso  = (d: number) => new Date(Date.now() - d * day).toISOString()
+      const date = (d: number) => iso(d).slice(0, 10)
+
+      // Three demo donor cars — the Analytics "which car should I buy" story.
+      const carRows = [
+        { make: 'Holden', model: 'Commodore VE', year: '2012', purchase_price: 850,  purchase_date: date(75), notes: 'Demo donor car — SV6 sedan, hail damage, runs well' },
+        { make: 'Ford',   model: 'Falcon FG',    year: '2010', purchase_price: 600,  purchase_date: date(60), notes: 'Demo donor car — XR6, rear-ended, engine strong' },
+        { make: 'Toyota', model: 'Hilux',        year: '2015', purchase_price: 1600, purchase_date: date(35), notes: 'Demo donor car — SR dual cab, flood write-off' },
+      ].map(c => ({ ...c, store_id: storeId, status: 'active', photos: [], is_sample: true }))
+      const { data: cars, error: carErr } = await sb.from('cars').insert(carRows).select('id')
+      if (carErr) throw new Error(`Sample cars failed: ${carErr.message}`)
+      const [commodore, falcon, hilux] = (cars ?? []).map((c: any) => c.id)
+
+      // Part template: [car, category, subcategory, title, cost, list, status, soldDaysAgo, soldPrice, weightKg, row/bay/shelf]
+      // Mix of listed / in-stock / sold so every screen has something to show.
+      const P = (car: string | null, category: string, subcategory: string, title: string, make: string, model: string, year: string,
+                 acq: number, list: number, status: string, soldD: number | null, soldP: number | null, weight: number | null, loc: string) => ({
+        store_id: storeId, is_sample: true, source: 'manual', car_id: car,
+        category, subcategory, title, make, model, year,
+        condition: 'Used – Good', status,
+        costs: { acquisition: acq, labour: Math.round(acq * 0.3), storage: 0, packaging: 2, postage: 0, holding: 0 },
+        list_price: list, sold_price: soldP, sold_date: soldD != null ? date(soldD) : null,
+        acquired_date: date(status === 'sold' ? (soldD ?? 10) + 20 : 30), listed_date: status === 'in_stock' ? null : date(status === 'sold' ? (soldD ?? 10) + 18 : 25),
+        weight, weight_source: weight != null ? 'manual' : null,
+        description: `${title}. Removed from a demo donor vehicle — this is sample data so you can explore PartVault before adding your own parts.`,
+        location: loc, photos: [], ai_assessed: false,
+      })
+      const partRows = [
+        // Commodore VE (2012) — good margins, mostly sold: the "buy more of these" car.
+        P(commodore, 'Lighting & Bulbs', 'Headlight Assemblies', 'Holden Commodore VE Series II Left Headlight', 'Holden', 'Commodore', '2012', 15, 145, 'sold', 8,  145, 2.1, 'Row 1 · Bay 2 · Shelf 1'),
+        P(commodore, 'Lighting & Bulbs', 'Tail Lights',          'Holden Commodore VE Sedan Right Tail Light',   'Holden', 'Commodore', '2012', 10, 89,  'sold', 21, 95,  1.4, 'Row 1 · Bay 2 · Shelf 1'),
+        P(commodore, 'Exterior Parts',   'Door Mirrors',         'Holden Commodore VE Right Door Mirror Black',  'Holden', 'Commodore', '2012', 8,  75,  'sold', 33, 70,  0.9, 'Row 1 · Bay 2 · Shelf 2'),
+        P(commodore, 'Starters, Alternators & Wiring', 'Alternators', 'Holden Commodore VE 3.6L V6 Alternator',  'Holden', 'Commodore', '2012', 20, 129, 'sold', 45, 120, 5.5, 'Row 1 · Bay 3 · Shelf 1'),
+        P(commodore, 'Interior Parts',   'Instrument Clusters',  'Holden Commodore VE SV6 Instrument Cluster',   'Holden', 'Commodore', '2012', 12, 110, 'listed', null, null, 1.2, 'Row 1 · Bay 3 · Shelf 2'),
+        P(commodore, 'Engine Cooling',   'Radiators',            'Holden Commodore VE V6 Radiator Auto',         'Holden', 'Commodore', '2012', 18, 95,  'listed', null, null, 4.8, 'Row 1 · Bay 4 · Shelf 1'),
+        P(commodore, 'Exterior Parts',   'Grilles',              'Holden Commodore VE SV6 Front Grille',         'Holden', 'Commodore', '2012', 6,  55,  'listed', null, null, 1.1, 'Row 1 · Bay 4 · Shelf 2'),
+        P(commodore, 'Interior Parts',   'Seats',                'Holden Commodore VE SV6 Front Seats Pair',     'Holden', 'Commodore', '2012', 30, 280, 'in_stock', null, null, 32,  'Row 4 · Bay 1 · Floor'),
+        // Falcon FG (2010) — middling: some sold, slow movers aging on the shelf.
+        P(falcon, 'Lighting & Bulbs', 'Headlight Assemblies', 'Ford Falcon FG XR6 Right Headlight',        'Ford', 'Falcon', '2010', 14, 120, 'sold', 15, 110, 2.0, 'Row 2 · Bay 1 · Shelf 1'),
+        P(falcon, 'Starters, Alternators & Wiring', 'ECUs',   'Ford Falcon FG 4.0L ECU Engine Computer',   'Ford', 'Falcon', '2010', 25, 165, 'sold', 50, 150, 0.8, 'Row 2 · Bay 1 · Shelf 2'),
+        P(falcon, 'Transmission & Drivetrain', 'Driveshafts', 'Ford Falcon FG Rear Driveshaft Sedan',      'Ford', 'Falcon', '2010', 15, 85,  'listed', null, null, 12,  'Row 2 · Bay 2 · Floor'),
+        P(falcon, 'Exterior Parts',   'Bumper Bars',          'Ford Falcon FG XR6 Front Bumper Bar Silver','Ford', 'Falcon', '2010', 22, 140, 'listed', null, null, 6.5, 'Row 2 · Bay 3 · Rack'),
+        P(falcon, 'Engines & Engine Parts', 'Engine Mounts',  'Ford Falcon FG Engine Mount Pair',          'Ford', 'Falcon', '2010', 8,  49,  'listed', null, null, 2.4, 'Row 2 · Bay 2 · Shelf 3'),
+        P(falcon, 'Interior Parts',   'Door Cards',           'Ford Falcon FG Front Door Cards Pair',      'Ford', 'Falcon', '2010', 10, 65,  'in_stock', null, null, 3.1, 'Row 2 · Bay 4 · Shelf 1'),
+        P(falcon, 'Brakes & Brake Parts', 'Calipers & Brackets', 'Ford Falcon FG Front Brake Calipers Pair', 'Ford', 'Falcon', '2010', 12, 78, 'in_stock', null, null, 6.8, 'Row 2 · Bay 4 · Shelf 2'),
+        // Hilux (2015) — recent buy, high-value parts, mostly still listed: recouping.
+        P(hilux, 'Lighting & Bulbs', 'Headlight Assemblies', 'Toyota Hilux SR 2015 Left Headlight Halogen', 'Toyota', 'Hilux', '2015', 25, 195, 'sold', 5, 185, 2.2, 'Row 3 · Bay 1 · Shelf 1'),
+        P(hilux, 'Exterior Parts',   'Door Mirrors',         'Toyota Hilux SR Left Door Mirror Chrome',     'Toyota', 'Hilux', '2015', 15, 135, 'sold', 12, 129, 1.0, 'Row 3 · Bay 1 · Shelf 2'),
+        P(hilux, 'Exterior Parts',   'Grilles',              'Toyota Hilux 2015 Front Grille Chrome',       'Toyota', 'Hilux', '2015', 18, 149, 'listed', null, null, 2.3, 'Row 3 · Bay 2 · Shelf 1'),
+        P(hilux, 'Engine Cooling',   'Radiators',            'Toyota Hilux GUN126 2.8L Radiator',           'Toyota', 'Hilux', '2015', 30, 189, 'listed', null, null, 5.2, 'Row 3 · Bay 2 · Shelf 2'),
+        P(hilux, 'Wheels, Tyres & Parts', 'Wheels -- Alloy', 'Toyota Hilux SR5 17in Alloy Wheel Set of 4',  'Toyota', 'Hilux', '2015', 60, 520, 'listed', null, null, 48,  'Row 4 · Bay 2 · Floor'),
+        P(hilux, 'Interior Parts',   'Steering Wheels',      'Toyota Hilux 2015 Leather Steering Wheel',    'Toyota', 'Hilux', '2015', 12, 99,  'in_stock', null, null, 1.6, 'Row 3 · Bay 3 · Shelf 1'),
+        // Loose stock — no donor car (shows the no-car workflow too).
+        P(null, 'Steering & Suspension', 'Shock Absorbers', 'Mazda BT-50 Rear Shock Absorbers Pair New', 'Mazda', 'BT-50', '2018', 35, 129, 'in_stock', null, null, 7.4, 'Row 5 · Bay 1 · Shelf 1'),
+      ].map((p, i) => ({ ...p, sku: `DEMO-${String(i + 1).padStart(3, '0')}` }))
+      const { data: parts, error: partErr } = await sb.from('parts').insert(partRows).select('id, sku, title, status, list_price, sold_price, sold_date, listed_date')
+      if (partErr) throw new Error(`Sample parts failed: ${partErr.message}`)
+
+      // Listings mirror (live for listed, sold for sold) + one sale per sold part.
+      // Fake item ids are SAMPLE-… strings — they can never collide with real eBay
+      // numeric ids, and no sync runs against them (the store has no eBay account).
+      const listingRows: any[] = []
+      const saleRows: any[] = []
+      let n = 0
+      for (const p of parts ?? []) {
+        if (p.status !== 'listed' && p.status !== 'sold') continue
+        n++
+        const itemId = `SAMPLE-${String(n).padStart(3, '0')}`
+        const soldAt = p.sold_date ? new Date(p.sold_date + 'T09:30:00Z').toISOString() : null
+        listingRows.push({
+          store_id: storeId, part_id: p.id, platform: 'ebay', platform_listing_id: itemId,
+          platform_sku: p.sku, status: p.status === 'sold' ? 'sold' : 'live',
+          list_price: p.list_price, sold_price: p.sold_price, sold_at: soldAt,
+          listed_at: p.listed_date ? new Date(p.listed_date + 'T04:00:00Z').toISOString() : null,
+          platform_data: { Title: p.title, sample: true }, photos: [], photos_archived: false, is_sample: true,
+        })
+        if (p.status === 'sold') {
+          const ship = n % 3 === 0 ? 0 : 14.5
+          saleRows.push({
+            store_id: storeId, order_id: `SAMPLE-ORD-${String(n).padStart(3, '0')}`, line_item_id: '1',
+            legacy_item_id: itemId, sku: p.sku, title: p.title, quantity: 1,
+            sold_price: p.sold_price, shipping: ship,
+            fees: Math.round((p.sold_price + ship) * 0.135 * 100) / 100,
+            sold_at: soldAt, part_id: p.id, source: 'sample', is_sample: true,
+            cancelled: false, refund: 0, ship_cost: ship ? Math.round(ship * 0.8 * 100) / 100 : 0, refunded: false,
+          })
+        }
+      }
+      const { error: lErr } = await sb.from('listings').insert(listingRows)
+      if (lErr) throw new Error(`Sample listings failed: ${lErr.message}`)
+      const { error: sErr } = await sb.from('ebay_sales').insert(saleRows)
+      if (sErr) throw new Error(`Sample sales failed: ${sErr.message}`)
+
+      return json({ ok: true, version: EDGE_FN_VERSION, cars: carRows.length, parts: partRows.length, listings: listingRows.length, sales: saleRows.length })
+    }
+
+    if (action === 'remove_sample_data') {
+      await requireStoreMember()
+      // Children first (photos of sample parts), then the flagged rows themselves.
+      const { data: sampleParts } = await sb.from('parts').select('id')
+        .eq('store_id', storeId).eq('is_sample', true)
+      const ids = (sampleParts ?? []).map((p: any) => p.id)
+      for (let i = 0; i < ids.length; i += 100) {
+        await sb.from('photos').delete().eq('parent_type', 'part').in('parent_id', ids.slice(i, i + 100))
+      }
+      const del = async (tbl: string) => {
+        const { count, error } = await sb.from(tbl).delete({ count: 'exact' })
+          .eq('store_id', storeId).eq('is_sample', true)
+        if (error) throw new Error(`Removing sample ${tbl} failed: ${error.message}`)
+        return count ?? 0
+      }
+      const sales = await del('ebay_sales')
+      const listings = await del('listings')
+      const parts = await del('parts')
+      const cars = await del('cars')
+      return json({ ok: true, version: EDGE_FN_VERSION, removed: { parts, cars, listings, sales } })
     }
 
     // ── SHARED BOX-SKU SPLIT ────────────────────────────────────────────────────
