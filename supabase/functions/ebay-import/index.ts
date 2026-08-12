@@ -14,7 +14,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.36.67'
+const EDGE_FN_VERSION         = '3.36.68'
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  HARD BLOCK — EDITING LIVE eBay LISTINGS IS DISABLED AT THE CODE LEVEL.
@@ -2399,6 +2399,68 @@ async function handleRequest(req: Request): Promise<Response> {
       }
       await touchLiveSync(storeId, `Live listings check · ${imported} new`)
       return json({ ok: true, version: EDGE_FN_VERSION, checked: recent.length, missing: missing.length, imported, failed })
+    }
+
+    // ── SIGN IN WITH YOUR PHONE ─────────────────────────────────────────────────
+    // Desktop creates a request (gets the polling secret + a human code and shows
+    // both in a QR); the signed-in phone approves it, which mints a ONE-TIME
+    // magic-link token for the phone's own account; the desktop polls and trades
+    // the token for a session. Requests die after 2 minutes, tokens after one read.
+    const LOGIN_REQ_TTL_MS = 2 * 60 * 1000
+    const loginReqFresh = (r: any) => Date.now() - new Date(r.created_at).getTime() < LOGIN_REQ_TTL_MS
+
+    if (action === 'phone_login_create') {
+      // Best-effort prune of stale requests (keeps the table tiny, no cron needed).
+      await sb.from('login_requests').delete().lt('created_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+      // Crockford-ish base32, no look-alikes; 8 chars ≈ 40 bits — plenty for a 2-min life.
+      const alphabet = 'ABCDEFGHJKMNPQRSTVWXYZ23456789'
+      const buf = new Uint8Array(8); crypto.getRandomValues(buf)
+      const code = [...buf].map(b => alphabet[b % alphabet.length]).join('')
+      const { data: reqRow, error } = await sb.from('login_requests').insert({ code }).select('id, code').single()
+      if (error) throw new Error(`Could not start phone sign-in: ${error.message}`)
+      return json({ ok: true, rid: reqRow.id, code: reqRow.code, ttlSeconds: LOGIN_REQ_TTL_MS / 1000 })
+    }
+
+    if (action === 'phone_login_approve') {
+      // Caller must be a signed-in user (the phone). Approval grants access to the
+      // CALLER'S OWN account on the machine showing this code — nothing else.
+      const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '')
+      if (!jwt) throw new Error('Sign-in required')
+      const { data: u, error: uErr } = await sb.auth.getUser(jwt)
+      if (uErr || !u?.user?.email) throw new Error('Sign-in required')
+
+      const code = String(body.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+      if (code.length < 8) throw new Error('Enter the full code shown on the computer')
+      const { data: reqRow } = await sb.from('login_requests').select('*').eq('code', code).maybeSingle()
+      if (!reqRow || reqRow.status !== 'pending' || !loginReqFresh(reqRow)) {
+        throw new Error('That code has expired — start the sign-in on the computer again')
+      }
+
+      const { data: link, error: linkErr } = await sb.auth.admin.generateLink({ type: 'magiclink', email: u.user.email })
+      const tokenHash = link?.properties?.hashed_token
+      if (linkErr || !tokenHash) throw new Error(`Could not approve: ${linkErr?.message || 'no token'}`)
+
+      const { error: upErr } = await sb.from('login_requests')
+        .update({ status: 'approved', user_id: u.user.id, token_hash: tokenHash, approved_at: new Date().toISOString() })
+        .eq('id', reqRow.id).eq('status', 'pending')
+      if (upErr) throw new Error(`Could not approve: ${upErr.message}`)
+      return json({ ok: true, email: u.user.email })
+    }
+
+    if (action === 'phone_login_poll') {
+      const rid = String(body.rid || '')
+      if (!rid) throw new Error('Missing request')
+      const { data: reqRow } = await sb.from('login_requests').select('*').eq('id', rid).maybeSingle()
+      if (!reqRow || reqRow.status === 'cancelled' || (reqRow.status === 'pending' && !loginReqFresh(reqRow))) {
+        return json({ ok: true, status: 'expired' })
+      }
+      if (reqRow.status !== 'approved' || !reqRow.token_hash) return json({ ok: true, status: reqRow.status })
+      // Hand the token over exactly once.
+      const { data: claimed } = await sb.from('login_requests')
+        .update({ status: 'claimed', token_hash: null }).eq('id', rid).eq('status', 'approved')
+        .select('id').maybeSingle()
+      if (!claimed) return json({ ok: true, status: 'claimed' })
+      return json({ ok: true, status: 'approved', tokenHash: reqRow.token_hash })
     }
 
     // ── SAMPLE (DEMO) DATA ──────────────────────────────────────────────────────
