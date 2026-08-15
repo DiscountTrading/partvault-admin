@@ -1,8 +1,8 @@
 // Support helpers. Take the Supabase client so they work on BOTH the admin
 // session (sb) and the isolated ops-console session (sbOps).
-import { sb as defaultClient } from './supabase'
+import { sb as defaultClient, EDGE_FN, FN_URL } from './supabase'
 
-const FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/support'
+const FN = FN_URL('support')
 
 async function call(client, body) {
   const { data: { session } } = await client.auth.getSession()

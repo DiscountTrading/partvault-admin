@@ -3,7 +3,9 @@ import { createClient } from '@supabase/supabase-js'
 const SUPABASE_URL = 'https://mtpektsxaklhedknincs.supabase.co'
 const SUPABASE_KEY = 'sb_publishable_STtCN1zWydiIFtgHR1Yn5g_n9YBH102'
 
-// The app's single edge function — every feature action posts here.
+// Edge-function URLs. FN_URL builds any function endpoint; EDGE_FN is the
+// main app function (eBay + store actions).
+export const FN_URL = (name) => `${SUPABASE_URL}/functions/v1/${name}`
 export const EDGE_FN = `${SUPABASE_URL}/functions/v1/ebay-import`
 
 // ── Shared sign-in across app.partvault.app + admin.partvault.app ───────────

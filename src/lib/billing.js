@@ -1,9 +1,9 @@
 // Client → stripe-billing edge function. Redirects to Stripe Checkout / the
 // billing portal. Throws a readable error (incl. "not configured yet") the UI
 // can surface — everything is inert until the Stripe secrets/prices are set.
-import { sb } from './supabase'
+import { sb, EDGE_FN, FN_URL } from './supabase'
 
-const FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/stripe-billing'
+const FN = FN_URL('stripe-billing')
 
 async function call(body) {
   const { data: { session } } = await sb.auth.getSession()

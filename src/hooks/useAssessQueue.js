@@ -1,8 +1,8 @@
 import { useState, useRef, useMemo, useEffect, useCallback } from 'react'
-import { sb } from '../lib/supabase'
+import { sb, EDGE_FN, FN_URL } from '../lib/supabase'
 
-const AI_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ai-assess'
-const EBAY_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import'
+const AI_FN = FN_URL('ai-assess')
+const EBAY_FN = EDGE_FN
 
 // Extract a usable URL from a stored photo value (string, JSON string, or object).
 function urlFrom(v) {

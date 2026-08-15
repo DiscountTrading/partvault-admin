@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import { sb } from '../lib/supabase'
+import { sb, EDGE_FN } from '../lib/supabase'
 import { C, S, fmt, partEffectiveCost } from '../lib/constants'
 import useFillHeight from '../hooks/useFillHeight'
 
@@ -116,7 +116,7 @@ export default function Insights({ storeId, initial, parts = [], costing = {} })
     setRefreshingMkt(true); setMktMsg('Checking eBay…')
     try {
       const { data: { session } } = await sb.auth.getSession()
-      const res = await fetch('https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import', {
+      const res = await fetch(EDGE_FN, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
         body: JSON.stringify({ action: 'refresh_market', storeId }),

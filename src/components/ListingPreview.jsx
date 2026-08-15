@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
 import { C, S, fmt } from '../lib/constants'
-import { sb } from '../lib/supabase'
+import { sb, EDGE_FN } from '../lib/supabase'
 import { previewListing } from '../lib/ebay'
 
-const EBAY_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import'
+const EBAY_FN = EDGE_FN
 const callEbay = async (payload) => {
   const { data: { session } } = await sb.auth.getSession()
   const res = await fetch(EBAY_FN, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` }, body: JSON.stringify(payload) })

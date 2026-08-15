@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
-import { sb } from '../lib/supabase'
+import { sb, EDGE_FN, FN_URL } from '../lib/supabase'
 import { C, S, CATEGORY_NAMES } from '../lib/constants'
 
-const AUSPOST_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/auspost-rates'
+const AUSPOST_FN = FN_URL('auspost-rates')
 
 function Section({ title, hint, children }) {
   return (

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { C, S, fmt, APP_VERSION, DEFAULT_POSTAGE_TIERS, defaultPostageTiers, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS, rentPerDay } from '../lib/constants'
 import { printLabels, DEFAULT_LABELS } from '../lib/labels'
-import { sb, EDGE_FN } from '../lib/supabase'
+import { sb, EDGE_FN, FN_URL } from '../lib/supabase'
 import { buildSkuPreview, SKU_TOKENS, DEFAULT_SKU_TEMPLATE, DEFAULT_SKU_PAD } from '../lib/sku'
 import { MARKETPLACES, MARKETPLACE_LIST } from '../lib/marketplaces'
 import { planState } from '../lib/plan'
@@ -1499,7 +1499,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         broadcast()
         try {
           const { data: { session } } = await sb.auth.getSession()
-          const res = await fetch('https://mtpektsxaklhedknincs.supabase.co/functions/v1/ai-assess', {
+          const res = await fetch(FN_URL('ai-assess'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
             body: JSON.stringify({ storeId, mode: 'parse-title', title: part.title }),

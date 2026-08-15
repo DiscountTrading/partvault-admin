@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { sb } from '../lib/supabase'
+import { sb, EDGE_FN, FN_URL } from '../lib/supabase'
 import { C, S } from '../lib/constants'
 
 const CAPS = [
@@ -25,7 +25,7 @@ const PRESET_DESC = {
   Admin: 'Full access to everything, including settings and users.',
 }
 
-const ADMIN_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/admin-users'
+const ADMIN_FN = FN_URL('admin-users')
 const PWA_URL = 'https://app.partvault.app/'
 
 function Section({ title, children }) {

@@ -1,8 +1,8 @@
 import { useState, useMemo } from 'react'
-import { sb } from '../lib/supabase'
+import { sb, EDGE_FN } from '../lib/supabase'
 import { C, S } from '../lib/constants'
 
-const EBAY_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import'
+const EBAY_FN = EDGE_FN
 
 // SKU reconcile — eBay is the source of truth.
 //

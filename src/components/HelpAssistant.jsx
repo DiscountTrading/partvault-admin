@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
 import { C, S } from '../lib/constants'
-import { sb } from '../lib/supabase'
+import { sb, EDGE_FN, FN_URL } from '../lib/supabase'
 
-const FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ai-assess'
+const FN = FN_URL('ai-assess')
 
 // Keep the Q&A thread across closing the panel, for a rolling 12 hours.
 const CHAT_KEY = 'pv_help_chat'
