@@ -443,7 +443,7 @@ export default function BulkEdit({ storeId, parts, onSaved }) {
 
       {/* Hover-reveal popup — full cell content after a short delay. */}
       {tip && (
-        <div style={{ position: 'fixed', left: Math.min(tip.x + 14, (typeof window !== 'undefined' ? window.innerWidth : 1200) - 320), top: tip.y + 18, zIndex: 1200, maxWidth: 300, background: '#1c1c1e', color: '#fff', fontSize: 12, lineHeight: 1.5, padding: '8px 11px', borderRadius: 8, boxShadow: '0 8px 30px rgba(0,0,0,0.35)', pointerEvents: 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+        <div style={{ position: 'fixed', left: Math.min(tip.x + 14, (typeof window !== 'undefined' ? window.innerWidth : 1200) - 320), top: tip.y + 18, zIndex: 1200, maxWidth: 300, background: '#17150F', color: '#fff', fontSize: 12, lineHeight: 1.5, padding: '8px 11px', borderRadius: 8, boxShadow: '0 8px 30px rgba(0,0,0,0.35)', pointerEvents: 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
           {tip.text}
         </div>
       )}

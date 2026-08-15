@@ -80,7 +80,7 @@ export default function EbayActions({ storeId, selectedParts, onDone, onClear })
 
       {/* Sticky bulk bar */}
       {selectedParts.length > 0 && (
-        <div style={{ position: 'sticky', bottom: 0, zIndex: 40, marginTop: 12, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', background: '#1c1c1e', color: '#fff', borderRadius: 12, padding: '12px 18px', boxShadow: '0 -4px 20px rgba(0,0,0,0.15)' }}>
+        <div style={{ position: 'sticky', bottom: 0, zIndex: 40, marginTop: 12, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', background: '#17150F', color: '#fff', borderRadius: 12, padding: '12px 18px', boxShadow: '0 -4px 20px rgba(0,0,0,0.15)' }}>
           <span style={{ fontWeight: 700 }}>{selectedParts.length} selected</span>
           {notReady.length > 0 && allInStock && <span style={{ fontSize: 12, color: '#fca5a5' }}>⚠ {notReady.length} not ready (photo/price)</span>}
           <div style={{ flex: 1 }} />

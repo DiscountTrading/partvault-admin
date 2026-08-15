@@ -2315,7 +2315,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                       <div style={{ position: 'relative' }}>
                         {bar(usedPct, hot ? C.yellow : C.green)}
                         {/* expected-usage marker at the month-elapsed position */}
-                        <div title="Expected usage at this point in the month" style={{ position: 'absolute', left: `${timePct}%`, top: -2, bottom: -2, width: 2, background: '#6b7280', borderRadius: 1 }} />
+                        <div title="Expected usage at this point in the month" style={{ position: 'absolute', left: `${timePct}%`, top: -2, bottom: -2, width: 2, background: '#4A453B', borderRadius: 1 }} />
                       </div>
                       <span style={{ fontWeight: 700, color: C.text }}>{used.toLocaleString(undefined, { maximumFractionDigits: 1 })} / {limit.toLocaleString()}</span>
                     </div>
@@ -3139,19 +3139,19 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                           {salesMatch.ebayTax > 0 && <> + tax {fmt(salesMatch.ebayTax)}</>}
                           {' '}= <strong style={{ color: C.text }}>{fmt(salesMatch.ebayPaidTotal)}</strong>
                           {Math.abs(salesMatch.ebayUnexplained || 0) >= 1 && (
-                            <span style={{ color: '#b45309' }}> · {fmt(Math.abs(salesMatch.ebayUnexplained))} unexplained (not in eBay's discount/adj fields)</span>
+                            <span style={{ color: '#8A5B0F' }}> · {fmt(Math.abs(salesMatch.ebayUnexplained))} unexplained (not in eBay's discount/adj fields)</span>
                           )}
                         </div>
                         <div style={{ marginTop: 4 }}><strong>PartVault</strong> ({salesMatch.ourCount} items):</div>
                         <div style={{ marginLeft: 10, color: C.muted }}>item {fmt(salesMatch.ourItemTotal)} + shipping {fmt(salesMatch.ourShipping)} = <strong style={{ color: C.text }}>{fmt((salesMatch.ourItemTotal || 0) + (salesMatch.ourShipping || 0))}</strong></div>
-                        <div style={{ marginTop: 6, color: matched ? C.green : '#b45309' }}>
+                        <div style={{ marginTop: 6, color: matched ? C.green : '#8A5B0F' }}>
                           {matched
                             ? `✓ Item + shipping totals agree with eBay to the cent (${salesMatch.ebayItems} items). eBay's headline total of ${fmt(salesMatch.ebayPaidTotal)} differs only by eBay-reported ${fmt(salesMatch.ebayDiscount)} discount${salesMatch.ebayTax > 0 ? `, ${fmt(salesMatch.ebayTax)} GST` : ''}${Math.abs(salesMatch.ebayUnexplained || 0) >= 1 ? `, and ${fmt(Math.abs(salesMatch.ebayUnexplained))} not accounted for by either` : ''}.`
                             : `⚠ ${itemMiss} item${itemMiss === 1 ? '' : 's'} on eBay not recorded here${itemGap ? ` (~${fmt(itemGap)} item value)` : ''}. Run Sync / Import sold history to capture them.`}
                         </div>
                         {salesMatch.residualOrders?.length > 0 && (
                           <details style={{ marginTop: 8 }}>
-                            <summary style={{ cursor: 'pointer', fontSize: 12, color: '#b45309', fontWeight: 600 }}>
+                            <summary style={{ cursor: 'pointer', fontSize: 12, color: '#8A5B0F', fontWeight: 600 }}>
                               Show {salesMatch.residualCount} order{salesMatch.residualCount === 1 ? '' : 's'} that don't reconcile (the {fmt(Math.abs(salesMatch.ebayUnexplained))} unexplained)
                             </summary>
                             <div style={{ marginTop: 6, maxHeight: 240, overflowY: 'auto', border: `1px solid ${C.border}`, borderRadius: 6 }}>
@@ -3159,7 +3159,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                                 <div key={i} style={{ padding: '6px 8px', borderBottom: `1px solid ${C.border}`, fontSize: 12 }}>
                                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
                                     <a href={`https://www.ebay.com.au/sh/ord/details?orderid=${o.orderId}`} target="_blank" rel="noreferrer" style={{ fontFamily: 'monospace', color: C.blue, textDecoration: 'none' }}>{o.orderId}</a>
-                                    <span style={{ color: Math.abs(o.residual) >= 0.01 ? '#b45309' : C.muted, fontWeight: 700 }}>{o.residual > 0 ? '+' : ''}{fmt(o.residual)}</span>
+                                    <span style={{ color: Math.abs(o.residual) >= 0.01 ? '#8A5B0F' : C.muted, fontWeight: 700 }}>{o.residual > 0 ? '+' : ''}{fmt(o.residual)}</span>
                                   </div>
                                   <div style={{ color: C.muted, marginTop: 2 }}>
                                     item {fmt(o.subtotal)} + ship {fmt(o.shipping)} + tax {fmt(o.tax)} − disc {fmt(o.discount)}{o.adjustment ? ` + adj ${fmt(o.adjustment)}` : ''} ≠ total {fmt(o.total)}
@@ -3175,7 +3175,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                         )}
                         {salesMatch.missingItems?.length > 0 && (
                           <details style={{ marginTop: 8 }}>
-                            <summary style={{ cursor: 'pointer', fontSize: 12, color: '#b45309', fontWeight: 600 }}>
+                            <summary style={{ cursor: 'pointer', fontSize: 12, color: '#8A5B0F', fontWeight: 600 }}>
                               Show {salesMatch.missingCount} missing sale{salesMatch.missingCount === 1 ? '' : 's'} (~{fmt(salesMatch.missingValue)})
                             </summary>
                             <div style={{ marginTop: 6, maxHeight: 220, overflowY: 'auto', border: `1px solid ${C.border}`, borderRadius: 6 }}>

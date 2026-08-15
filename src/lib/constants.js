@@ -2,11 +2,17 @@ export const APP_VERSION = '3.36.68'
 
 import { getActiveMarketplace } from './marketplaces'
 
+// PartVault design tokens (refactor 4/5) — the same palette as the marketing
+// site and field app, one system across all three surfaces. Key rules: accent
+// #BD400B is the WCAG-passing brand orange (#e8590c fails as a fill — banned);
+// muted #4A453B is readable secondary text; borderControl marks inputs and
+// secondary buttons (3:1); status colours are the verified stock semantics.
 export const C = {
-  bg:'#f5f4f0', panel:'#edeae3', card:'#ffffff', border:'#ddd9d0',
-  accent:'#e8590c', blue:'#2563eb', green:'#16a34a',
-  red:'#dc2626', yellow:'#b45309', text:'#1c1c1e', muted:'#6b7280',
-  white:'#ffffff', headerBg:'#1c1c1e',
+  bg:'#F5F4F0', panel:'#ECEAE2', card:'#FFFFFF', border:'#D6D2C4', borderControl:'#8E8674',
+  accent:'#BD400B', accentHover:'#9E350A', accentSoft:'#FBEDE4', accentOnDark:'#FF8A4C',
+  blue:'#2B5378', green:'#2C6B3E',
+  red:'#A33128', yellow:'#8A5B0F', text:'#17150F', muted:'#4A453B',
+  white:'#ffffff', headerBg:'#17150F',
 }
 
 export const PART_CONDITIONS = ['Used – Excellent','Used – Good','Used – Fair','For Parts Only','Refurbished']

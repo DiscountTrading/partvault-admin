@@ -539,7 +539,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                 {!paged.length&&<tr><td colSpan={13} style={{ textAlign:'center', padding:40, color:C.muted }}>No parts match your filters.</td></tr>}
               </tbody>
               <tfoot>
-                {(() => { const ftd = { background:'#1c1c1e', position:'sticky', bottom:0, zIndex:11 }; return (
+                {(() => { const ftd = { background:'#17150F', position:'sticky', bottom:0, zIndex:11 }; return (
                 <tr>
                   <td colSpan={9} style={{ ...ftd, padding:'6px 12px', fontSize:11, color:'rgba(255,255,255,0.5)', fontWeight:600 }}>TOTALS ({totals.count} parts)</td>
                   <td style={{ ...ftd, padding:'6px 8px', textAlign:'right', fontSize:12, fontWeight:700, color:'#93c5fd' }}>${totals.list.toFixed(0)}</td>

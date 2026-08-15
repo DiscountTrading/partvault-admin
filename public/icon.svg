@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- PartVault mark: warm-ink tile, brand-orange gear with a socket-drive core.
+       Reads at 16px; colours from the shared token block (frame / accent). -->
+  <rect width="64" height="64" rx="14" fill="#17150F"/>
+  <g fill="#FF8A4C">
+    <path d="M32 12l3.1 5.2 6-1.3 1 6.1 6.1 1-1.3 6L52 32l-5.1 3.1 1.3 6-6.1 1-1 6.1-6-1.3L32 52l-3.1-5.2-6 1.3-1-6.1-6.1-1 1.3-6L12 32l5.1-3.1-1.3-6 6.1-1 1-6.1 6 1.3L32 12z"/>
+  </g>
+  <path d="M32 22.5a9.5 9.5 0 1 0 0 19 9.5 9.5 0 0 0 0-19z" fill="#17150F"/>
+  <path d="M32 26l5.2 3v6L32 38l-5.2-3v-6l5.2-3z" fill="#FF8A4C"/>
+</svg>

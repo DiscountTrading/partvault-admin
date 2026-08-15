@@ -343,7 +343,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
         <Section title="AI assessment" accent="#7c3aed"
           hint={form.ai_assessed ? 'Already assessed. Re-run to regenerate all details from the photo.' : 'Not yet assessed. Run the full AI to fill title, category, condition, description, part number, price and weight from the part photo.'}
           action={form.ai_assessed
-            ? <span style={{ fontSize:12, fontWeight:700, color:'#16a34a' }}>✓ Assessed</span>
+            ? <span style={{ fontSize:12, fontWeight:700, color:'#2C6B3E' }}>✓ Assessed</span>
             : <span style={{ fontSize:12, fontWeight:700, color:'#d97706' }}>Needs AI</span>}>
           <div style={{ display:'flex', gap:12, alignItems:'center', flexWrap:'wrap' }}>
             <img src={partPhotoUrl} style={{ width:72, height:72, borderRadius:8, objectFit:'cover', border:`1px solid ${C.border}` }} />

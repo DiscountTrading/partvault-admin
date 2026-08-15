@@ -41,11 +41,11 @@ function printPackingSlip(sale, part) {
   if (!w) return
   w.document.write(`<!doctype html><html><head><title>Packing slip ${esc(sale.orderId)}</title>
     <style>
-      *{box-sizing:border-box} body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:34px 40px;color:#1c1c1e}
-      .top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #1c1c1e;padding-bottom:14px}
+      *{box-sizing:border-box} body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:34px 40px;color:#17150F}
+      .top{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #17150F;padding-bottom:14px}
       .top h1{font-size:26px;margin:0;letter-spacing:1px} .brand{font-size:13px;color:#666;margin-top:4px}
       .ordbox{text-align:right;font-size:13px;color:#333;line-height:1.7}
-      .ordbox b{color:#1c1c1e}
+      .ordbox b{color:#17150F}
       .cols{display:flex;gap:22px;margin-top:22px} .col{flex:1}
       .lbl{font-size:11px;letter-spacing:1px;color:#888;text-transform:uppercase;margin-bottom:6px;font-weight:bold}
       .addr{font-size:16px;line-height:1.55}
@@ -58,9 +58,9 @@ function printPackingSlip(sale, part) {
       tr:not(:last-child) th,tr:not(:last-child) td{border-bottom:1px solid #f0efec}
       .totals{margin-top:18px;margin-left:auto;width:260px;font-size:14px}
       .totals div{display:flex;justify-content:space-between;padding:5px 0}
-      .totals .grand{border-top:2px solid #1c1c1e;margin-top:4px;padding-top:8px;font-weight:bold;font-size:16px}
+      .totals .grand{border-top:2px solid #17150F;margin-top:4px;padding-top:8px;font-weight:bold;font-size:16px}
       .thanks{margin-top:34px;border-top:1px solid #eee;padding-top:18px;font-size:13px;color:#444;line-height:1.6}
-      .thanks b{color:#1c1c1e}
+      .thanks b{color:#17150F}
       .muted{color:#888}
     </style></head><body>
     <div class="top">
@@ -323,7 +323,7 @@ function PieWithLegend({ title, slices }) {
 
 const BAR_ORG = '#93b4e8'       // organic segment
 // Promoted split by ad rate (matches the tier pie): low ≤3% / med 3–8% / high >8%.
-const SEG = { organic: BAR_ORG, low: '#4b9e6a', med: '#d99a2b', high: '#e8590c' }
+const SEG = { organic: BAR_ORG, low: '#4b9e6a', med: '#d99a2b', high: '#BD400B' }
 const SEG_ROWS = [['organic', 'Organic'], ['low', 'Promoted low ≤3%'], ['med', 'Promoted med 3–8%'], ['high', 'Promoted high >8%']]
 // Vertical bar chart. Each bar is split into a promoted (bottom) + organic (top)
 // segment; the total sits on top and a tooltip appears ABOVE the hovered bar
@@ -373,13 +373,13 @@ function BarChart({ bars, money }) {
         ) : null
         const totalN = b.organicN + b.lowN + b.medN + b.highN
         return (
-          <div ref={tipRef} style={{ position: 'absolute', bottom: H + 6, left: tipPos ? tipPos.left : 0, transform: 'none', visibility: tipPos ? 'visible' : 'hidden', background: '#1c1c1e', color: '#fff', borderRadius: 8, padding: '8px 11px', fontSize: 11.5, lineHeight: 1.6, whiteSpace: 'nowrap', zIndex: 5, pointerEvents: 'none', boxShadow: '0 6px 18px rgba(0,0,0,0.28)' }}>
+          <div ref={tipRef} style={{ position: 'absolute', bottom: H + 6, left: tipPos ? tipPos.left : 0, transform: 'none', visibility: tipPos ? 'visible' : 'hidden', background: '#17150F', color: '#fff', borderRadius: 8, padding: '8px 11px', fontSize: 11.5, lineHeight: 1.6, whiteSpace: 'nowrap', zIndex: 5, pointerEvents: 'none', boxShadow: '0 6px 18px rgba(0,0,0,0.28)' }}>
             <div style={{ fontWeight: 700, marginBottom: 3 }}>{b.rangeLabel || (b.secondary ? `${b.primary} ${b.secondary}` : b.primary)}</div>
             {SEG_ROWS.map(([key, label]) => row(key, label))}
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, borderTop: '1px solid rgba(255,255,255,0.22)', marginTop: 3, paddingTop: 3, fontWeight: 700 }}>
               <span>Total</span><span>{fmtV(b.value)}{money ? ` · ${totalN}` : ''}</span>
             </div>
-            <div style={{ position: 'absolute', top: '100%', left: tipPos ? tipPos.arrow : '50%', transform: 'translateX(-50%)', borderLeft: '6px solid transparent', borderRight: '6px solid transparent', borderTop: '6px solid #1c1c1e' }} />
+            <div style={{ position: 'absolute', top: '100%', left: tipPos ? tipPos.arrow : '50%', transform: 'translateX(-50%)', borderLeft: '6px solid transparent', borderRight: '6px solid transparent', borderTop: '6px solid #17150F' }} />
           </div>
         )
       })()}
@@ -478,7 +478,7 @@ function PromotedPanel({ promo, periodLabel }) {
             {promo.promoted > 0 && <PieWithLegend title="Promoted by ad rate (% of sale)" slices={[
               { label: 'Low ≤3%', value: promo.tiers.low, color: '#4b9e6a' },
               { label: 'Med 3–8%', value: promo.tiers.med, color: '#d99a2b' },
-              { label: 'High >8%', value: promo.tiers.high, color: '#e8590c' },
+              { label: 'High >8%', value: promo.tiers.high, color: '#BD400B' },
             ]} />}
           </div>
 
