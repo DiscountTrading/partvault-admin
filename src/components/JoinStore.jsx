@@ -1,9 +1,8 @@
 import { useState } from 'react'
-import { sb } from '../lib/supabase'
+import { sb, EDGE_FN } from '../lib/supabase'
 import { C, S } from '../lib/constants'
 import { MARKETPLACE_LIST, guessMarketplace } from '../lib/marketplaces'
 
-const EDGE_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import'
 
 // First screen after signup, before the user belongs to any store. Two paths:
 //  • CREATE a store — just a name, no eBay account or personal data needed. By

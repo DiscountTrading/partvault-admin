@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { C, S, fmt, estimateCostBasis, storageCostFor, rentPerDay } from '../lib/constants'
-import { sb } from '../lib/supabase'
+import { sb, EDGE_FN } from '../lib/supabase'
 
-const EDGE_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import'
 const WINDOW_DAYS = 90
 
 // Value-scaling costs are a % of sale price; fixed costs are a flat $ per item.

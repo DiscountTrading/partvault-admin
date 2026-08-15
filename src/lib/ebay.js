@@ -1,6 +1,5 @@
-import { sb } from './supabase'
+import { sb, EDGE_FN } from './supabase'
 
-const EDGE_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import'
 
 async function call(payload) {
   const { data: { session } } = await sb.auth.getSession()

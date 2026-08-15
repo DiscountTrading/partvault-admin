@@ -1,9 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import QRCode from 'qrcode'
-import { sb } from '../lib/supabase'
+import { sb, EDGE_FN } from '../lib/supabase'
 import { C, S } from '../lib/constants'
 
-const EDGE_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import'
 const LAST_EMAIL_KEY = 'pv_last_email'
 
 // Sign-in, tuned for speed: the email is remembered per device, the code flow

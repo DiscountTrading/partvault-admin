@@ -3,6 +3,9 @@ import { createClient } from '@supabase/supabase-js'
 const SUPABASE_URL = 'https://mtpektsxaklhedknincs.supabase.co'
 const SUPABASE_KEY = 'sb_publishable_STtCN1zWydiIFtgHR1Yn5g_n9YBH102'
 
+// The app's single edge function — every feature action posts here.
+export const EDGE_FN = `${SUPABASE_URL}/functions/v1/ebay-import`
+
 // ── Shared sign-in across app.partvault.app + admin.partvault.app ───────────
 // Supabase defaults to localStorage, which is PER-ORIGIN — so signing in on the
 // field app left the admin app logged out, forcing a second OTP (and tripping

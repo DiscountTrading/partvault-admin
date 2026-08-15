@@ -1,9 +1,8 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { sb } from '../lib/supabase'
+import { sb, EDGE_FN } from '../lib/supabase'
 import { C, S, fmt, CATEGORY_NAMES, EBAY_AU_CATEGORIES, PART_CONDITIONS, STATUS_LABELS } from '../lib/constants'
 import useFillHeight from '../hooks/useFillHeight'
 
-const EDGE_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import'
 const STATUS_OPTS = ['in_stock', 'listed', 'sold', 'scrapped', 'deferred']
 
 // Core part fields you'd realistically bulk-change, in spreadsheet form.

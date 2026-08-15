@@ -1,7 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { sb } from '../lib/supabase'
+import { sb, EDGE_FN } from '../lib/supabase'
 
-const EDGE_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import'
 
 // Progress bands per phase. Import dominates (thousands of listings) so it gets
 // the widest band; the rest are quick. `hi` is never quite reached until the next

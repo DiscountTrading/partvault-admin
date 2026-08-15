@@ -1,9 +1,8 @@
 import { useState } from 'react'
 import { C, S, fmt } from '../lib/constants'
-import { sb } from '../lib/supabase'
+import { sb, EDGE_FN } from '../lib/supabase'
 
 // Same edge endpoint the rest of Settings uses.
-const EDGE_FN = 'https://mtpektsxaklhedknincs.supabase.co/functions/v1/ebay-import'
 
 // eBay's getOrders can't reach past this, so the live sync owns sales within it.
 // The CSV import only takes sales OLDER than this to avoid colliding with the sync.
