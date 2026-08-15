@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { C, S } from '../lib/constants'
-import { sb, EDGE_FN, FN_URL } from '../lib/supabase'
+import { sb, FN_URL } from '../lib/supabase'
 
 const FN = FN_URL('ai-assess')
 

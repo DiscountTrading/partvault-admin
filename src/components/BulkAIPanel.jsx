@@ -1,16 +1,8 @@
-import { useState, useMemo, useRef, useEffect } from 'react'
-import { C, S, fmt, pct, totalCost, partEffectiveCost, estimateCostBasis, CATEGORY_NAMES, EBAY_AU_CATEGORIES, canonicalCategory, canonicalSubcategory, PART_CONDITIONS, STATUS_COLORS, STATUS_LABELS } from '../lib/constants'
+import { useState } from 'react'
+import { C, S } from '../lib/constants'
 import { sb } from '../lib/supabase'
-import { getActiveMarketplace, formatWeight } from '../lib/marketplaces'
-import { makesFor, MODEL_SUGS } from '../lib/vehicles'
-import { printLabels, DEFAULT_LABELS } from '../lib/labels'
-import { WAREHOUSE_DEFAULTS, warehouseConfig } from '../lib/warehouse'
-import BulkEdit from './BulkEdit'
-import ListingPreview from './ListingPreview'
-import EbayActions from './EbayActions'
-import useFillHeight from '../hooks/useFillHeight'
 
-import { urlFrom, descPromptCore, generateAIDescription } from './inventoryShared'
+import { generateAIDescription } from './inventoryShared'
 
 // Bulk AI description generation for a group of parts — extracted verbatim
 // from Inventory.jsx (refactor 3/5).

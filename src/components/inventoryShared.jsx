@@ -1,14 +1,8 @@
-import { useState, useMemo, useRef, useEffect } from 'react'
-import { C, S, fmt, pct, totalCost, partEffectiveCost, estimateCostBasis, CATEGORY_NAMES, EBAY_AU_CATEGORIES, canonicalCategory, canonicalSubcategory, PART_CONDITIONS, STATUS_COLORS, STATUS_LABELS } from '../lib/constants'
-import { sb, EDGE_FN, FN_URL } from '../lib/supabase'
-import { getActiveMarketplace, formatWeight } from '../lib/marketplaces'
+import { useState, useRef, useEffect } from 'react'
+import { C, S, CATEGORY_NAMES, STATUS_COLORS, STATUS_LABELS } from '../lib/constants'
+import { sb, FN_URL } from '../lib/supabase'
+import { getActiveMarketplace } from '../lib/marketplaces'
 import { makesFor, MODEL_SUGS } from '../lib/vehicles'
-import { printLabels, DEFAULT_LABELS } from '../lib/labels'
-import { WAREHOUSE_DEFAULTS, warehouseConfig } from '../lib/warehouse'
-import BulkEdit from './BulkEdit'
-import ListingPreview from './ListingPreview'
-import EbayActions from './EbayActions'
-import useFillHeight from '../hooks/useFillHeight'
 
 
 // Shared building blocks of the Inventory suite — extracted verbatim from

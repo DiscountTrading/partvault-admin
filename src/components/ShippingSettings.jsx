@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { sb, EDGE_FN, FN_URL } from '../lib/supabase'
+import { sb, FN_URL } from '../lib/supabase'
 import { C, S, CATEGORY_NAMES } from '../lib/constants'
 
 const AUSPOST_FN = FN_URL('auspost-rates')

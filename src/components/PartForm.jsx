@@ -1,16 +1,12 @@
-import { useState, useMemo, useRef, useEffect } from 'react'
-import { C, S, fmt, pct, totalCost, partEffectiveCost, estimateCostBasis, CATEGORY_NAMES, EBAY_AU_CATEGORIES, canonicalCategory, canonicalSubcategory, PART_CONDITIONS, STATUS_COLORS, STATUS_LABELS } from '../lib/constants'
+import { useState, useRef, useEffect } from 'react'
+import { C, S, fmt, pct, estimateCostBasis, CATEGORY_NAMES, EBAY_AU_CATEGORIES, canonicalCategory, canonicalSubcategory, PART_CONDITIONS, STATUS_LABELS } from '../lib/constants'
 import { sb, EDGE_FN } from '../lib/supabase'
 import { getActiveMarketplace, formatWeight } from '../lib/marketplaces'
 import { makesFor, MODEL_SUGS } from '../lib/vehicles'
 import { printLabels, DEFAULT_LABELS } from '../lib/labels'
 import { WAREHOUSE_DEFAULTS, warehouseConfig } from '../lib/warehouse'
-import BulkEdit from './BulkEdit'
-import ListingPreview from './ListingPreview'
-import EbayActions from './EbayActions'
-import useFillHeight from '../hooks/useFillHeight'
 
-import { Field, EbayLogo, EBAY_BLUE, Section, AutoInput, descPromptCore, learnCtx, urlFrom, partHasPhoto, compressImg, defCosts, COST_TIERS, WeightField, ebayItmUrl, generateAIDescription, generateDescriptionOptions, regenerateDescriptionOptions, analysePart } from './inventoryShared'
+import { Field, EBAY_BLUE, Section, AutoInput, urlFrom, compressImg, defCosts, COST_TIERS, WeightField, ebayItmUrl, generateAIDescription, generateDescriptionOptions, regenerateDescriptionOptions, analysePart } from './inventoryShared'
 
 // The full-screen part editor — extracted verbatim from Inventory.jsx
 // (refactor 3/5). Mounted by Inventory for both add and edit.

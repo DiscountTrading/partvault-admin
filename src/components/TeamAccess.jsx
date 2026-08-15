@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { sb, EDGE_FN, FN_URL } from '../lib/supabase'
+import { sb, FN_URL } from '../lib/supabase'
 import { C, S } from '../lib/constants'
 
 const CAPS = [
