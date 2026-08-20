@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { C, S, fmt, pct, totalCost, postageCostFor, estimatePostage, partEffectiveCost, bucketByAge, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS, CATEGORY_NAMES } from '../lib/constants'
+import { C, S, fmt, pct, totalCost, postageCostFor, estimatePostage, postageConfigured, partEffectiveCost, bucketByAge, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS, CATEGORY_NAMES } from '../lib/constants'
 import useFitScale from '../hooks/useFitScale'
 
 function StatCard({ label, value, sub, color, title, warn, onWarnClick }) {
@@ -93,9 +93,9 @@ export default function Dashboard({ parts, sales = [], costing, inventory, listi
       return a + c.value
     }
     // No eBay label AND no linked part → store's default-weight postage estimate
-    // (uses the configurable tiers + default weight + handling from Settings),
-    // so off-eBay shipping on unmatched sales is still costed, not $0.
-    const est = estimatePostage({}, costing||{}).total
+    // (uses the configurable tiers + default weight + handling from Settings) —
+    // but only when the store has opted into postage estimation; $0 otherwise.
+    const est = postageConfigured(costing||{}) ? estimatePostage({}, costing||{}).total : 0
     if (est > 0) shipCostEstimated = true
     return a + est
   },0)

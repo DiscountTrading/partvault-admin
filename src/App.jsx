@@ -320,7 +320,9 @@ export default function App() {
   }, [tab, smartRefetch])
   const [aiSettings, setAiSettings] = useState(DEFAULT_AI_SETTINGS)
   const [footer, setFooter] = useState(DEFAULT_FOOTER)
-  const [costing, setCosting] = useState({ labourRate: 60, adminPct: 10, adminMin: 5 })
+  // No cost applied to parts by default — sellers opt into a cost base in
+  // Settings → Costs. A store with a saved costing config loads over these.
+  const [costing, setCosting] = useState({ labourRate: 0, adminPct: 0, adminMin: 0 })
   const [inventory, setInventory] = useState({ agedThresholdDays: 60, ageBrackets: [90, 180, 365, 730, 1065] })
   const [storage, setStorage] = useState({ volumeM3: 0, rent: 0, rentPeriod: 'monthly', usablePct: 25 })
   const [shipping, setShipping] = useState(null)

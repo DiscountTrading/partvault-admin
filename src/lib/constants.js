@@ -1,4 +1,4 @@
-export const APP_VERSION = '3.36.72'
+export const APP_VERSION = '3.36.73'
 
 import { getActiveMarketplace } from './marketplaces'
 
@@ -144,16 +144,26 @@ export const estimatePostage = (p = {}, costing = {}) => {
   return { carrier, handling, total: carrier + handling, weightG }
 }
 
+// Has the store opted into postage estimation? A brand-new store applies NO
+// costs by default (see DEFAULT_BASE_COST_PCT) — postage is only estimated once
+// the seller sets up carrier tiers or a handling fee in Settings → Costs.
+export const postageConfigured = (costing = {}) =>
+  (Array.isArray(costing.postageTiers) && costing.postageTiers.length > 0) || +costing.handlingFee > 0
+
 // The postage cost we use for a part: the actual recorded carrier cost
-// (costs.postage) if present, otherwise the weight-based estimate. `estimated`
-// flags which one was used so the UI can show it's a projection.
+// (costs.postage) if present, otherwise the weight-based estimate — but only
+// when the store has configured postage. Otherwise it's $0 (no cost by default).
 export const postageCostFor = (p = {}, costing = {}) => {
   const actual = +(p.costs?.postage) || 0
   if (actual > 0) return { value: actual, estimated: false }
+  if (!postageConfigured(costing)) return { value: 0, estimated: false }
   return { value: estimatePostage(p, costing).total, estimated: true }
 }
 
-export const DEFAULT_BASE_COST_PCT = 25 // fallback part cost as % of sale price
+// Fallback part cost as % of sale price. Default 0 — a new store applies NO cost
+// to its parts (you see pure eBay revenue). Sellers who want an estimated cost
+// base opt in by setting this and the other rates in Settings → Costs.
+export const DEFAULT_BASE_COST_PCT = 0
 
 // Aged-stock reporting. agedThresholdDays = when a still-unsold part is "aged".
 // ageBrackets = ascending day boundaries used to bucket aged stock for the chart;

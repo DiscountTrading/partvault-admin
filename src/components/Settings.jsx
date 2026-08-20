@@ -143,7 +143,9 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   const [listingDefaults, setListingDefaults] = useState({ warranty: '', conditionDescription: '' })
   const [aiSettings, setAiSettings] = useState(DEFAULT_AI_SETTINGS)
   const [captureAssess, setCaptureAssess] = useState({ category: true, price: true })
-  const [costing, setCosting] = useState({ labourRate: 60, adminPct: 10, adminMin: 5, baseCostPct: 25, handlingFee: 2, postageDefaultG: 1000, postageTiers: DEFAULT_POSTAGE_TIERS, labourMode: 'fixed', adminMode: 'percent', adminMinMode: 'fixed', baseCostMode: 'percent' })
+  // New stores apply NO cost to parts by default — every rate starts at 0 and
+  // postage estimation is off (empty tiers). Sellers opt in by setting these.
+  const [costing, setCosting] = useState({ labourRate: 0, adminPct: 0, adminMin: 0, baseCostPct: 0, handlingFee: 0, postageDefaultG: 1000, postageTiers: [], labourMode: 'fixed', adminMode: 'percent', adminMinMode: 'fixed', baseCostMode: 'percent' })
   const [inventory, setInventory] = useState({ agedThresholdDays: DEFAULT_AGED_THRESHOLD_DAYS, ageBrackets: DEFAULT_AGE_BRACKETS })
   const [storage, setStorage] = useState({ volumeM3: '', rent: '', rentPeriod: 'monthly', usablePct: 25 })
   const [warehouse, setWarehouse] = useState(WAREHOUSE_DEFAULTS)
@@ -2373,9 +2375,19 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       {/* COSTS TAB */}
       {tab === 'costs' && !loading && (
         <>
+          {(() => {
+            const anyCost = +costing.baseCostPct > 0 || +costing.labourRate > 0 || +costing.adminPct > 0 || +costing.adminMin > 0 || (costing.postageTiers && costing.postageTiers.length > 0) || +costing.handlingFee > 0
+            return (
+              <div style={{ background: anyCost ? '#f9f8f5' : '#eff6ff', border: `1px solid ${anyCost ? C.border : '#bfdbfe'}`, borderRadius: 10, padding: '11px 14px', marginBottom: 14, fontSize: 13, color: anyCost ? C.text : '#1d4ed8', lineHeight: 1.6 }}>
+                {anyCost
+                  ? <><strong>Cost estimates are on.</strong> PartVault fills each part's Cost &amp; Profit from the rates below. Set them all to 0 (and clear postage) to show pure eBay revenue with no cost applied.</>
+                  : <><strong>No cost is applied to your parts by default</strong> — your Cost column reads $0 and you see pure eBay revenue. If you'd like PartVault to estimate a cost per part, set any of the rates below. You can also enter a real cost on any individual part at any time.</>}
+              </div>
+            )
+          })()}
           <Section title="💰 Costing">
             <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
-              Used to estimate each part's cost basis: the car's purchase price spread across its parts (by sale price), plus removal labour (AI-estimated minutes × your rate), plus an admin cost.
+              Optional. When set, these estimate each part's cost basis: the car's purchase price spread across its parts (by sale price), plus removal labour (AI-estimated minutes × your rate), plus an admin cost. Leave at 0 for no cost.
             </p>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
               <div style={{ flex: '1 1 160px' }}>
