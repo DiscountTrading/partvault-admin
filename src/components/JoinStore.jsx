@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { sb, EDGE_FN } from '../lib/supabase'
 import { C, S } from '../lib/constants'
 import { MARKETPLACE_LIST, guessMarketplace } from '../lib/marketplaces'
+import { SOURCING_MODES } from '../lib/constants'
 
 
 // First screen after signup, before the user belongs to any store. Two paths:
@@ -13,6 +14,7 @@ export default function JoinStore({ onJoined, onSignOut }) {
   const [view, setView] = useState('create') // 'create' | 'join'
   const [name, setName] = useState('')
   const [marketplace, setMarketplace] = useState(guessMarketplace)
+  const [sourcing, setSourcing] = useState('dismantle')
   const [withSample, setWithSample] = useState(true)
   const [code, setCode] = useState('')
   const [busy, setBusy] = useState(false)
@@ -30,7 +32,7 @@ export default function JoinStore({ onJoined, onSignOut }) {
       // real part is created — sample data doesn't lock it).
       let tz = ''
       try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '' } catch { /* optional */ }
-      await sb.from('stores').update({ settings: { marketplace, ...(tz ? { timezone: tz } : {}) } }).eq('id', storeId)
+      await sb.from('stores').update({ settings: { marketplace, sourcing, ...(tz ? { timezone: tz } : {}) } }).eq('id', storeId)
       if (withSample) {
         setBusyMsg('Loading sample data…')
         try {
@@ -38,7 +40,7 @@ export default function JoinStore({ onJoined, onSignOut }) {
           const res = await fetch(EDGE_FN, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-            body: JSON.stringify({ action: 'seed_sample_data', storeId }),
+            body: JSON.stringify({ action: 'seed_sample_data', storeId, sourcing }),
           })
           const d = await res.json()
           if (!res.ok || d.error) throw new Error(d.error || 'seed failed')
@@ -91,6 +93,15 @@ export default function JoinStore({ onJoined, onSignOut }) {
               <select style={{ ...S.input, background: '#fff' }} value={marketplace} onChange={e => setMarketplace(e.target.value)}>
                 {MARKETPLACE_LIST.map(m => <option key={m.id} value={m.id}>{m.flag} {m.label} · {m.currency}</option>)}
               </select>
+              <label style={{ ...S.label, marginTop: 12 }}>How do you get your parts?</label>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {Object.values(SOURCING_MODES).map(m => (
+                  <label key={m.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 9, cursor: 'pointer', border: `1.5px solid ${sourcing === m.id ? C.accent : C.border}`, background: sourcing === m.id ? C.accentSoft : '#fff', borderRadius: 10, padding: '10px 12px' }}>
+                    <input type="radio" name="sourcing" checked={sourcing === m.id} onChange={() => setSourcing(m.id)} style={{ marginTop: 3 }} />
+                    <span style={{ fontSize: 13, color: C.text, lineHeight: 1.4 }}><strong>{m.label}</strong><br /><span style={{ color: C.muted }}>{m.blurb}</span></span>
+                  </label>
+                ))}
+              </div>
               <label style={{ display: 'flex', alignItems: 'flex-start', gap: 9, marginTop: 14, cursor: 'pointer', fontSize: 13, color: C.text, lineHeight: 1.5 }}>
                 <input type="checkbox" checked={withSample} onChange={e => setWithSample(e.target.checked)} style={{ marginTop: 2 }} />
                 <span><strong>Start with sample data</strong> — 3 demo cars, 22 parts and some sales so you can explore every screen straight away. Clearly labelled, removable with one click, and it never touches eBay.</span>

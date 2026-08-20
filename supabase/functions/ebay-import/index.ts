@@ -2487,32 +2487,43 @@ async function handleRequest(req: Request): Promise<Response> {
         .eq('store_id', storeId).eq('is_sample', true).limit(1)
       if (existing?.length) return json({ ok: true, version: EDGE_FN_VERSION, already: true })
 
+      // Buy-in stores don't dismantle cars — seed carless parts (still with
+      // fitment) instead of donor vehicles, so the demo matches how they work.
+      const carless = String(body.sourcing || '') === 'buyin'
+
       const day = 24 * 60 * 60 * 1000
       const iso  = (d: number) => new Date(Date.now() - d * day).toISOString()
       const date = (d: number) => iso(d).slice(0, 10)
 
-      // Three demo donor cars — the Analytics "which car should I buy" story.
-      const carRows = [
-        { make: 'Holden', model: 'Commodore VE', year: '2012', purchase_price: 850,  purchase_date: date(75), notes: 'Demo donor car — SV6 sedan, hail damage, runs well' },
-        { make: 'Ford',   model: 'Falcon FG',    year: '2010', purchase_price: 600,  purchase_date: date(60), notes: 'Demo donor car — XR6, rear-ended, engine strong' },
-        { make: 'Toyota', model: 'Hilux',        year: '2015', purchase_price: 1600, purchase_date: date(35), notes: 'Demo donor car — SR dual cab, flood write-off' },
-      ].map(c => ({ ...c, store_id: storeId, status: 'active', photos: [], is_sample: true }))
-      const { data: cars, error: carErr } = await sb.from('cars').insert(carRows).select('id')
-      if (carErr) throw new Error(`Sample cars failed: ${carErr.message}`)
-      const [commodore, falcon, hilux] = (cars ?? []).map((c: any) => c.id)
+      let commodore: string | null = null, falcon: string | null = null, hilux: string | null = null
+      if (!carless) {
+        // Three demo donor cars — the Analytics "which car should I buy" story.
+        const carRows = [
+          { make: 'Holden', model: 'Commodore VE', year: '2012', purchase_price: 850,  purchase_date: date(75), notes: 'Demo donor car — SV6 sedan, hail damage, runs well' },
+          { make: 'Ford',   model: 'Falcon FG',    year: '2010', purchase_price: 600,  purchase_date: date(60), notes: 'Demo donor car — XR6, rear-ended, engine strong' },
+          { make: 'Toyota', model: 'Hilux',        year: '2015', purchase_price: 1600, purchase_date: date(35), notes: 'Demo donor car — SR dual cab, flood write-off' },
+        ].map(c => ({ ...c, store_id: storeId, status: 'active', photos: [], is_sample: true }))
+        const { data: cars, error: carErr } = await sb.from('cars').insert(carRows).select('id')
+        if (carErr) throw new Error(`Sample cars failed: ${carErr.message}`)
+        ;[commodore, falcon, hilux] = (cars ?? []).map((c: any) => c.id)
+      }
 
       // Part template: [car, category, subcategory, title, cost, list, status, soldDaysAgo, soldPrice, weightKg, row/bay/shelf]
       // Mix of listed / in-stock / sold so every screen has something to show.
       const P = (car: string | null, category: string, subcategory: string, title: string, make: string, model: string, year: string,
                  acq: number, list: number, status: string, soldD: number | null, soldP: number | null, weight: number | null, loc: string) => ({
-        store_id: storeId, is_sample: true, source: 'manual', car_id: car,
+        store_id: storeId, is_sample: true, source: 'manual', car_id: carless ? null : car,
         category, subcategory, title, make, model, year,
-        condition: 'Used – Good', status,
+        // Buy-in demo: parts are bought stock, not pulled from a car. Their
+        // acquisition cost is the per-part buy price (not spread from a car).
+        condition: carless ? 'Used – Good' : 'Used – Good', status,
         costs: { acquisition: acq, labour: Math.round(acq * 0.3), storage: 0, packaging: 2, postage: 0, holding: 0 },
         list_price: list, sold_price: soldP, sold_date: soldD != null ? date(soldD) : null,
         acquired_date: date(status === 'sold' ? (soldD ?? 10) + 20 : 30), listed_date: status === 'in_stock' ? null : date(status === 'sold' ? (soldD ?? 10) + 18 : 25),
         weight, weight_source: weight != null ? 'manual' : null,
-        description: `${title}. Removed from a demo donor vehicle — this is sample data so you can explore PartVault before adding your own parts.`,
+        description: carless
+          ? `${title}. Sample data so you can explore PartVault before adding your own stock.`
+          : `${title}. Removed from a demo donor vehicle — this is sample data so you can explore PartVault before adding your own parts.`,
         location: loc, photos: [], ai_assessed: false,
       })
       const partRows = [

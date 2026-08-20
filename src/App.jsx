@@ -6,7 +6,7 @@ import { useSaleWorkflow } from './hooks/useSaleWorkflow'
 import { useAssessQueue } from './hooks/useAssessQueue'
 import { useSyncRunner } from './hooks/useSyncRunner'
 import { sb, EDGE_FN } from './lib/supabase'
-import { C, S, APP_VERSION, rentPerDay } from './lib/constants'
+import { C, S, APP_VERSION, rentPerDay, sourcingMode, usesCars } from './lib/constants'
 import { MARKETPLACE_LIST, guessMarketplace, setActiveMarketplace, getActiveMarketplace } from './lib/marketplaces'
 import { planState } from './lib/plan'
 import { DEFAULT_LABELS } from './lib/labels'
@@ -325,6 +325,7 @@ export default function App() {
   const [storage, setStorage] = useState({ volumeM3: 0, rent: 0, rentPeriod: 'monthly', usablePct: 25 })
   const [shipping, setShipping] = useState(null)
   const [warehouse, setWarehouse] = useState(WAREHOUSE_DEFAULTS)
+  const [sourcing, setSourcing] = useState('dismantle')   // how the store gets parts (drives car-centric vs flat views)
   const [labels, setLabels] = useState(DEFAULT_LABELS)
   const [insightsInit, setInsightsInit] = useState(null) // drill-down filter from Dashboard
   const [cars, setCars] = useState([])
@@ -371,6 +372,7 @@ export default function App() {
     sb.from('stores').select('settings, plan').eq('id', storeId).single().then(({ data }) => {
       if (!mine()) return
       setPlan(planState(data?.plan))
+      setSourcing(sourcingMode(data?.settings))
       setEbayUsername(data?.settings?.ebayUsername || null)
       if (data?.settings?.aiDescription) setAiSettings(s => ({ ...s, ...data.settings.aiDescription }))
       if (data?.settings?.footer) setFooter(data.settings.footer)
@@ -511,7 +513,7 @@ export default function App() {
             assess={assess} sampleActive={sampleActive}
           />
         )}
-        {tab === 'analytics' && <Analytics storeId={storeId} initial={insightsInit} parts={parts} cars={cars} sales={sales} costing={costingFull}
+        {tab === 'analytics' && <Analytics storeId={storeId} initial={insightsInit} parts={parts} cars={cars} sales={sales} costing={costingFull} showCars={usesCars({ sourcing })}
           onVehiclesChanged={() => { refetch(); sb.from('cars').select('*').eq('store_id', storeId).is('deleted_at', null).order('created_at', { ascending: false }).then(({ data }) => setCars(data || [])) }} />}
         {tab === 'settings' && <Settings profile={profile} storeId={storeId} onSignOut={signOut} refreshStores={refreshStores} parts={parts} onChanged={smartRefetch} sync={sync} initialTab={settingsInit}
           onSettingsSaved={s => { if (s?.costing) setCosting(c => ({ ...c, ...s.costing })); if (s?.inventory) setInventory(i => ({ ...i, ...s.inventory })); if (s?.storage) setStorage(st => ({ ...st, ...s.storage })); if (s?.shipping) setShipping(s.shipping); if (s?.warehouse) setWarehouse(w => ({ ...w, ...s.warehouse })); if (s?.labels) setLabels(l => ({ ...l, ...s.labels })) }} />}

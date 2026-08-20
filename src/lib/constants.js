@@ -15,7 +15,21 @@ export const C = {
   white:'#ffffff', headerBg:'#17150F',
 }
 
-export const PART_CONDITIONS = ['Used – Excellent','Used – Good','Used – Fair','For Parts Only','Refurbished']
+export const PART_CONDITIONS = ['New','New – Aftermarket','Used – Excellent','Used – Good','Used – Fair','Refurbished','For Parts Only']
+
+// How a store gets its stock. Drives whether the app is framed around donor
+// vehicles (dismantlers) or a flat parts list (buy-in resellers), or both.
+// Stored in stores.settings.sourcing; existing stores default to 'dismantle'
+// so nothing changes for them until they choose otherwise.
+export const SOURCING_MODES = {
+  dismantle: { id:'dismantle', label:'Dismantle vehicles', blurb:'You pull parts from cars you buy and break.' },
+  buyin:     { id:'buyin',     label:'Buy parts in',       blurb:'You buy stock (new, aftermarket or used) to resell — no donor cars.' },
+  both:      { id:'both',      label:'Both',               blurb:'You dismantle cars and also buy some parts in.' },
+}
+export const DEFAULT_SOURCING = 'dismantle'
+export const sourcingMode = (settings) => SOURCING_MODES[settings?.sourcing]?.id || DEFAULT_SOURCING
+// Does this store organise parts by donor vehicle at all?
+export const usesCars = (settings) => sourcingMode(settings) !== 'buyin'
 export const AU_SHIPPING = ['Standard Post','Express Post','Courier','Courier (Bulky)','Collect Only','Free Postage']
 export const STATUS_COLORS = {in_stock:C.blue,listed:C.accent,sold:C.green,scrapped:C.muted,deferred:C.yellow}
 export const STATUS_LABELS = {in_stock:'In Stock',listed:'Listed',sold:'Sold',scrapped:'Scrapped',deferred:'Deferred'}

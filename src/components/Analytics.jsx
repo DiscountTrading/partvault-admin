@@ -20,7 +20,10 @@ const PIVOTS = [
   { id: 'car',   label: '🔧 By car',   sub: 'Which donor cars actually make money — true ROI on each vehicle you bought.' },
 ]
 
-export default function Analytics({ storeId, initial, parts, cars, sales, costing, onVehiclesChanged }) {
+export default function Analytics({ storeId, initial, parts, cars, sales, costing, onVehiclesChanged, showCars = true }) {
+  // Buy-in stores have no donor cars, so the By-model / By-car pivots are
+  // meaningless — show only By-part for them.
+  const PIVOTS_SHOWN = showCars ? PIVOTS : PIVOTS.filter(p => p.id === 'part')
   const [pivot, setPivot] = useState('part')
   const [tidyOpen, setTidyOpen] = useState(false)
 
@@ -43,7 +46,7 @@ export default function Analytics({ storeId, initial, parts, cars, sales, costin
         <div style={{ width: 1, height: 22, background: C.border, margin: '0 4px' }} />
         {/* In Tidy mode the pivot (By part/model/car) is irrelevant, so hide it and
             show only the way back. */}
-        {!tidyOpen && PIVOTS.map(p => (
+        {!tidyOpen && PIVOTS_SHOWN.map(p => (
           <button key={p.id} onClick={() => setPivot(p.id)} title={p.sub}
             style={{ padding: '5px 14px', borderRadius: 20, border: `1.5px solid ${pivot === p.id ? C.accent : C.border}`, background: pivot === p.id ? C.accent : '#fff', color: pivot === p.id ? '#fff' : C.text, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
             {p.label}

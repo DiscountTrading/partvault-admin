@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { C, S, fmt, APP_VERSION, DEFAULT_POSTAGE_TIERS, defaultPostageTiers, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS, rentPerDay } from '../lib/constants'
+import { C, S, fmt, APP_VERSION, DEFAULT_POSTAGE_TIERS, defaultPostageTiers, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS, rentPerDay, SOURCING_MODES, sourcingMode } from '../lib/constants'
 import { printLabels, DEFAULT_LABELS } from '../lib/labels'
 import { sb, EDGE_FN, FN_URL } from '../lib/supabase'
 import { buildSkuPreview, SKU_TOKENS, DEFAULT_SKU_TEMPLATE, DEFAULT_SKU_PAD } from '../lib/sku'
@@ -365,6 +365,20 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   const [marketplace, setMarketplace] = useState('EBAY_AU')
   const [mpLocked, setMpLocked] = useState(true) // assume locked until the part count loads
   const [mpSaved, setMpSaved] = useState(false)
+  // Sourcing mode — how the store gets parts. Freely changeable (unlike the
+  // marketplace); it only reshapes which flows are shown, never touches data.
+  const [sourcing, setSourcing] = useState('dismantle')
+  const [sourcingSaved, setSourcingSaved] = useState(false)
+  const saveSourcing = async (mode) => {
+    const prev = sourcing
+    setSourcing(mode)
+    try {
+      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
+      const { error } = await sb.from('stores').update({ settings: { ...(current?.settings || {}), sourcing: mode } }).eq('id', storeId)
+      if (error) throw error
+      setSourcingSaved(true); setTimeout(() => setSourcingSaved(false), 2000)
+    } catch (e) { setSourcing(prev); alert(e.message || 'Could not save') }
+  }
   const saveMarketplace = async (mp) => {
     const prev = marketplace
     setMarketplace(mp)
@@ -528,6 +542,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
           setAiModels(am)
         }
         setMarketplace(data.settings.marketplace || 'EBAY_AU')
+        setSourcing(sourcingMode(data.settings))
       }
       // Marketplace locks once the store has any part (DB-enforced too).
       const { count: partCount } = await sb.from('parts').select('id', { count: 'exact', head: true }).eq('store_id', storeId)
@@ -2159,6 +2174,27 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                   {mpLocked
                     ? 'Locked because this store has parts — their prices and categories are committed to this country. Selling in another country? Create a new store for it.'
                     : 'Which eBay site this store lists on (sets currency and categories). Locks permanently once the first part is created.'}
+                </div>
+              </div>
+
+              {/* Sourcing mode — reshapes the field app (cars vs a flat parts list).
+                  Freely changeable; only affects which flows show, never data. */}
+              <div style={{ background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 14px', marginBottom: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>🔧 How you get parts</span>
+                  {sourcingSaved && <span style={{ fontSize: 12, color: C.green }}>✓ saved</span>}
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {Object.values(SOURCING_MODES).map(m => (
+                    <button key={m.id} onClick={() => saveSourcing(m.id)}
+                      style={{ flex: '1 1 160px', textAlign: 'left', border: `1.5px solid ${sourcing === m.id ? C.accent : C.border}`, background: sourcing === m.id ? C.accentSoft : '#fff', borderRadius: 8, padding: '9px 11px', cursor: 'pointer' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{m.label}</div>
+                      <div style={{ fontSize: 11.5, color: C.muted, marginTop: 2, lineHeight: 1.35 }}>{m.blurb}</div>
+                    </button>
+                  ))}
+                </div>
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>
+                  Controls the field app: dismantlers get the cars list, buy-in sellers get a flat parts list, "both" gets both. Existing parts are never affected.
                 </div>
               </div>
 
