@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { sb, EDGE_FN } from '../lib/supabase'
 import { C, S } from '../lib/constants'
 import { MARKETPLACE_LIST, guessMarketplace } from '../lib/marketplaces'
-import { SOURCING_MODES } from '../lib/constants'
+import { sourcingFromFlags } from '../lib/constants'
 
 
 // First screen after signup, before the user belongs to any store. Two paths:
@@ -14,7 +14,11 @@ export default function JoinStore({ onJoined, onSignOut }) {
   const [view, setView] = useState('create') // 'create' | 'join'
   const [name, setName] = useState('')
   const [marketplace, setMarketplace] = useState(guessMarketplace)
-  const [sourcing, setSourcing] = useState('dismantle')
+  // Two independent checkboxes — how the store gets parts. Default to
+  // dismantling (auto-parts core), but a reseller just ticks "buy parts in".
+  const [doDismantle, setDoDismantle] = useState(true)
+  const [doBuyin, setDoBuyin] = useState(false)
+  const sourcing = sourcingFromFlags(doDismantle, doBuyin)
   const [withSample, setWithSample] = useState(true)
   const [code, setCode] = useState('')
   const [busy, setBusy] = useState(false)
@@ -95,12 +99,15 @@ export default function JoinStore({ onJoined, onSignOut }) {
               <select style={{ ...S.input, background: '#fff' }} value={marketplace} onChange={e => setMarketplace(e.target.value)}>
                 {MARKETPLACE_LIST.map(m => <option key={m.id} value={m.id}>{m.flag} {m.label} · {m.currency}</option>)}
               </select>
-              <label style={{ ...S.label, marginTop: 12 }}>How do you get your parts?</label>
+              <label style={{ ...S.label, marginTop: 12 }}>How do you get your parts? <span style={{ fontWeight: 400, color: C.muted, textTransform: 'none', letterSpacing: 0 }}>(tick any that apply)</span></label>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {Object.values(SOURCING_MODES).map(m => (
-                  <label key={m.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 9, cursor: 'pointer', border: `1.5px solid ${sourcing === m.id ? C.accent : C.border}`, background: sourcing === m.id ? C.accentSoft : '#fff', borderRadius: 10, padding: '10px 12px' }}>
-                    <input type="radio" name="sourcing" checked={sourcing === m.id} onChange={() => setSourcing(m.id)} style={{ marginTop: 3 }} />
-                    <span style={{ fontSize: 13, color: C.text, lineHeight: 1.4 }}><strong>{m.label}</strong><br /><span style={{ color: C.muted }}>{m.blurb}</span></span>
+                {[
+                  { on: doDismantle, set: setDoDismantle, label: 'I dismantle vehicles', blurb: 'You pull parts from cars you buy and break.' },
+                  { on: doBuyin, set: setDoBuyin, label: 'I buy parts in', blurb: 'You buy stock (new, aftermarket or used) to resell — no donor cars.' },
+                ].map((c, n) => (
+                  <label key={n} style={{ display: 'flex', alignItems: 'flex-start', gap: 9, cursor: 'pointer', border: `1.5px solid ${c.on ? C.accent : C.border}`, background: c.on ? C.accentSoft : '#fff', borderRadius: 10, padding: '10px 12px' }}>
+                    <input type="checkbox" checked={c.on} onChange={e => c.set(e.target.checked)} style={{ marginTop: 3 }} />
+                    <span style={{ fontSize: 13, color: C.text, lineHeight: 1.4 }}><strong>{c.label}</strong><br /><span style={{ color: C.muted }}>{c.blurb}</span></span>
                   </label>
                 ))}
               </div>

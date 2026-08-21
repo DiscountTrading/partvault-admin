@@ -1,4 +1,4 @@
-export const APP_VERSION = '3.36.74'
+export const APP_VERSION = '3.36.75'
 
 import { getActiveMarketplace } from './marketplaces'
 
@@ -30,6 +30,15 @@ export const DEFAULT_SOURCING = 'dismantle'
 export const sourcingMode = (settings) => SOURCING_MODES[settings?.sourcing]?.id || DEFAULT_SOURCING
 // Does this store organise parts by donor vehicle at all?
 export const usesCars = (settings) => sourcingMode(settings) !== 'buyin'
+// The mode is captured as two independent checkboxes ("I dismantle vehicles" /
+// "I buy parts in") and stored as one string. Both ticked = 'both'; neither
+// falls back to 'dismantle' so a store is never left with no way to add parts.
+export const sourcingFromFlags = (dismantle, buyin) =>
+  dismantle && buyin ? 'both' : buyin ? 'buyin' : 'dismantle'
+export const flagsFromSourcing = (mode) => ({
+  dismantle: mode !== 'buyin',              // dismantle or both
+  buyin: mode === 'buyin' || mode === 'both',
+})
 export const AU_SHIPPING = ['Standard Post','Express Post','Courier','Courier (Bulky)','Collect Only','Free Postage']
 export const STATUS_COLORS = {in_stock:C.blue,listed:C.accent,sold:C.green,scrapped:C.muted,deferred:C.yellow}
 export const STATUS_LABELS = {in_stock:'In Stock',listed:'Listed',sold:'Sold',scrapped:'Scrapped',deferred:'Deferred'}

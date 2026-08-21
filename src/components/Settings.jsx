@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { C, S, fmt, APP_VERSION, DEFAULT_POSTAGE_TIERS, defaultPostageTiers, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS, rentPerDay, SOURCING_MODES, sourcingMode } from '../lib/constants'
+import { C, S, fmt, APP_VERSION, DEFAULT_POSTAGE_TIERS, defaultPostageTiers, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS, rentPerDay, sourcingMode, flagsFromSourcing, sourcingFromFlags } from '../lib/constants'
 import { printLabels, DEFAULT_LABELS } from '../lib/labels'
 import { sb, EDGE_FN, FN_URL } from '../lib/supabase'
 import { buildSkuPreview, SKU_TOKENS, DEFAULT_SKU_TEMPLATE, DEFAULT_SKU_PAD } from '../lib/sku'
@@ -2187,17 +2187,28 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                   <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>🔧 How you get parts</span>
                   {sourcingSaved && <span style={{ fontSize: 12, color: C.green }}>✓ saved</span>}
                 </div>
+                <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 8 }}>Tick any that apply.</div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {Object.values(SOURCING_MODES).map(m => (
-                    <button key={m.id} onClick={() => saveSourcing(m.id)}
-                      style={{ flex: '1 1 160px', textAlign: 'left', border: `1.5px solid ${sourcing === m.id ? C.accent : C.border}`, background: sourcing === m.id ? C.accentSoft : '#fff', borderRadius: 8, padding: '9px 11px', cursor: 'pointer' }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{m.label}</div>
-                      <div style={{ fontSize: 11.5, color: C.muted, marginTop: 2, lineHeight: 1.35 }}>{m.blurb}</div>
-                    </button>
-                  ))}
+                  {(() => {
+                    const flags = flagsFromSourcing(sourcing)
+                    const opts = [
+                      { key: 'dismantle', on: flags.dismantle, label: 'I dismantle vehicles', blurb: 'Pull parts from cars you break — organised by donor car.' },
+                      { key: 'buyin', on: flags.buyin, label: 'I buy parts in', blurb: 'Buy stock to resell — a flat parts list, no donor cars.' },
+                    ]
+                    const setFlag = (key, val) => {
+                      const next = { ...flags, [key]: val }
+                      saveSourcing(sourcingFromFlags(next.dismantle, next.buyin))
+                    }
+                    return opts.map(o => (
+                      <label key={o.key} style={{ flex: '1 1 200px', display: 'flex', alignItems: 'flex-start', gap: 8, textAlign: 'left', border: `1.5px solid ${o.on ? C.accent : C.border}`, background: o.on ? C.accentSoft : '#fff', borderRadius: 8, padding: '9px 11px', cursor: 'pointer' }}>
+                        <input type="checkbox" checked={o.on} onChange={e => setFlag(o.key, e.target.checked)} style={{ marginTop: 3 }} />
+                        <span><span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{o.label}</span><br /><span style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.35 }}>{o.blurb}</span></span>
+                      </label>
+                    ))
+                  })()}
                 </div>
                 <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>
-                  Controls the field app: dismantlers get the cars list, buy-in sellers get a flat parts list, "both" gets both. Existing parts are never affected.
+                  Controls the field app: dismantlers get the cars list, buy-in sellers get a flat parts list, both gets both. Existing parts are never affected.
                 </div>
               </div>
 
