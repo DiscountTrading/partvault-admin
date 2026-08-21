@@ -506,8 +506,8 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                         <EbayLink part={p} style={{ padding:'2px 6px', background:'#fff', border:`1px solid ${C.border}`, borderRadius:4, marginLeft:4 }} />
                       </td>
                       <EditableTd value={p.sku} onSave={v => saveField(p, { sku: v })} />
-                      <EditableTd value={p.title} title={p.isSample ? `SAMPLE DATA — ${p.title}` : p.title}
-                        display={p.isSample ? <span>🧪 {p.title}</span> : undefined}
+                      <EditableTd value={p.title} title={p.isSample ? `SAMPLE DATA — ${p.title}` : (+p.quantity > 1 ? `${p.title} — ${Math.max(0, p.quantity - (p.quantitySold || 0))} of ${p.quantity} in stock` : p.title)}
+                        display={(p.isSample || +p.quantity > 1) ? <span>{p.isSample ? '🧪 ' : ''}{p.title}{+p.quantity > 1 ? <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: C.accent, background: C.accentSoft, border: `1px solid ${C.border}`, borderRadius: 5, padding: '1px 5px', whiteSpace: 'nowrap' }}>×{Math.max(0, p.quantity - (p.quantitySold || 0))}</span> : null}</span> : undefined}
                         onSave={v => saveField(p, { title: v })} />
                       <EditableTd value={p.make} onSave={v => saveField(p, { make: v })} />
                       <EditableTd value={p.model} onSave={v => saveField(p, { model: v })} />

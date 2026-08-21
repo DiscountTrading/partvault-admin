@@ -15,6 +15,7 @@ const mapRow = r => ({
   notes: r.notes||'', location: r.location||'', acquiredDate: r.acquired_date||null,
   locRow: r.loc_row ?? null, locBay: r.loc_bay ?? null, locShelf: r.loc_shelf ?? null,
   containerId: r.container_id ?? null,
+  quantity: r.quantity ?? 1, quantitySold: r.quantity_sold ?? 0,   // multi-qty stock lines (buy-in); dismantled parts stay 1
   listedDate: r.listed_date||null, soldDate: r.sold_date||null,
   deletedAt: r.deleted_at||null, createdAt: r.created_at,
   car_id: r.car_id||null, source: r.source||null,
@@ -47,6 +48,8 @@ const mapToRow = p => ({
   loc_bay: p.locBay===''||p.locBay==null ? null : +p.locBay,
   loc_shelf: p.locShelf===''||p.locShelf==null ? null : +p.locShelf,
   container_id: p.containerId || null,
+  // Only write quantity when the caller set it (avoids clobbering on partial edits).
+  ...(p.quantity !== undefined ? { quantity: Math.max(1, +p.quantity || 1) } : {}),
   listed_date: p.listedDate||null, sold_date: p.soldDate||null,
   deleted_at: p.deletedAt||null, car_id: p.car_id||null,
   ai_assessed: p.ai_assessed||false,

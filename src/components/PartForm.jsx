@@ -547,7 +547,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
 
       {/* Condition */}
       <Section title="Condition">
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
           <Field label="Item condition">
             <select style={S.select} value={form.condition||''} onChange={e => set('condition', e.target.value)}>
               {PART_CONDITIONS.map(c => <option key={c}>{c}</option>)}
@@ -557,6 +557,17 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
             <select style={S.select} value={form.status||'in_stock'} onChange={e => set('status', e.target.value)}>
               {['in_stock','listed','sold','scrapped','deferred'].map(s => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
             </select>
+          </Field>
+          {/* Quantity — how many identical units of this part you hold. Stays 1 for
+              a dismantled part (each is unique); set higher for bought-in stock. */}
+          <Field label="Quantity">
+            <input style={S.input} type="number" min="1" step="1" value={form.quantity ?? 1}
+              onChange={e => set('quantity', e.target.value)} />
+            {(+form.quantity > 1) && (
+              <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
+                {Math.max(0, (+form.quantity || 1) - (+part?.quantitySold || 0))} of {+form.quantity} available{+part?.quantitySold > 0 ? ` · ${part.quantitySold} sold` : ''}
+              </div>
+            )}
           </Field>
         </div>
       </Section>
