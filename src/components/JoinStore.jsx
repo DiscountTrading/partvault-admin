@@ -32,7 +32,9 @@ export default function JoinStore({ onJoined, onSignOut }) {
       // real part is created — sample data doesn't lock it).
       let tz = ''
       try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '' } catch { /* optional */ }
-      await sb.from('stores').update({ settings: { marketplace, sourcing, ...(tz ? { timezone: tz } : {}) } }).eq('id', storeId)
+      // New stores start with no cost applied to parts (costing.enabled=false) —
+      // pure eBay revenue until the seller opts in from Settings → Costs.
+      await sb.from('stores').update({ settings: { marketplace, sourcing, costing: { enabled: false }, ...(tz ? { timezone: tz } : {}) } }).eq('id', storeId)
       if (withSample) {
         setBusyMsg('Loading sample data…')
         try {

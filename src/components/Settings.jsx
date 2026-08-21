@@ -143,9 +143,10 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   const [listingDefaults, setListingDefaults] = useState({ warranty: '', conditionDescription: '' })
   const [aiSettings, setAiSettings] = useState(DEFAULT_AI_SETTINGS)
   const [captureAssess, setCaptureAssess] = useState({ category: true, price: true })
-  // New stores apply NO cost to parts by default — every rate starts at 0 and
-  // postage estimation is off (empty tiers). Sellers opt in by setting these.
-  const [costing, setCosting] = useState({ labourRate: 0, adminPct: 0, adminMin: 0, baseCostPct: 0, handlingFee: 0, postageDefaultG: 1000, postageTiers: [], labourMode: 'fixed', adminMode: 'percent', adminMinMode: 'fixed', baseCostMode: 'percent' })
+  // `enabled` is the master switch: new stores are created with enabled=false
+  // (no cost applied); existing stores have no key → on. Rates below only take
+  // effect when it's on.
+  const [costing, setCosting] = useState({ enabled: true, labourRate: 60, adminPct: 10, adminMin: 5, baseCostPct: 25, handlingFee: 2, postageDefaultG: 1000, postageTiers: DEFAULT_POSTAGE_TIERS, labourMode: 'fixed', adminMode: 'percent', adminMinMode: 'fixed', baseCostMode: 'percent' })
   const [inventory, setInventory] = useState({ agedThresholdDays: DEFAULT_AGED_THRESHOLD_DAYS, ageBrackets: DEFAULT_AGE_BRACKETS })
   const [storage, setStorage] = useState({ volumeM3: '', rent: '', rentPeriod: 'monthly', usablePct: 25 })
   const [warehouse, setWarehouse] = useState(WAREHOUSE_DEFAULTS)
@@ -2376,12 +2377,18 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       {tab === 'costs' && !loading && (
         <>
           {(() => {
-            const anyCost = +costing.baseCostPct > 0 || +costing.labourRate > 0 || +costing.adminPct > 0 || +costing.adminMin > 0 || (costing.postageTiers && costing.postageTiers.length > 0) || +costing.handlingFee > 0
+            const on = costing.enabled !== false
+            const toggle = () => { setCosting(s => ({ ...s, enabled: !on })) }
             return (
-              <div style={{ background: anyCost ? '#f9f8f5' : '#eff6ff', border: `1px solid ${anyCost ? C.border : '#bfdbfe'}`, borderRadius: 10, padding: '11px 14px', marginBottom: 14, fontSize: 13, color: anyCost ? C.text : '#1d4ed8', lineHeight: 1.6 }}>
-                {anyCost
-                  ? <><strong>Cost estimates are on.</strong> PartVault fills each part's Cost &amp; Profit from the rates below. Set them all to 0 (and clear postage) to show pure eBay revenue with no cost applied.</>
-                  : <><strong>No cost is applied to your parts by default</strong> — your Cost column reads $0 and you see pure eBay revenue. If you'd like PartVault to estimate a cost per part, set any of the rates below. You can also enter a real cost on any individual part at any time.</>}
+              <div style={{ background: on ? '#f9f8f5' : '#eff6ff', border: `1px solid ${on ? C.border : '#bfdbfe'}`, borderRadius: 10, padding: '12px 14px', marginBottom: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ fontSize: 13, color: on ? C.text : '#1d4ed8', lineHeight: 1.6, maxWidth: 640 }}>
+                  {on
+                    ? <><strong>Estimated cost base is on.</strong> PartVault fills each part's Cost &amp; Profit from the rates below. Turn it off to show pure eBay revenue with no cost applied.</>
+                    : <><strong>No cost is applied to your parts</strong> — your Cost column reads $0 and you see pure eBay revenue. Turn this on to have PartVault estimate a cost per part from the rates below. (You can still enter a real cost on any individual part at any time.)</>}
+                </div>
+                <button onClick={toggle} style={{ ...S.btn(on ? 'secondary' : 'primary'), whiteSpace: 'nowrap', padding: '9px 16px' }}>
+                  {on ? 'Turn off cost estimates' : 'Turn on cost estimates'}
+                </button>
               </div>
             )
           })()}
