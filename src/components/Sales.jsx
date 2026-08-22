@@ -246,10 +246,10 @@ const fmtRangeLabel = (a, b) => {
   return `${da.toLocaleDateString('en-AU', startOpt)} – ${db.toLocaleDateString('en-AU', withYear)}`
 }
 const METRICS = [
-  { id: 'gross', label: 'Gross sales', money: true },
-  { id: 'net', label: 'Net sales', money: true },
-  { id: 'profit', label: 'Profit', money: true },
-  { id: 'orders', label: 'Orders', money: false },
+  { id: 'gross', label: 'Gross sales', money: true, tip: 'Total the buyer paid — item price plus shipping, before any eBay fees or refunds. The graph below plots gross sales per period.' },
+  { id: 'net', label: 'Net sales', money: true, tip: 'What you actually banked: gross sales minus eBay fees and refunds. The graph below plots net sales per period.' },
+  { id: 'profit', label: 'Profit', money: true, tip: 'Net sales minus the cost of the parts sold (COGS). The graph below plots profit per period.' },
+  { id: 'orders', label: 'Orders', money: false, tip: 'Number of orders (count), not dollars. The graph below plots how many orders you had per period.' },
 ]
 const metricVal = (id, x) => id === 'orders' ? 1 : id === 'gross' ? (x.gross || 0) : id === 'profit' ? (x.profit == null ? 0 : x.profit) : x.net
 const signedMoney = v => (v < 0 ? '−' : '') + fmt(Math.abs(v))
@@ -587,7 +587,7 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
   // (30d/90d/12mo/All/Custom) — drives EVERYTHING on the page: the chart, the
   // promoted panel, the days-to-sell breakdown AND the sales table. The chart
   // auto-buckets (day/week/month/year) to fit the chosen period.
-  const [metric, setMetric] = useState('net')
+  const [metric, setMetric] = useState('gross')
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
 
@@ -784,7 +784,7 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
           </div>
           <div style={{ flex: 1 }} />
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {METRICS.map(m => <button key={m.id} onClick={() => setMetric(m.id)} style={pillStyle(metric === m.id)}>{m.label}</button>)}
+            {METRICS.map(m => <button key={m.id} title={m.tip} onClick={() => setMetric(m.id)} style={pillStyle(metric === m.id)}>{m.label}</button>)}
           </div>
         </div>
         {period === 'custom' && (
