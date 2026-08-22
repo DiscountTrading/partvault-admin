@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { sb, EDGE_FN } from '../lib/supabase'
 import { C, S, fmt, partEffectiveCost } from '../lib/constants'
+import { getActiveMarketplace } from '../lib/marketplaces'
 import useFillHeight from '../hooks/useFillHeight'
 
 const DEAD_DAYS = 90
@@ -111,6 +112,16 @@ export default function Insights({ storeId, initial, parts = [], costing = {} })
   }, [storeId])
 
   const [refreshingMkt, setRefreshingMkt] = useState(false)
+  const [mktDetail, setMktDetail] = useState(null) // row whose market-price provenance popover is open
+
+  // The eBay search that produced (and can verify) a part's market price: active
+  // USED listings on the store's marketplace, matched by part number if we have
+  // one, else make/model/title — the same query the market lookup runs.
+  const ebaySearchUrl = (r) => {
+    const mkt = getActiveMarketplace()
+    const q = (r.part_number || [r.make, r.model, r.title].filter(Boolean).join(' ')).trim()
+    return `https://www.${mkt?.ebayDomain || 'ebay.com.au'}/sch/i.html?_nkw=${encodeURIComponent(q)}&LH_ItemCondition=3000`
+  }
   const [mktMsg, setMktMsg] = useState('')
   const refreshMarket = async () => {
     setRefreshingMkt(true); setMktMsg('Checking eBay…')
@@ -386,6 +397,26 @@ export default function Insights({ storeId, initial, parts = [], costing = {} })
       const color = days > 21 ? C.red : days > 10 ? C.yellow : C.muted
       return <span style={{ color }}>{days <= 0 ? 'today' : `${days}d ago`}</span>
     }
+    // Market price is clickable — opens a popover explaining where the figure
+    // came from, with a link to the live eBay listings behind it.
+    if (col.key === 'market_price') {
+      if (v == null || v <= 0) return <span style={{ color: '#bbb' }} title="No market price yet — use “Refresh market prices” to check eBay.">—</span>
+      return (
+        <span onClick={() => setMktDetail(r)} role="button" tabIndex={0}
+          onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && setMktDetail(r)}
+          title="eBay market median — click to see where this came from"
+          style={{ cursor: 'pointer', color: C.accent, fontWeight: 600, textDecoration: 'underline', textDecorationStyle: 'dotted', textUnderlineOffset: 2 }}>
+          {money(v)}
+        </span>
+      )
+    }
+    // "vs Market": explain the calculation on hover, and colour over/under.
+    if (col.key === 'price_variance_pct') {
+      if (v == null) return '—'
+      const mp = r.market_price, lp = r.list_price
+      const tip = `How your price compares to the eBay market median.\n\n(your price − market) ÷ market × 100\n= (${money(lp)} − ${money(mp)}) ÷ ${money(mp)} × 100\n= ${v}%\n\n${v > 0 ? 'You’re priced ABOVE the market median' : v < 0 ? 'You’re priced BELOW the market median' : 'You’re right on the market median'}.`
+      return <span title={tip} style={{ color: v > 15 ? C.red : v < -15 ? C.green : C.text, fontWeight: v > 15 || v < -15 ? 600 : 400, cursor: 'help' }}>{v > 0 ? '+' : ''}{v}%</span>
+    }
     if (col.fmt === 'money') return money(v)
     if (col.fmt === 'pct') return v == null ? '—' : `${v}%`
     if (col.unit) return v == null ? '—' : `${v}${col.unit}`
@@ -587,6 +618,43 @@ export default function Insights({ storeId, initial, parts = [], costing = {} })
           Cost, profit &amp; margin use the same estimate model as the Dashboard (recorded costs plus an acquisition base, labour, admin &amp; storage) wherever a real cost isn't recorded — so imported listings no longer show a near-100% margin. Record actual costs (or set the estimate rates in Settings → Costs) to sharpen these. Best performers are ranked on a blend of profit, margin &amp; sell-speed.
         </div>
       </div>
+
+      {/* Where the market price came from — provenance popover */}
+      {mktDetail && (() => {
+        const r = mktDetail
+        const mkt = getActiveMarketplace()
+        const checked = r.market_checked_at ? new Date(r.market_checked_at) : null
+        const matchedBy = r.part_number ? `part number “${r.part_number}”` : 'make, model & title'
+        return (
+          <div onClick={() => setMktDetail(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(23,21,15,0.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+            <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, maxWidth: 440, width: '100%', boxShadow: '0 24px 60px rgba(23,21,15,0.35)', overflow: 'hidden' }}>
+              <div style={{ background: C.bg, padding: '14px 18px', borderBottom: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Market price</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginTop: 2 }}>{r.title || `${r.make} ${r.model}`.trim() || 'This part'}</div>
+                </div>
+                <button onClick={() => setMktDetail(null)} aria-label="Close" style={{ background: 'none', border: 'none', fontSize: 20, color: C.muted, cursor: 'pointer', lineHeight: 1 }}>✕</button>
+              </div>
+              <div style={{ padding: '16px 18px' }}>
+                <div style={{ fontSize: 30, fontWeight: 800, color: C.accent, fontFamily: "'Inter Tight',system-ui,sans-serif" }}>{money(r.market_price)}</div>
+                <div style={{ fontSize: 13, color: C.text, lineHeight: 1.7, marginTop: 8 }}>
+                  This is the <strong>median asking price</strong> of{r.market_count ? <> the <strong>{r.market_count}</strong></> : ''} active <strong>used</strong> {r.market_count === 1 ? 'listing' : 'listings'} on eBay {mkt?.flag} {mkt?.label} that matched this part by {matchedBy}.
+                </div>
+                <div style={{ fontSize: 12.5, color: C.muted, marginTop: 10, lineHeight: 1.6 }}>
+                  Source: <strong>eBay Browse API</strong> (live active listings, your marketplace).<br />
+                  {checked ? <>Checked {checked.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })} at {checked.toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' })}.</> : 'Not yet checked.'}
+                  {' '}Median means half the listings ask more, half ask less — more robust to outliers than an average.
+                </div>
+                <a href={ebaySearchUrl(r)} target="_blank" rel="noreferrer"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginTop: 14, background: C.accent, color: '#fff', borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 700, textDecoration: 'none' }}>
+                  View these listings on eBay ↗
+                </a>
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 10 }}>The live results may differ slightly from the figure above, which is a snapshot from when it was last checked. Use “Refresh market prices” to update.</div>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }
