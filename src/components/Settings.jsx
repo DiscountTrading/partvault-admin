@@ -4,6 +4,7 @@ import { printLabels, DEFAULT_LABELS } from '../lib/labels'
 import { sb, EDGE_FN, FN_URL } from '../lib/supabase'
 import { buildSkuPreview, SKU_TOKENS, DEFAULT_SKU_TEMPLATE, DEFAULT_SKU_PAD } from '../lib/sku'
 import { MARKETPLACES, MARKETPLACE_LIST } from '../lib/marketplaces'
+import useIsMobile from '../hooks/useIsMobile'
 import { planState } from '../lib/plan'
 import { startCheckout, openBillingPortal } from '../lib/billing'
 import TeamAccess from './TeamAccess'
@@ -133,6 +134,7 @@ function StatCard({ label, value, color, sub }) {
 }
 
 export default function Settings({ profile, storeId, onSignOut, refreshStores, onSettingsSaved, parts = [], onChanged, sync, initialTab }) {
+  const isMobile = useIsMobile()
   const [tab, setTab] = useState(initialTab?.tab || 'account')
   // Banner deep-links (e.g. "Connect your store →") re-target the open Settings
   // page too — the ts nonce makes each click land even on the same tab twice.
@@ -1897,19 +1899,27 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, paddingBottom: 16, borderBottom: `1px solid ${C.border}` }}>
-        <h2 style={S.h1}>⚙️ Settings</h2>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: isMobile ? 14 : 20, paddingBottom: isMobile ? 12 : 16, borderBottom: `1px solid ${C.border}` }}>
+        <h2 style={{ ...S.h1, fontSize: isMobile ? 22 : undefined }}>⚙️ Settings</h2>
         {(tab === 'descriptions' || tab === 'warehouse') && (
-          <button style={{ ...S.btn(), opacity: saving ? 0.6 : 1 }} onClick={saveSettings} disabled={saving}>
+          <button style={{ ...S.btn(), height: isMobile ? 44 : undefined, whiteSpace: 'nowrap', opacity: saving ? 0.6 : 1 }} onClick={saveSettings} disabled={saving}>
             {saving ? 'Saving...' : saved ? '✓ Saved' : 'Save Settings'}
           </button>
         )}
       </div>
 
-      {/* Sub-tabs */}
-      <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: `2px solid ${C.border}`, paddingBottom: 0 }}>
+      {/* Sub-tabs. Nine of them don't fit a phone, so there they become a
+          horizontal scroller of 44pt pills rather than a wrapping, cramped row. */}
+      <div className="pv-scroll" style={isMobile
+        ? { display: 'flex', gap: 8, marginBottom: 16, overflowX: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: 6 }
+        : { display: 'flex', gap: 4, marginBottom: 20, borderBottom: `2px solid ${C.border}`, paddingBottom: 0 }}>
         {SETTING_TABS.map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)} style={{
+          <button key={t.id} onClick={() => setTab(t.id)} style={isMobile ? {
+            background: tab === t.id ? C.accent : '#fff', cursor: 'pointer', flexShrink: 0,
+            border: `1.5px solid ${tab === t.id ? C.accent : C.border}`, borderRadius: 22,
+            height: 44, padding: '0 16px', fontSize: 13, fontWeight: 700,
+            color: tab === t.id ? '#fff' : C.text, whiteSpace: 'nowrap',
+          } : {
             background: 'none', border: 'none', cursor: 'pointer',
             padding: '8px 18px', fontSize: 13, fontWeight: tab === t.id ? 700 : 500,
             color: tab === t.id ? C.accent : C.muted,
@@ -2756,7 +2766,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       {/* EBAY SYNC TAB — Sync gets the wide main area; connection + address sit in
           a compact left sidebar so it all fits without wasting the left half. */}
       {tab === 'ebay' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 340px) 1fr', gap: 16, alignItems: 'start' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 340px) 1fr', gap: 16, alignItems: 'start' }}>
           <div>
           {/* Connection */}
           <Section title="🔗 eBay Connection">
@@ -2847,7 +2857,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
               const AU_STATES = { queensland: 'QLD', 'new south wales': 'NSW', victoria: 'VIC', tasmania: 'TAS', 'south australia': 'SA', 'western australia': 'WA', 'northern territory': 'NT', 'australian capital territory': 'ACT' }
               const abbrevState = v => AU_STATES[String(v || '').trim().toLowerCase()] || v
               return (
-                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 8, marginBottom: 10 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr 1fr', gap: 8, marginBottom: 10 }}>
                   <div style={{ gridColumn: '1 / -1' }}>
                     <label style={mini}>Address</label>
                     <input style={S.input} value={shipAddress.addressLine1} onChange={e => setShipAddress(a => ({ ...a, addressLine1: e.target.value }))} />

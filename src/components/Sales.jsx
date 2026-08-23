@@ -765,6 +765,47 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
   const th = { textAlign: 'left', padding: '9px 12px', color: C.muted, fontWeight: 700, fontSize: 11, whiteSpace: 'nowrap', position: 'sticky', top: 0, background: '#fff', zIndex: 5 }
   const td = (align = 'left') => ({ textAlign: align, padding: '9px 12px', color: C.text, whiteSpace: 'nowrap' })
 
+  // The four "click a figure for its breakdown" popups. One definition each, so
+  // the desktop table cell and the phone card open exactly the same explanation.
+  const priceDetail = (s, title, sku) => {
+    const disc = +s.discount || 0
+    const promoRows = disc > 0
+      ? (Array.isArray(s.appliedPromotions) && s.appliedPromotions.length
+          ? s.appliedPromotions.map(pr => ({ label: pr.desc || 'Promotion', val: +pr.amount || 0, sign: '−', color: C.red }))
+          : [{ label: 'Promotion / discount', val: disc, sign: '−', color: C.red }])
+      : []
+    return {
+      title, sub: `${sku} · ${fmtDate(s.soldAt)}`,
+      rows: [
+        { label: disc > 0 ? 'Item full price' : 'Item price', val: +s.soldPrice || 0, sign: '+', color: C.text },
+        ...promoRows,
+        ...(s.shipping ? [{ label: 'Shipping charged to buyer', val: +s.shipping || 0, sign: '+', color: C.text }] : []),
+      ],
+      totalLabel: 'Buyer paid', totalValue: (+s.soldPrice || 0) - disc + (+s.shipping || 0), totalSign: '+', totalColor: C.text,
+      note: disc > 0
+        ? 'The Sale column shows the full pre-discount price; the buyer paid the “Buyer paid” amount after the promotion. Note: revenue/profit currently use the full price — say the word if you want the promotion netted off.'
+        : 'No eBay promotion recorded on this order. (Promotion capture applies to orders synced from now on; older imported orders have no promotion detail.)',
+    }
+  }
+  const feeDetail = (s, d, title, sku) => ({ title, sub: `${sku} · ${fmtDate(s.soldAt)}`, entries: d.feeBreakdown || {}, totalLabel: 'Total eBay fee', totalValue: d.fee })
+  const costDetail = (s, d, p, title, sku) => ({ title, sub: `${sku} · ${fmtDate(s.soldAt)}${p ? '' : ' · cost from imported snapshot'}`, entries: d.breakdown || {}, totalLabel: 'Total cost', totalValue: d.cost || 0 })
+  const profitDetail = (s, d, title, sku) => ({
+    title, sub: `${sku} · ${fmtDate(s.soldAt)}`,
+    rows: [
+      { label: 'Item sold price', val: +s.soldPrice || 0, sign: '+', color: C.text },
+      ...(s.shipping ? [{ label: 'Shipping charged to buyer', val: +s.shipping || 0, sign: '+', color: C.text }] : []),
+      ...(s.refund ? [{ label: 'Refund', val: +s.refund || 0, sign: '−', color: C.red }] : []),
+      ...(d.fee ? [{ label: 'eBay fees', val: d.fee, sign: '−', color: C.red }] : []),
+      ...(d.cost != null ? [{ label: 'Item cost (incl. postage)', val: d.cost, sign: '−', color: C.red }] : []),
+    ],
+    totalLabel: 'Profit', totalValue: d.profit, totalSign: d.profit >= 0 ? '+' : '−', totalColor: d.profit >= 0 ? C.green : C.red,
+    note: '“Shipping charged to buyer” is income; the postage you paid is inside “Item cost” — opposite sides of the ledger, not counted twice. Click the Cost figure for its line items.',
+  })
+  // Item + SKU shown for a sale: our inventory record when it matched, else the
+  // eBay text (flagged "eBay only" so it isn't passed off as one of our records).
+  const saleTitle = (s, p) => (p ? (p.title || '—') : (s.title || '—'))
+  const saleSku = (s, p) => (p ? (p.sku || '—') : (s.sku || '—'))
+
   return (
     <div>
       <h2 style={{ ...S.h1, marginBottom: 4 }}>Recent Sales</h2>
@@ -837,11 +878,50 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
         <div style={{ fontSize: 13, color: C.muted, fontWeight: 600 }}>{periodTitle} · {rows.length} sale{rows.length === 1 ? '' : 's'}</div>
         <div style={{ flex: 1 }} />
         <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search item or SKU…"
-          style={{ ...S.input, marginBottom: 0, padding: '7px 12px', width: 200 }} />
+          style={{ ...S.input, marginBottom: 0, padding: '7px 12px', width: isMobile ? '100%' : 200 }} />
         <button onClick={exportCsv} disabled={!rows.length} title="Download the filtered sales as a CSV (opens in Excel)"
-          style={{ ...S.btn('secondary'), padding: '7px 12px', fontSize: 12, opacity: rows.length ? 1 : 0.5 }}>⤓ Export CSV</button>
+          style={{ ...S.btn('secondary'), padding: '7px 12px', fontSize: 12, width: isMobile ? '100%' : undefined, opacity: rows.length ? 1 : 0.5 }}>⤓ Export CSV</button>
       </div>
 
+      {isMobile ? (
+        /* Phone: one card per sale. Every figure keeps its click-for-breakdown,
+           and the fulfilment actions expand in place, exactly like the table. */
+        rows.length === 0
+          ? <div style={{ padding: 24, textAlign: 'center', color: C.muted, background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>No sales in this period.</div>
+          : shown.map(s => {
+            const d = deriveSale(s, partById, costing)
+            const p = d.p
+            const title = saleTitle(s, p), sku = saleSku(s, p)
+            const isOpen = expanded.has(s.id)
+            const fig = (label, value, opts = {}) => (
+              <div onClick={opts.onClick} style={{ cursor: opts.onClick ? 'pointer' : 'default' }}>
+                <div style={{ fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.4px' }}>{label}</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: opts.color || C.text, textDecoration: opts.onClick ? 'underline dotted' : 'none', textUnderlineOffset: 3 }}>{value}</div>
+              </div>
+            )
+            return (
+              <div key={s.id} style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, marginBottom: 10 }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: C.text, lineHeight: 1.3, wordBreak: 'break-word' }}>
+                  {title}
+                  {!p && <span title="No matching inventory item — shown from eBay" style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: C.muted, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 6, padding: '1px 5px', whiteSpace: 'nowrap' }}>eBay only</span>}
+                </div>
+                <div style={{ fontSize: 13, color: C.muted, marginTop: 3 }}>{sku} · {fmtDate(s.soldAt)}{s.quantity > 1 ? ` · ×${s.quantity}` : ''}</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, margin: '10px 0', padding: '10px 0', borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}` }}>
+                  {fig('Sale', fmt(s.soldPrice), { onClick: () => setDetail(priceDetail(s, title, sku)) })}
+                  {fig('Ship', s.shipping ? fmt(s.shipping) : '—')}
+                  {fig('Fee', d.fee ? '−' + fmt(d.fee) : '—', { color: d.fee ? C.red : C.text, onClick: d.fee ? () => setDetail(feeDetail(s, d, title, sku)) : undefined })}
+                  {fig('Net', fmt(d.net))}
+                  {fig('Cost', d.cost == null ? '—' : '−' + fmt(d.cost), { color: d.cost == null ? '#bbb' : C.red, onClick: d.cost == null ? undefined : () => setDetail(costDetail(s, d, p, title, sku)) })}
+                  {fig('Profit', d.profit == null ? '—' : fmt(d.profit), { color: d.profit == null ? '#bbb' : d.profit >= 0 ? C.green : C.red, onClick: d.profit == null ? undefined : () => setDetail(profitDetail(s, d, title, sku)) })}
+                </div>
+                <button onClick={() => toggleRow(s.id)} style={{ ...S.btn('secondary'), width: '100%', height: 44, fontSize: 14 }}>
+                  {isOpen ? '− Hide actions' : '+ Collect, pack, post…'}
+                </button>
+                {isOpen && <div style={{ marginTop: 10 }}><SaleActions s={s} p={p} wf={wf} setStage={setStage} /></div>}
+              </div>
+            )
+          })
+      ) : (
       <div className="pv-scroll" style={{ flex: 1, minHeight: 0, overflowX: 'scroll', overflowY: 'auto', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>
         <table style={{ width: '100%', minWidth: 1000, borderCollapse: 'collapse', fontSize: 13, zoom: 'var(--table-zoom, 1)' }}>
           <thead>
@@ -889,54 +969,24 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
                   <td style={td('right')}>{s.quantity}</td>
                   <td style={{ ...td('right'), cursor: 'pointer', textDecoration: 'underline dotted' }}
                       title="Click for the price breakdown"
-                      onClick={() => {
-                        const disc = +s.discount || 0
-                        const promoRows = disc > 0
-                          ? (Array.isArray(s.appliedPromotions) && s.appliedPromotions.length
-                              ? s.appliedPromotions.map(pr => ({ label: pr.desc || 'Promotion', val: +pr.amount || 0, sign: '−', color: C.red }))
-                              : [{ label: 'Promotion / discount', val: disc, sign: '−', color: C.red }])
-                          : []
-                        setDetail({
-                          title, sub: `${sku} · ${fmtDate(s.soldAt)}`,
-                          rows: [
-                            { label: disc > 0 ? 'Item full price' : 'Item price', val: +s.soldPrice || 0, sign: '+', color: C.text },
-                            ...promoRows,
-                            ...(s.shipping ? [{ label: 'Shipping charged to buyer', val: +s.shipping || 0, sign: '+', color: C.text }] : []),
-                          ],
-                          totalLabel: 'Buyer paid', totalValue: (+s.soldPrice || 0) - disc + (+s.shipping || 0), totalSign: '+', totalColor: C.text,
-                          note: disc > 0
-                            ? 'The Sale column shows the full pre-discount price; the buyer paid the “Buyer paid” amount after the promotion. Note: revenue/profit currently use the full price — say the word if you want the promotion netted off.'
-                            : 'No eBay promotion recorded on this order. (Promotion capture applies to orders synced from now on; older imported orders have no promotion detail.)',
-                        })
-                      }}>
+                      onClick={() => setDetail(priceDetail(s, title, sku))}>
                     {fmt(s.soldPrice)}
                   </td>
                   <td style={td('right')}>{s.shipping ? fmt(s.shipping) : '—'}</td>
                   <td style={{ ...td('right'), color: C.red, cursor: d.fee ? 'pointer' : 'default', textDecoration: d.fee ? 'underline dotted' : 'none' }}
                       title={d.fee ? 'Click for breakdown' : ''}
-                      onClick={() => d.fee && setDetail({ title, sub: `${sku} · ${fmtDate(s.soldAt)}`, entries: d.feeBreakdown || {}, totalLabel: 'Total eBay fee', totalValue: d.fee })}>
+                      onClick={() => d.fee && setDetail(feeDetail(s, d, title, sku))}>
                     {d.fee ? '−' + fmt(d.fee) : '—'}
                   </td>
                   <td style={{ ...td('right'), fontWeight: 600 }}>{fmt(d.net)}</td>
                   <td style={{ ...td('right'), color: d.cost == null ? '#bbb' : C.red, cursor: d.cost == null ? 'default' : 'pointer', textDecoration: d.cost == null ? 'none' : 'underline dotted' }}
                       title={d.cost == null ? '' : 'Click for breakdown'}
-                      onClick={() => d.cost != null && setDetail({ title, sub: `${sku} · ${fmtDate(s.soldAt)}${p ? '' : ' · cost from imported snapshot'}`, entries: d.breakdown || {}, totalLabel: 'Total cost', totalValue: d.cost || 0 })}>
+                      onClick={() => d.cost != null && setDetail(costDetail(s, d, p, title, sku))}>
                     {d.cost == null ? '—' : '−' + fmt(d.cost)}
                   </td>
                   <td style={{ ...td('right'), color: d.profit == null ? '#bbb' : d.profit >= 0 ? C.green : C.red, cursor: d.profit == null ? 'default' : 'pointer', textDecoration: d.profit == null ? 'none' : 'underline dotted' }}
                       title={d.profit == null ? '' : 'Click for how profit was calculated'}
-                      onClick={() => d.profit != null && setDetail({
-                        title, sub: `${sku} · ${fmtDate(s.soldAt)}`,
-                        rows: [
-                          { label: 'Item sold price', val: +s.soldPrice || 0, sign: '+', color: C.text },
-                          ...(s.shipping ? [{ label: 'Shipping charged to buyer', val: +s.shipping || 0, sign: '+', color: C.text }] : []),
-                          ...(s.refund ? [{ label: 'Refund', val: +s.refund || 0, sign: '−', color: C.red }] : []),
-                          ...(d.fee ? [{ label: 'eBay fees', val: d.fee, sign: '−', color: C.red }] : []),
-                          ...(d.cost != null ? [{ label: 'Item cost (incl. postage)', val: d.cost, sign: '−', color: C.red }] : []),
-                        ],
-                        totalLabel: 'Profit', totalValue: d.profit, totalSign: d.profit >= 0 ? '+' : '−', totalColor: d.profit >= 0 ? C.green : C.red,
-                        note: '“Shipping charged to buyer” is income; the postage you paid is inside “Item cost” — opposite sides of the ledger, not counted twice. Click the Cost figure for its line items.',
-                      })}>
+                      onClick={() => d.profit != null && setDetail(profitDetail(s, d, title, sku))}>
                     {d.profit == null ? '—' : fmt(d.profit)}
                   </td>
                 </tr>
@@ -953,6 +1003,7 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
           </tbody>
         </table>
       </div>
+      )}
       <div style={{ marginTop: 10, fontSize: 12, color: C.muted, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <span>Showing {Math.min(limit, rows.length)} of {rows.length} sales.</span>
         {rows.length > limit && (

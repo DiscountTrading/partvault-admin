@@ -19,6 +19,20 @@
     ::-webkit-scrollbar-thumb:hover { background: #BD400B; }
     .spin { animation: spin 1s linear infinite; display: inline-block; }
     @keyframes spin { from { transform: rotate(0deg) } to { transform: rotate(360deg) } }
+    /* Phones, every screen at once: iOS Safari zooms the whole page the moment a
+       field smaller than 16px takes focus, and a control under 44pt is hard to
+       hit. Set both floors here so no individual form has to remember. */
+    @media (max-width: 640px) {
+      /* !important because nearly every field carries an inline font-size from
+         the shared style tokens, and an inline style beats a plain rule. */
+      input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+        font-size: 16px !important;
+        min-height: 44px;
+      }
+      /* Same floor for buttons. Add class="pv-compact" to opt one out — e.g. a
+         chip that is decoration next to a real control, never the tap target. */
+      button:not(.pv-compact) { min-height: 44px; }
+    }
   </style>
 </head>
 <body>

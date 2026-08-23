@@ -10,6 +10,7 @@ import Dashboard from './components/Dashboard'
 import Sales from './components/Sales'
 import Analytics from './components/Analytics'
 import Settings from './components/Settings'
+import PartForm from './components/PartForm'
 import { C } from './lib/constants'
 import { sb } from './lib/supabase'
 
@@ -40,10 +41,10 @@ const parts = Array.from({ length: 23 }, (_, i) => {
 })
 const cars = MAKES.map(([make, model, year], i) => ({ id: `car${i}`, store_id: 'store-1', make, model, year, purchase_price: 1200 + i * 300 }))
 const sales = parts.filter(p => p.status === 'sold').map((p, i) => ({
-  id: `s${i}`, part_id: p.id, sku: p.sku, title: p.title, sold_price: p.list_price,
-  soldAt: new Date(Date.now() - i * 864e5).toISOString(), source: 'ebay', fees: 8, postage: 12, stage: 'paid',
+  id: `s${i}`, partId: p.id, sku: p.sku, title: p.title, quantity: 1,
+  soldPrice: p.list_price, shipping: 12, fees: 8, refund: 0, discount: i % 3 === 0 ? 5 : 0,
+  soldAt: new Date(Date.now() - i * 864e5).toISOString(), source: 'ebay', stage: 'paid',
 }))
-
 // The harness has no session, so the Supabase-backed screens would render empty.
 // Stub ONLY the reads these screens make, in the harness file — the app itself
 // stays free of test hooks.
@@ -79,6 +80,8 @@ const SCREENS = {
   dashboard: () => <Dashboard parts={parts} sales={sales} costing={costing} storeId="store-1" onDrill={() => {}} onSeeSales={() => {}} />,
   sales: () => <Sales sales={sales} parts={parts} costing={costing} />,
   analytics: () => <Analytics storeId="store-1" parts={parts} cars={cars} sales={sales} costing={costing} onVehiclesChanged={() => {}} />,
+  partform: () => <PartForm part={parts[0]} cars={cars} storeId="store-1" costing={costing} aiSettings={{}} footer="" allParts={parts}
+    onSave={async () => {}} onSaveAndAdd={async () => {}} onCancel={() => {}} />,
   settings: () => <Settings profile={{ id: 'u1', email: 'demo@partvault.app' }} storeId="store-1" parts={parts}
     onSignOut={() => {}} refreshStores={() => {}} onSettingsSaved={() => {}} onChanged={() => {}} sync={{}} />,
 }

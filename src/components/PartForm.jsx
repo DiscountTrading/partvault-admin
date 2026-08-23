@@ -7,10 +7,12 @@ import { printLabels, DEFAULT_LABELS } from '../lib/labels'
 import { WAREHOUSE_DEFAULTS, warehouseConfig } from '../lib/warehouse'
 
 import { Field, EBAY_BLUE, Section, AutoInput, urlFrom, compressImg, defCosts, COST_TIERS, WeightField, ebayItmUrl, generateAIDescription, generateDescriptionOptions, regenerateDescriptionOptions, analysePart } from './inventoryShared'
+import useIsMobile from '../hooks/useIsMobile'
 
 // The full-screen part editor — extracted verbatim from Inventory.jsx
 // (refactor 3/5). Mounted by Inventory for both add and edit.
 function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSettings, footer, costing, labels = DEFAULT_LABELS, warehouse = WAREHOUSE_DEFAULTS, allParts = [] }) {
+  const isMobile = useIsMobile()
   const defCat = CATEGORY_NAMES[4]
   const curSym = getActiveMarketplace().currencySymbol
   const usesOz = getActiveMarketplace().weightUnit === 'oz'
@@ -459,8 +461,8 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
                   <div key={i} style={{ display:'flex', gap:6, alignItems:'center' }}>
                     <input value={f.make} onChange={e=>setFit(i,'make',e.target.value)} placeholder="Make" style={{ ...S.input, flex:'1 1 22%', fontSize:12, padding:'4px 6px' }} />
                     <input value={f.model} onChange={e=>setFit(i,'model',e.target.value)} placeholder="Model" style={{ ...S.input, flex:'1 1 26%', fontSize:12, padding:'4px 6px' }} />
-                    <input value={f.yearFrom} onChange={e=>setFit(i,'yearFrom',e.target.value)} placeholder="From" type="number" style={{ ...S.input, width:62, fontSize:12, padding:'4px 6px' }} />
-                    <input value={f.yearTo} onChange={e=>setFit(i,'yearTo',e.target.value)} placeholder="To" type="number" style={{ ...S.input, width:62, fontSize:12, padding:'4px 6px' }} />
+                    <input value={f.yearFrom} onChange={e=>setFit(i,'yearFrom',e.target.value)} placeholder="From" type="number" style={{ ...S.input, width:isMobile?'100%':62, fontSize:isMobile?16:12, padding:isMobile?'0 8px':'4px 6px' }} />
+                    <input value={f.yearTo} onChange={e=>setFit(i,'yearTo',e.target.value)} placeholder="To" type="number" style={{ ...S.input, width:isMobile?'100%':62, fontSize:isMobile?16:12, padding:isMobile?'0 8px':'4px 6px' }} />
                     <input value={f.trim} onChange={e=>setFit(i,'trim',e.target.value)} placeholder="Trim (opt)" style={{ ...S.input, flex:'1 1 18%', fontSize:12, padding:'4px 6px' }} />
                     <button onClick={()=>removeFit(i)} title="Remove" style={{ background:'none', border:'none', color:C.red, cursor:'pointer', fontSize:16, padding:'0 4px' }}>×</button>
                   </div>
@@ -489,7 +491,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
           <input style={{ ...S.input, fontWeight:600 }} maxLength={80} value={form.title||''} onChange={e => set('title', e.target.value)} placeholder="e.g. Toyota Hilux 2018 Headlight RH Genuine OEM" />
           <div style={{ textAlign:'right', fontSize:11, color:titleLen>80?C.red:C.muted, marginTop:4 }}>{titleLen}/80</div>
         </Field>
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+        <div style={{ display:'grid', gridTemplateColumns:isMobile?'1fr':'1fr 1fr', gap:12 }}>
           <Field label="SKU">
             <div style={{ display:'flex', gap:6 }}>
               <input style={{ ...S.input, flex:1 }} value={form.sku||''} onChange={e => set('sku', e.target.value)} placeholder="Auto-generates when you link a car" />
@@ -512,7 +514,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
           const subVal = canonicalSubcategory(catVal, form.subcategory)
           const subList = subVal && !subOpts.includes(subVal) ? [subVal, ...subOpts] : subOpts
           return (
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>
+        <div style={{ display:'grid', gridTemplateColumns:isMobile?'1fr':'1fr 1fr', gap:12 }}>
           <Field label="Category">
             <select style={S.select} value={catVal} onChange={e => { set('category', e.target.value); set('subcategory', EBAY_AU_CATEGORIES[e.target.value]?.[0]||'') }}>
               {catList.map(c => <option key={c}>{c}</option>)}
@@ -531,7 +533,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
 
       {/* Item specifics — vehicle fitment */}
       <Section title="Item specifics" hint="Compatibility buyers filter on.">
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+        <div style={{ display:'grid', gridTemplateColumns:isMobile?'1fr 1fr':'1fr 1fr 1fr', gap:12 }}>
           <Field label="Make">
             <select style={S.select} value={form.make||''} onChange={e => { set('make', e.target.value); set('model', '') }}>
               <option value="">Select Make</option>
@@ -547,7 +549,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
 
       {/* Condition */}
       <Section title="Condition">
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+        <div style={{ display:'grid', gridTemplateColumns:isMobile?'1fr 1fr':'1fr 1fr 1fr', gap:12 }}>
           <Field label="Item condition">
             <select style={S.select} value={form.condition||''} onChange={e => set('condition', e.target.value)}>
               {PART_CONDITIONS.map(c => <option key={c}>{c}</option>)}
@@ -631,7 +633,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
 
       {/* Pricing */}
       <Section title="Pricing" hint="Buy It Now price and your internal cost breakdown.">
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+        <div style={{ display:'grid', gridTemplateColumns:isMobile?'1fr 1fr':'1fr 1fr 1fr', gap:12 }}>
           <Field label={`List Price (${curSym})`}><input style={{ ...S.input, fontWeight:700, fontSize:16 }} type="number" value={form.listPrice||''} onChange={e => set('listPrice', e.target.value)} /></Field>
           <Field label={`Sold Price (${curSym})`}><input style={S.input} type="number" value={form.soldPrice||''} onChange={e => set('soldPrice', e.target.value)} /></Field>
           <Field label={`Shipping charged (${curSym})`}><input style={S.input} type="number" value={form.shippingCharged||''} onChange={e => set('shippingCharged', e.target.value)} /></Field>
@@ -639,7 +641,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
         </div>
         <div style={{ background:'#f9f8f5', border:`1px solid ${C.border}`, borderRadius:10, padding:'14px 16px', marginTop:6 }}>
           <div style={{ fontSize:13, fontWeight:700, color:C.text, marginBottom:12 }}>Cost breakdown (AUD)</div>
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10 }}>
+          <div style={{ display:'grid', gridTemplateColumns:isMobile?'repeat(2,1fr)':'repeat(3,1fr)', gap:10 }}>
             {Object.keys(form.costs||{}).map(k => (
               <Field key={k} label={`${k.charAt(0).toUpperCase()+k.slice(1)} ($)`}>
                 <input style={S.input} type="number" min="0" step="0.01" value={form.costs[k]||0} onChange={e => setCost(k, e.target.value)} />
@@ -651,7 +653,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
               <div style={{ fontSize:13, fontWeight:700, color:C.text }}>Estimated cost basis (auto)</div>
               <div style={{ display:'flex', alignItems:'center', gap:6 }}>
                 <span style={{ fontSize:12, color:C.muted }}>Removal mins</span>
-                <input style={{ ...S.input, width:80, padding:'6px 8px', fontSize:13 }} type="number" min="0" value={form.removalMinutes||''} onChange={e => set('removalMinutes', e.target.value)} placeholder="—" />
+                <input style={{ ...S.input, width:isMobile?90:80, padding:isMobile?'0 8px':'6px 8px', fontSize:isMobile?16:13 }} type="number" min="0" value={form.removalMinutes||''} onChange={e => set('removalMinutes', e.target.value)} placeholder="—" />
               </div>
             </div>
             <div style={{ display:'flex', gap:16, flexWrap:'wrap', fontSize:12, color:C.muted }}>
@@ -756,7 +758,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
             </Field>
           )
           return (
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12, marginTop:12 }}>
+            <div style={{ display:'grid', gridTemplateColumns:isMobile?'1fr 1fr':'1fr 1fr 1fr', gap:12, marginTop:12 }}>
               {axis('locRow', wc.rowLabel, wc.rows)}
               {axis('locBay', wc.bayLabel, wc.bays)}
               {axis('locShelf', wc.shelfLabel, wc.shelves)}
@@ -783,8 +785,10 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
       </Section>
 
       {/* eBay-style sticky action bar */}
-      <div style={{ position:'sticky', bottom:0, marginTop:8, marginLeft:-2, marginRight:-2, background:'rgba(255,255,255,0.92)', backdropFilter:'blur(6px)', borderTop:`1px solid ${C.border}`, padding:'14px 4px', display:'flex', gap:12, justifyContent:'flex-end', alignItems:'center' }}>
-        <span style={{ fontSize:12, color:C.muted, marginRight:'auto' }}>Saved as draft — not published to eBay until you list it.</span>
+      {/* On a phone this bar has to sit ABOVE the app's fixed bottom tab bar,
+          or the Save button hides behind it. */}
+      <div style={{ position:'sticky', bottom: isMobile ? 'calc(84px + env(safe-area-inset-bottom))' : 0, marginTop:8, marginLeft:-2, marginRight:-2, background:'rgba(255,255,255,0.92)', backdropFilter:'blur(6px)', borderTop:`1px solid ${C.border}`, padding: isMobile ? '10px 4px' : '14px 4px', display:'flex', gap: isMobile ? 8 : 12, justifyContent:'flex-end', alignItems:'center', flexWrap:'wrap' }}>
+        {!isMobile && <span style={{ fontSize:12, color:C.muted, marginRight:'auto' }}>Saved as draft — not published to eBay until you list it.</span>}
         <button style={ebayBtn('secondary')} onClick={onCancel}>Cancel</button>
         {part && form.sku && <button style={ebayBtn('secondary')} title="Print a stock label for this part" onClick={() => printLabels({ id: part.id, sku: form.sku, title: form.title, make: form.make, model: form.model, year: form.year, listPrice: form.listPrice }, labels)}>🏷️ Label</button>}
         {part?.status === 'listed' && part?.ebayItemId && !part?.isSample && <a href={ebayItmUrl(part.ebayItemId)} target="_blank" rel="noreferrer" style={{ ...ebayBtn('secondary'), textDecoration:'none', display:'inline-flex', alignItems:'center' }} title="Open this listing on eBay">🔗 View on eBay ↗</a>}
