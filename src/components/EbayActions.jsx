@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { sb } from '../lib/supabase'
 import { C, S, fmt } from '../lib/constants'
 import { publishListings, delistListings, setupEbayLocation, canPublish as checkCanPublish } from '../lib/ebay'
+import useIsMobile from '../hooks/useIsMobile'
 
 const urlFrom = (v) => { if (!v) return null; if (typeof v === 'object') return v.url || v.ebay_url || null; try { const o = JSON.parse(v); return o.url || o.ebay_url || v } catch { return v } }
 const photoOf = (p) => p.primary_photo || urlFrom((p.photos || [])[0])
@@ -12,6 +13,10 @@ const issuesOf = (p) => { const out = []; if (!photoOf(p)) out.push('no photo');
 // publish safety flow (readiness, go-live confirm, ship-from-address prompt) and
 // the de-list confirm (with optional bin), so Inventory just owns the selection.
 export default function EbayActions({ storeId, selectedParts, onDone, onClear }) {
+  // On a phone the app's bottom tab bar is FIXED over the page, so anything that
+  // pins itself to the bottom has to sit above it (and above the home indicator).
+  const isMobile = useIsMobile()
+  const aboveTabBar = isMobile ? 'calc(84px + env(safe-area-inset-bottom))' : 0
   const [canPub, setCanPub] = useState(null)
   const [review, setReview] = useState(false)      // publish review modal
   const [delistOpen, setDelistOpen] = useState(false)
@@ -70,7 +75,7 @@ export default function EbayActions({ storeId, selectedParts, onDone, onClear })
     <>
       {/* Result toast */}
       {result && (
-        <div style={{ position: 'fixed', bottom: 82, left: '50%', transform: 'translateX(-50%)', zIndex: 1050, background: result.error ? '#fef2f2' : '#f0fdf4', border: `1px solid ${result.error ? '#fca5a5' : '#86efac'}`, borderRadius: 10, padding: '10px 16px', fontSize: 13, maxWidth: 560, boxShadow: '0 8px 30px rgba(0,0,0,0.15)' }}>
+        <div style={{ position: 'fixed', bottom: isMobile ? 'calc(96px + env(safe-area-inset-bottom))' : 82, left: '50%', transform: 'translateX(-50%)', zIndex: 1050, background: result.error ? '#fef2f2' : '#f0fdf4', border: `1px solid ${result.error ? '#fca5a5' : '#86efac'}`, borderRadius: 10, padding: '10px 16px', fontSize: 13, maxWidth: 560, boxShadow: '0 8px 30px rgba(0,0,0,0.15)' }}>
           {result.error ? <span style={{ color: C.red }}>✗ {result.error}</span>
            : result.published != null ? <span style={{ color: C.green }}>✓ {result.published} listed live{result.failed ? ` · ${result.failed} failed` : ''}</span>
            : <span style={{ color: C.green }}>✓ {result.delisted ?? result.ended ?? ids.length} de-listed{bin ? ' & binned' : ''}</span>}
@@ -80,16 +85,16 @@ export default function EbayActions({ storeId, selectedParts, onDone, onClear })
 
       {/* Sticky bulk bar */}
       {selectedParts.length > 0 && (
-        <div style={{ position: 'sticky', bottom: 0, zIndex: 40, marginTop: 12, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', background: '#17150F', color: '#fff', borderRadius: 12, padding: '12px 18px', boxShadow: '0 -4px 20px rgba(0,0,0,0.15)' }}>
+        <div style={{ position: 'sticky', bottom: aboveTabBar, zIndex: 40, marginTop: 12, display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 12, flexWrap: 'wrap', background: '#17150F', color: '#fff', borderRadius: 12, padding: isMobile ? '10px 12px' : '12px 18px', boxShadow: '0 -4px 20px rgba(0,0,0,0.15)' }}>
           <span style={{ fontWeight: 700 }}>{selectedParts.length} selected</span>
           {notReady.length > 0 && allInStock && <span style={{ fontSize: 12, color: '#fca5a5' }}>⚠ {notReady.length} not ready (photo/price)</span>}
           <div style={{ flex: 1 }} />
-          <button onClick={onClear} title="Clear the selection" style={{ background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.25)', color: '#fff', borderRadius: 8, padding: '8px 14px', fontSize: 13, cursor: 'pointer' }}>Clear</button>
+          <button onClick={onClear} title="Clear the selection" style={{ background: 'rgba(255,255,255,0.14)', border: '1px solid rgba(255,255,255,0.25)', color: '#fff', borderRadius: 8, padding: isMobile ? '0 16px' : '8px 14px', height: isMobile ? 44 : undefined, fontSize: 13, cursor: 'pointer' }}>Clear</button>
           {mixed ? <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.7)' }}>Select all in-stock (to list) or all listed (to de-list)</span>
            : allListed ? (
-            <button onClick={() => setDelistOpen(true)} disabled={canPub === false} title="End the selected live eBay listings" style={{ background: C.red, border: 'none', color: '#fff', borderRadius: 8, padding: '9px 18px', fontSize: 14, fontWeight: 700, cursor: 'pointer', opacity: canPub === false ? 0.5 : 1 }}>⏹ De-list {selectedParts.length}</button>
+            <button onClick={() => setDelistOpen(true)} disabled={canPub === false} title="End the selected live eBay listings" style={{ background: C.red, border: 'none', color: '#fff', borderRadius: 8, padding: isMobile ? '0 16px' : '9px 18px', height: isMobile ? 44 : undefined, flex: isMobile ? 1 : undefined, fontSize: 14, fontWeight: 700, cursor: 'pointer', opacity: canPub === false ? 0.5 : 1 }}>⏹ De-list {selectedParts.length}</button>
            ) : (
-            <button onClick={() => setReview(true)} disabled={canPub === false} title="Review, then publish the selected parts as live eBay listings" style={{ background: C.accent, border: 'none', color: '#fff', borderRadius: 8, padding: '9px 18px', fontSize: 14, fontWeight: 700, cursor: 'pointer', opacity: canPub === false ? 0.5 : 1 }}>🚀 List {selectedParts.length} to eBay</button>
+            <button onClick={() => setReview(true)} disabled={canPub === false} title="Review, then publish the selected parts as live eBay listings" style={{ background: C.accent, border: 'none', color: '#fff', borderRadius: 8, padding: isMobile ? '0 16px' : '9px 18px', height: isMobile ? 44 : undefined, flex: isMobile ? 1 : undefined, fontSize: 14, fontWeight: 700, cursor: 'pointer', opacity: canPub === false ? 0.5 : 1 }}>🚀 List {selectedParts.length} to eBay</button>
            )}
         </div>
       )}
@@ -141,7 +146,7 @@ export default function EbayActions({ storeId, selectedParts, onDone, onClear })
       {needAddr && (
         <Modal title="📍 Where do you ship from?" sub="eBay needs a ship-from location before it accepts a listing. Enter it once and we'll register it and finish listing." onClose={() => !busy && setNeedAddr(false)} narrow>
           <div style={{ padding: 20 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 10 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '2fr 1fr 1fr', gap: 10 }}>
               <div style={{ gridColumn: '1 / -1' }}><label style={S.label}>Address</label><input style={S.input} value={addr.addressLine1} onChange={e => setAddr(a => ({ ...a, addressLine1: e.target.value }))} placeholder="12 Yard St" /></div>
               <div><label style={S.label}>City / Suburb</label><input style={S.input} value={addr.city} onChange={e => setAddr(a => ({ ...a, city: e.target.value }))} /></div>
               <div><label style={S.label}>State</label><input style={S.input} value={addr.stateOrProvince} onChange={e => setAddr(a => ({ ...a, stateOrProvince: e.target.value.toUpperCase() }))} placeholder="QLD" /></div>

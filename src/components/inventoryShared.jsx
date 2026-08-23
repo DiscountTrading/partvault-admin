@@ -334,4 +334,63 @@ function WeightField({ grams, onChange }) {
 
 // ─── Part Form ─────────────────────────────────────────────────────────────
 
-export { Field, EbayLogo, EbayLink, StatusPill, EBAY_BLUE, EditableTd, BYPART_COLS, BYPART_MINW, Section, AutoInput, descPromptCore, learnCtx, urlFrom, partHasPhoto, compressImg, defCosts, COST_TIERS, AddCarModal, WeightField, generateAIDescription, generateDescriptionOptions, regenerateDescriptionOptions, analysePart }
+// ─── Phone layouts ─────────────────────────────────────────────────────────
+
+// One part as a card, for phone-width screens where the 13-column By-Part grid
+// can't fit. Same data, same actions, stacked: identity → classification →
+// money → actions. Used by BOTH the By-Part list and the expanded By-Car list,
+// so a part looks the same wherever it appears.
+function PartCard({ part: p, cost = 0, selectable = false, selected = false, onToggleSel, onEdit, onPreview, onPrintLabel, onDelete }) {
+  const lp = +p.list_price || 0
+  const profit = lp - cost
+  const qtyLeft = Math.max(0, (+p.quantity || 0) - (+p.quantitySold || 0))
+  // 44pt in both directions — a phone tap target, not a desktop icon button.
+  const iconBtn = { width: 44, height: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 16, cursor: 'pointer', flexShrink: 0, padding: 0 }
+  const money = (label, value, col, bold) => (
+    <div style={{ textAlign: 'center' }}>
+      <div style={{ fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.4px' }}>{label}</div>
+      <div style={{ fontSize: 15, fontWeight: bold ? 800 : 700, color: col }}>{value}</div>
+    </div>
+  )
+  return (
+    <div style={{ background: selected ? '#eef2ff' : (p.deletedAt ? '#fff5f5' : C.card), border: `1px solid ${selected ? C.blue : C.border}`, borderRadius: 12, padding: 12, marginBottom: 10, boxShadow: '0 1px 2px rgba(0,0,0,0.04)' }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+        {selectable && (
+          <input type="checkbox" checked={selected} onChange={() => onToggleSel?.(p.id)} aria-label="Select this part"
+            style={{ width: 22, height: 22, marginTop: 2, flexShrink: 0, cursor: 'pointer' }} />
+        )}
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: C.text, lineHeight: 1.3, wordBreak: 'break-word' }}>
+            {p.isSample ? '🧪 ' : ''}{p.title || 'Untitled'}
+            {+p.quantity > 1 && <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, color: C.accent, background: C.accentSoft, border: `1px solid ${C.border}`, borderRadius: 5, padding: '1px 5px', whiteSpace: 'nowrap' }}>×{qtyLeft}</span>}
+          </div>
+          <div style={{ fontSize: 13, color: C.muted, marginTop: 3 }}>
+            {p.sku || 'no SKU'}{p.partNumber ? ` · #${p.partNumber}` : ''}
+            {[p.make, p.model, p.year].filter(Boolean).length ? ` · ${[p.make, p.model, p.year].filter(Boolean).join(' ')}` : ''}
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 7 }}>
+            <StatusPill part={p} />
+            <span style={{ fontSize: 13, color: C.muted, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.subcategory || p.category || '—'}</span>
+            <span style={{ fontSize: 13 }} title={!partHasPhoto(p) ? 'Add a photo — AI assessment needs one' : (p.ai_assessed ? 'AI assessed' : 'Needs AI')}>
+              {!partHasPhoto(p) ? '📷' : (p.ai_assessed ? '✅' : '⬜')}
+            </span>
+          </div>
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 6, margin: '10px 0', padding: '8px 0', borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}` }}>
+        {money('List', lp > 0 ? `$${lp.toFixed(0)}` : '—', C.text, true)}
+        {money('Cost', `$${cost.toFixed(0)}`, C.red)}
+        {money('Profit', `$${profit.toFixed(0)}`, profit >= 0 ? C.green : C.red)}
+      </div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <button onClick={() => onEdit?.(p)} style={{ ...S.btn('secondary'), flex: 1, height: 44, fontSize: 14, padding: '0 12px' }}>Edit</button>
+        <button onClick={() => onPreview?.(p)} title="Preview the eBay listing" style={iconBtn}>👁</button>
+        {p.sku && <button onClick={() => onPrintLabel?.(p)} title="Print stock label" style={iconBtn}>🏷️</button>}
+        <EbayLink part={p} style={{ ...iconBtn, width: 44 }} />
+        <button onClick={() => onDelete?.(p)} title="Delete this part" style={{ ...iconBtn, background: '#fef2f2', borderColor: `${C.red}44`, color: C.red }}>🗑</button>
+      </div>
+    </div>
+  )
+}
+
+export { PartCard, Field, EbayLogo, EbayLink, StatusPill, EBAY_BLUE, EditableTd, BYPART_COLS, BYPART_MINW, Section, AutoInput, descPromptCore, learnCtx, urlFrom, partHasPhoto, compressImg, defCosts, COST_TIERS, AddCarModal, WeightField, generateAIDescription, generateDescriptionOptions, regenerateDescriptionOptions, analysePart }

@@ -6,14 +6,16 @@ import BulkEdit from './BulkEdit'
 import ListingPreview from './ListingPreview'
 import EbayActions from './EbayActions'
 import useFillHeight from '../hooks/useFillHeight'
+import useIsMobile from '../hooks/useIsMobile'
 
-import { EbayLink, StatusPill, EditableTd, BYPART_COLS, BYPART_MINW, partHasPhoto, AddCarModal, EBAY_BLUE } from './inventoryShared'
+import { EbayLink, StatusPill, EditableTd, BYPART_COLS, BYPART_MINW, partHasPhoto, AddCarModal, EBAY_BLUE, PartCard } from './inventoryShared'
 import PartForm from './PartForm'
 import BulkAIPanel from './BulkAIPanel'
 
 export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDeleteCar, onAddCar, storeId, aiSettings, footer, costing, labels = DEFAULT_LABELS, warehouse = WAREHOUSE_DEFAULTS, refetch, assess, sampleActive = false }) {
   const [viewMode, setViewMode] = useState('parts')
-  const [tableRef, tableH] = useFillHeight(28)  // By-Part grid fills to the viewport bottom
+  const isMobile = useIsMobile()
+  const [tableRef, tableH] = useFillHeight(28)  // By-Part grid fills to the viewport bottom (desktop only — phones scroll the page)
   const [search, setSearch] = useState('')
   const [filterMake, setFilterMake] = useState('')
   const [filterModel, setFilterModel] = useState('')
@@ -130,8 +132,10 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
   const clearFilters = () => { setSearch('');setFilterMake('');setFilterModel('');setFilterYear('');setFilterCat('');setFilterStatus('');setFilterCond('');setPage(0);setCarPage(0) }
   const handleDeleteCar = async group => { await onDeleteCar(group.carId||null, group.parts.map(p=>p.id)); setDeleteCarTarget(null) }
 
-  const inputSm = { ...S.input, height:30, padding:'0 8px', fontSize:12 }
-  const selSm = { ...S.select, height:30, padding:'0 8px', fontSize:12 }
+  // Phones get 44pt-tall controls at 16px type — under 16px iOS Safari zooms the
+  // page the moment a field takes focus, which throws the layout sideways.
+  const inputSm = { ...S.input, height:isMobile?44:30, padding:isMobile?'0 12px':'0 8px', fontSize:isMobile?16:12 }
+  const selSm = { ...S.select, height:isMobile?44:30, padding:isMobile?'0 10px':'0 8px', fontSize:isMobile?16:12 }
 
   // While the store still holds sample data, every NEW part asks whether it's
   // more demo data or the user's first real record — so real inventory never
@@ -236,27 +240,60 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
         </div>
       )}
 
-      <div style={{ display:'flex', gap:8, marginBottom:12, alignItems:'center', flexWrap:'wrap' }}>
-        <h2 style={{ ...S.h1, margin:0 }}>Inventory</h2>
-        <div style={{ width:1, height:22, background:C.border }} />
-        <button style={{ ...S.btn(), background:C.blue }} onClick={() => setShowAddCar(true)}>🚗 Add Car</button>
-        <button style={S.btn()} onClick={() => { setEditingPart(null); setShowForm(true) }}>+ Add Part</button>
-        <div style={{ marginLeft:'auto', display:'flex', gap:8, alignItems:'center' }}>
-          <div style={{ display:'flex', borderRadius:8, overflow:'hidden', border:`1.5px solid ${C.border}` }}>
-            <button onClick={() => setViewMode('parts')} style={{ padding:'5px 14px', fontSize:12, fontWeight:600, background:viewMode==='parts'?C.accent:'white', color:viewMode==='parts'?'white':C.muted, border:'none', cursor:'pointer' }}>📦 By Part</button>
-            <button onClick={() => setViewMode('car')} style={{ padding:'5px 14px', fontSize:12, fontWeight:600, background:viewMode==='car'?C.accent:'white', color:viewMode==='car'?'white':C.muted, border:'none', cursor:'pointer', borderLeft:`1px solid ${C.border}` }}>🚗 By Car</button>
-            <button onClick={() => setViewMode('bulk')} style={{ padding:'5px 14px', fontSize:12, fontWeight:600, background:viewMode==='bulk'?C.accent:'white', color:viewMode==='bulk'?'white':C.muted, border:'none', cursor:'pointer', borderLeft:`1px solid ${C.border}` }}>✏️ Bulk edit</button>
-          </div>
-          {/* eBay listing mode — filters to parts to list (in-stock) or de-list (listed) and turns on row selection. */}
-          <div style={{ display:'flex', borderRadius:8, overflow:'hidden', border:`1.5px solid ${EBAY_BLUE}55` }} title="Select parts to list on / de-list from eBay">
-            {[['off','🛒 eBay','Turn off eBay selection mode'],['list','List','Show in-stock parts and select which to list on eBay'],['delist','De-list','Show live listings and select which to end on eBay']].map(([m,lbl,tip],i) => (
-              <button key={m} onClick={() => { setEbayMode(m); if (m!=='off') setViewMode('parts') }} title={tip}
-                style={{ padding:'5px 12px', fontSize:12, fontWeight:600, background:ebayMode===m?EBAY_BLUE:'white', color:ebayMode===m?'white':(m==='off'?C.muted:EBAY_BLUE), border:'none', cursor:'pointer', borderLeft:i?`1px solid ${EBAY_BLUE}33`:'none' }}>{lbl}</button>
-            ))}
-          </div>
-          <span style={{ fontSize:12, color:C.muted, background:C.panel, borderRadius:10, padding:'2px 10px', fontWeight:600 }}>{totals.count} parts</span>
+      {/* View + eBay-mode switches. One definition each, sized for the viewport:
+          a compact desktop toolbar, or full-width 44pt rows on a phone. */}
+      {(() => {
+      const segBtn = (active, activeBg, idleCol, i, borderCol) => ({
+        flex: isMobile ? 1 : undefined, height: isMobile ? 44 : undefined,
+        padding: isMobile ? '0 4px' : '5px 13px', fontSize: isMobile ? 13 : 12, fontWeight:600,
+        background: active ? activeBg : 'white', color: active ? 'white' : idleCol,
+        border:'none', cursor:'pointer', borderLeft: i ? `1px solid ${borderCol}` : 'none',
+      })
+      const viewSeg = (
+        <div style={{ display:'flex', borderRadius:8, overflow:'hidden', border:`1.5px solid ${C.border}`, width:isMobile?'100%':undefined }}>
+          {[['parts','📦 By Part'],['car','🚗 By Car'],['bulk','✏️ Bulk edit']].map(([m,lbl],i) => (
+            <button key={m} onClick={() => setViewMode(m)} style={segBtn(viewMode===m, C.accent, C.muted, i, C.border)}>{lbl}</button>
+          ))}
         </div>
-      </div>
+      )
+      // eBay listing mode — filters to parts to list (in-stock) or de-list (listed) and turns on row selection.
+      const ebaySeg = (
+        <div style={{ display:'flex', borderRadius:8, overflow:'hidden', border:`1.5px solid ${EBAY_BLUE}55`, width:isMobile?'100%':undefined }} title="Select parts to list on / de-list from eBay">
+          {[['off','🛒 eBay','Turn off eBay selection mode'],['list','List','Show in-stock parts and select which to list on eBay'],['delist','De-list','Show live listings and select which to end on eBay']].map(([m,lbl,tip],i) => (
+            <button key={m} onClick={() => { setEbayMode(m); if (m!=='off') setViewMode('parts') }} title={tip}
+              style={segBtn(ebayMode===m, EBAY_BLUE, m==='off'?C.muted:EBAY_BLUE, i, `${EBAY_BLUE}33`)}>{lbl}</button>
+          ))}
+        </div>
+      )
+      const countChip = <span style={{ fontSize:12, color:C.muted, background:C.panel, borderRadius:10, padding:'2px 10px', fontWeight:600 }}>{totals.count} parts</span>
+
+      return isMobile ? (
+        <div style={{ display:'flex', flexDirection:'column', gap:10, marginBottom:12 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <h2 style={{ ...S.h1, margin:0, fontSize:22 }}>Inventory</h2>
+            <span style={{ marginLeft:'auto' }}>{countChip}</span>
+          </div>
+          <div style={{ display:'flex', gap:8 }}>
+            <button style={{ ...S.btn(), background:C.blue, flex:1, height:44, fontSize:14 }} onClick={() => setShowAddCar(true)}>🚗 Add Car</button>
+            <button style={{ ...S.btn(), flex:1, height:44, fontSize:14 }} onClick={() => { setEditingPart(null); setShowForm(true) }}>+ Add Part</button>
+          </div>
+          {viewSeg}
+          {ebaySeg}
+        </div>
+      ) : (
+        <div style={{ display:'flex', gap:8, marginBottom:12, alignItems:'center', flexWrap:'wrap' }}>
+          <h2 style={{ ...S.h1, margin:0 }}>Inventory</h2>
+          <div style={{ width:1, height:22, background:C.border }} />
+          <button style={{ ...S.btn(), background:C.blue }} onClick={() => setShowAddCar(true)}>🚗 Add Car</button>
+          <button style={S.btn()} onClick={() => { setEditingPart(null); setShowForm(true) }}>+ Add Part</button>
+          <div style={{ marginLeft:'auto', display:'flex', gap:8, alignItems:'center' }}>
+            {viewSeg}
+            {ebaySeg}
+            {countChip}
+          </div>
+        </div>
+      )
+      })()}
 
       {viewMode==='bulk' && <BulkEdit storeId={storeId} parts={parts} onSaved={refetch} />}
 
@@ -282,35 +319,50 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
           </button>
         </div>
       )}
-      {(() => { const activeFilters = [filterMake, filterModel, filterYear, filterCat, filterStatus, filterCond].filter(Boolean).length + (hideSold?1:0) + (newOnly?1:0); return (
-      <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', marginBottom:12 }}>
-        {/* Slim inventory-value chips */}
-        {[['Stock Value',`$${totals.list.toFixed(0)}`,C.blue],['Cost',`$${totals.cost.toFixed(0)}`,C.red],['Est. Profit',`$${totals.profit.toFixed(0)}`,totals.profit>=0?C.green:C.red]].map(([l,v,col])=>(
-          <div key={l} style={{ display:'flex', alignItems:'baseline', gap:7, background:C.card, border:`1px solid ${C.border}`, borderLeft:`3px solid ${col}`, borderRadius:8, padding:'5px 12px' }}>
-            <span style={{ fontSize:10, color:C.muted, textTransform:'uppercase', letterSpacing:'0.5px' }}>{l}</span>
-            <span style={{ fontSize:16, fontWeight:800, color:col }}>{v}</span>
-          </div>
-        ))}
-        <div style={{ width:1, height:22, background:C.border, margin:'0 2px' }} />
-        <input style={{ ...inputSm, flex:2, minWidth:180 }} placeholder="🔍 Search everything..." value={search} onChange={e => { setSearch(e.target.value); setPage(0) }} />
-        <button onClick={() => setShowFilters(v=>!v)} title="Make, model, year, category, status, condition…" style={{ ...S.btn('secondary'), padding:'0 12px', height:30, fontSize:12, display:'flex', alignItems:'center', gap:6 }}>
+      {(() => { const activeFilters = [filterMake, filterModel, filterYear, filterCat, filterStatus, filterCond].filter(Boolean).length + (hideSold?1:0) + (newOnly?1:0)
+      // Slim inventory-value chips. Side-by-side label|value on desktop; on a
+      // phone the label sits above the value so three chips still fit one row.
+      const chips = [['Stock Value',`$${totals.list.toFixed(0)}`,C.blue],['Cost',`$${totals.cost.toFixed(0)}`,C.red],['Est. Profit',`$${totals.profit.toFixed(0)}`,totals.profit>=0?C.green:C.red]].map(([l,v,col])=>(
+        <div key={l} style={{ display:'flex', flexDirection:isMobile?'column':'row', alignItems:isMobile?'flex-start':'baseline', gap:isMobile?0:7, background:C.card, border:`1px solid ${C.border}`, borderLeft:`3px solid ${col}`, borderRadius:8, padding:isMobile?'6px 8px':'5px 12px', minWidth:0 }}>
+          <span style={{ fontSize:isMobile?11:10, color:C.muted, textTransform:'uppercase', letterSpacing:'0.4px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:'100%' }}>{l}</span>
+          <span style={{ fontSize:isMobile?17:16, fontWeight:800, color:col }}>{v}</span>
+        </div>
+      ))
+      const filterBtn = (
+        <button onClick={() => setShowFilters(v=>!v)} title="Make, model, year, category, status, condition…" style={{ ...S.btn('secondary'), padding:'0 12px', height:isMobile?44:30, fontSize:isMobile?14:12, display:'flex', alignItems:'center', justifyContent:'center', gap:6, flex:isMobile?1:undefined }}>
           ⚙ Filters{activeFilters?<span style={{ background:C.accent, color:'#fff', borderRadius:10, padding:'0 6px', fontSize:11, fontWeight:700 }}>{activeFilters}</span>:null} <span style={{ fontSize:10 }}>{showFilters?'▲':'▼'}</span>
         </button>
-        {(activeFilters>0||search) && <button onClick={() => { clearFilters(); }} title="Clear search + all filters" style={{ ...S.btn('secondary'), padding:'0 12px', height:30, fontSize:12 }}>Clear</button>}
-        <span style={{ fontSize:12, color:C.muted }}>{filtered.length} matching</span>
-      </div>
+      )
+      const clearBtn = (activeFilters>0||search) ? <button onClick={() => { clearFilters(); }} title="Clear search + all filters" style={{ ...S.btn('secondary'), padding:'0 14px', height:isMobile?44:30, fontSize:isMobile?14:12 }}>Clear</button> : null
+      const matching = <span style={{ fontSize:isMobile?13:12, color:C.muted, whiteSpace:'nowrap' }}>{filtered.length} matching</span>
+
+      return isMobile ? (
+        <div style={{ display:'flex', flexDirection:'column', gap:10, marginBottom:12 }}>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8 }}>{chips}</div>
+          <input style={{ ...inputSm, width:'100%' }} placeholder="🔍 Search everything..." value={search} onChange={e => { setSearch(e.target.value); setPage(0) }} />
+          <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+            {filterBtn}{clearBtn}{matching}
+          </div>
+        </div>
+      ) : (
+        <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', marginBottom:12 }}>
+          {chips}
+          <div style={{ width:1, height:22, background:C.border, margin:'0 2px' }} />
+          <input style={{ ...inputSm, flex:2, minWidth:180 }} placeholder="🔍 Search everything..." value={search} onChange={e => { setSearch(e.target.value); setPage(0) }} />
+          {filterBtn}{clearBtn}{matching}
+        </div>
       )})()}
 
       {showFilters && (
-      <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:'12px 16px', marginBottom:14 }}>
-        <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+      <div style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:isMobile?'12px':'12px 16px', marginBottom:14 }}>
+        <div style={isMobile ? { display:'grid', gridTemplateColumns:'1fr', gap:10 } : { display:'flex', gap:8, flexWrap:'wrap' }}>
           <select style={{ ...selSm, minWidth:110 }} value={filterMake} onChange={e => { setFilterMake(e.target.value); setFilterModel(''); setPage(0) }}>
             <option value="">All Makes</option>{makes.map(m=><option key={m}>{m}</option>)}
           </select>
           <select style={{ ...selSm, minWidth:110 }} value={filterModel} onChange={e => { setFilterModel(e.target.value); setPage(0) }}>
             <option value="">All Models</option>{models.map(m=><option key={m}>{m}</option>)}
           </select>
-          <input style={{ ...inputSm, width:80 }} placeholder="Year..." value={filterYear} onChange={e => { setFilterYear(e.target.value); setPage(0) }} />
+          <input style={{ ...inputSm, width:isMobile?'100%':80 }} placeholder="Year..." value={filterYear} onChange={e => { setFilterYear(e.target.value); setPage(0) }} />
           <select style={{ ...selSm, minWidth:160 }} value={filterCat} onChange={e => { setFilterCat(e.target.value); setPage(0) }}>
             <option value="">All Categories</option>{CATEGORY_NAMES.map(c=><option key={c}>{c}</option>)}
           </select>
@@ -325,17 +377,17 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
           <select style={{ ...selSm, minWidth:130 }} value={filterCond} onChange={e => { setFilterCond(e.target.value); setPage(0) }}>
             <option value="">All Conditions</option>{PART_CONDITIONS.map(c=><option key={c}>{c}</option>)}
           </select>
-          <label style={{ display:'flex', alignItems:'center', gap:6, fontSize:12, color:C.muted, cursor:'pointer', userSelect:'none' }}>
+          <label style={{ display:'flex', alignItems:'center', gap:isMobile?10:6, minHeight:isMobile?44:undefined, fontSize:isMobile?15:12, color:C.muted, cursor:'pointer', userSelect:'none' }}>
             <input
               type="checkbox"
               checked={hideSold}
               onChange={e => { setHideSold(e.target.checked); if (e.target.checked && filterStatus === 'sold') setFilterStatus(''); setPage(0) }}
-              style={{ cursor:'pointer' }}
+              style={{ cursor:'pointer', width:isMobile?20:undefined, height:isMobile?20:undefined }}
             />
             Hide Sold
           </label>
-          <label style={{ display:'flex', alignItems:'center', gap:6, fontSize:12, color:C.muted, cursor:'pointer', userSelect:'none' }}>
-            <input type="checkbox" checked={newOnly} onChange={e => { setNewOnly(e.target.checked); setPage(0) }} style={{ cursor:'pointer' }} />
+          <label style={{ display:'flex', alignItems:'center', gap:isMobile?10:6, minHeight:isMobile?44:undefined, fontSize:isMobile?15:12, color:C.muted, cursor:'pointer', userSelect:'none' }}>
+            <input type="checkbox" checked={newOnly} onChange={e => { setNewOnly(e.target.checked); setPage(0) }} style={{ cursor:'pointer', width:isMobile?20:undefined, height:isMobile?20:undefined }} />
             🆕 New only
           </label>
           {newOnly && (
@@ -355,10 +407,10 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
         <div>
           <div style={{ display:'flex', gap:8, marginBottom:10, alignItems:'center', flexWrap:'wrap' }}>
             <span style={{ fontSize:13, color:C.muted }}>{carGroups.length} car{carGroups.length!==1?'s':''}</span>
-            {expandedCars.size>0 && <button onClick={() => setExpandedCars(new Set())} style={{ ...S.btn('secondary'), padding:'3px 10px', fontSize:11 }}>Collapse open ({expandedCars.size})</button>}
+            {expandedCars.size>0 && <button onClick={() => setExpandedCars(new Set())} style={{ ...S.btn('secondary'), padding:isMobile?'0 14px':'3px 10px', height:isMobile?44:undefined, fontSize:isMobile?14:11 }}>Collapse open ({expandedCars.size})</button>}
             <span style={{ flex:1 }} />
             <span style={{ fontSize:12, color:C.muted }}>Per page</span>
-            <select value={carPageSize} onChange={e=>{ setCarPageSize(+e.target.value); setCarPage(0) }} style={{ ...selSm, width:70 }}>
+            <select value={carPageSize} onChange={e=>{ setCarPageSize(+e.target.value); setCarPage(0) }} style={{ ...selSm, width:isMobile?'auto':70 }}>
               {[20,25,50,100].map(n=><option key={n} value={n}>{n}</option>)}
             </select>
           </div>
@@ -375,27 +427,43 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
             const aiPending=g.parts.filter(p=>!p.ai_assessed).length
             return (
               <div key={key} style={{ ...S.card, marginBottom:8, padding:0, overflow:'hidden', contentVisibility:'auto', containIntrinsicSize:'auto 64px' }}>
-                <div onClick={() => setExpandedCars(s=>{const n=new Set(s);n.has(key)?n.delete(key):n.add(key);return n})} style={{ display:'flex', alignItems:'center', padding:'12px 16px', cursor:'pointer', background:'#f9f8f5', gap:12, flexWrap:'wrap' }}>
-                  <span style={{ fontSize:18 }}>{isOpen?'▼':'▶'}</span>
-                  <div style={{ flex:1, minWidth:200 }}>
-                    <div style={{ fontWeight:700, fontSize:16, color:C.text }}>{g.make} {g.model} {g.year&&`'${String(g.year).slice(-2)}`}</div>
-                    <div style={{ fontSize:12, color:C.muted, marginTop:2 }}>{g.parts.length} parts · {gStock} in stock · {gListed} listed · {gSold} sold{aiPending>0&&<span style={{ color:C.blue, marginLeft:8 }}>· {aiPending} need AI</span>}</div>
+                {/* Car header: one row on desktop; on a phone the same four blocks
+                    stack (identity → money → actions) so nothing is squeezed. */}
+                <div onClick={() => setExpandedCars(s=>{const n=new Set(s);n.has(key)?n.delete(key):n.add(key);return n})}
+                  style={{ display:'flex', flexDirection:isMobile?'column':'row', alignItems:isMobile?'stretch':'center', padding:isMobile?'12px':'12px 16px', cursor:'pointer', background:'#f9f8f5', gap:isMobile?10:12, flexWrap:'wrap' }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:12, flex:isMobile?undefined:1, minWidth:isMobile?0:200 }}>
+                    <span style={{ fontSize:18 }}>{isOpen?'▼':'▶'}</span>
+                    <div style={{ minWidth:0, flex:1 }}>
+                      <div style={{ fontWeight:700, fontSize:16, color:C.text }}>{g.make} {g.model} {g.year&&`'${String(g.year).slice(-2)}`}</div>
+                      <div style={{ fontSize:isMobile?12.5:12, color:C.muted, marginTop:2 }}>{g.parts.length} parts · {gStock} in stock · {gListed} listed · {gSold} sold{aiPending>0&&<span style={{ color:C.blue, marginLeft:8 }}>· {aiPending} need AI</span>}</div>
+                    </div>
                   </div>
-                  <div style={{ display:'flex', gap:16, flexWrap:'wrap' }}>
+                  <div style={isMobile ? { display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8 } : { display:'flex', gap:16, flexWrap:'wrap' }}>
                     {[['Stock Value',`$${gList.toFixed(0)}`,C.blue],['Cost',`$${gCost.toFixed(0)}`,C.red],['Profit',`$${gProfit.toFixed(0)}`,gProfit>=0?C.green:C.red]].map(([l,v,col])=>(
-                      <div key={l} style={{ textAlign:'center' }}><div style={{ fontSize:10, color:C.muted, textTransform:'uppercase' }}>{l}</div><div style={{ fontSize:15, fontWeight:700, color:col }}>{v}</div></div>
+                      <div key={l} style={{ textAlign:'center' }}><div style={{ fontSize:isMobile?11:10, color:C.muted, textTransform:'uppercase' }}>{l}</div><div style={{ fontSize:15, fontWeight:700, color:col }}>{v}</div></div>
                     ))}
                   </div>
                   <div style={{ display:'flex', gap:8 }}>
                     {(() => { const n = g.parts.filter(p=>!p.ai_assessed && partHasPhoto(p)).length; return (
                       <button onClick={e=>{e.stopPropagation(); if(n) setBulkAIGroup(g)}} disabled={!n}
                         title={n ? `Run AI assessment on the ${n} part${n===1?'':'s'} in this car that need it` : 'All parts in this car are assessed (or have no photo to assess)'}
-                        style={{ ...S.btn(n?'blue':'secondary'), padding:'5px 12px', fontSize:12, flexShrink:0, opacity:n?1:0.45, cursor:n?'pointer':'default' }}>✨ AI{n?` (${n})`:''}</button>
+                        style={{ ...S.btn(n?'blue':'secondary'), padding:isMobile?'0 12px':'5px 12px', height:isMobile?44:undefined, flex:isMobile?1:undefined, fontSize:isMobile?14:12, flexShrink:0, opacity:n?1:0.45, cursor:n?'pointer':'default' }}>✨ AI{n?` (${n})`:''}</button>
                     )})()}
-                    <button onClick={e=>{e.stopPropagation();setDeleteCarTarget(g)}} title="Delete this car and its parts" style={{ ...S.btn('danger'), padding:'5px 12px', fontSize:12, flexShrink:0 }}>🗑 Delete Car</button>
+                    <button onClick={e=>{e.stopPropagation();setDeleteCarTarget(g)}} title="Delete this car and its parts" style={{ ...S.btn('danger'), padding:isMobile?'0 12px':'5px 12px', height:isMobile?44:undefined, flex:isMobile?1:undefined, fontSize:isMobile?14:12, flexShrink:0 }}>🗑 Delete Car</button>
                   </div>
                 </div>
-                {isOpen && (
+                {isOpen && (isMobile ? (
+                  // Same card as the By-Part list — a part looks identical wherever it appears.
+                  <div style={{ borderTop:`1px solid ${C.border}`, padding:'10px 10px 1px', background:C.bg }}>
+                    {g.parts.map(p => (
+                      <PartCard key={p.id} part={p} cost={eff(p)}
+                        onEdit={pt => { setEditingPart(pt); setShowForm(true) }}
+                        onPreview={openPreview}
+                        onPrintLabel={pt => printLabels(pt, labels)}
+                        onDelete={setDeleteTarget} />
+                    ))}
+                  </div>
+                ) : (
                   <div style={{ borderTop:`1px solid ${C.border}` }}>
                     <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
                       <thead>
@@ -436,15 +504,15 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                       </tbody>
                     </table>
                   </div>
-                )}
+                ))}
               </div>
             )
           })}
           {carPages>1&&(
             <div style={{ display:'flex', gap:8, alignItems:'center', justifyContent:'center', marginTop:12 }}>
-              <button disabled={carPage===0} onClick={()=>{ setExpandedCars(new Set()); setCarPage(p=>p-1); window.scrollTo(0,0) }} style={{ ...S.btn('secondary'), padding:'4px 12px', fontSize:12 }}>← Prev</button>
-              <span style={{ fontSize:13, color:C.muted }}>Page {carPage+1} of {carPages} ({carGroups.length} cars)</span>
-              <button disabled={carPage>=carPages-1} onClick={()=>{ setExpandedCars(new Set()); setCarPage(p=>p+1); window.scrollTo(0,0) }} style={{ ...S.btn('secondary'), padding:'4px 12px', fontSize:12 }}>Next →</button>
+              <button disabled={carPage===0} onClick={()=>{ setExpandedCars(new Set()); setCarPage(p=>p-1); window.scrollTo(0,0) }} style={{ ...S.btn('secondary'), padding:isMobile?'0 18px':'4px 12px', height:isMobile?44:undefined, fontSize:isMobile?14:12, opacity:carPage===0?0.45:1 }}>← Prev</button>
+              <span style={{ fontSize:13, color:C.muted }}>Page {carPage+1} of {carPages}{isMobile?'':` (${carGroups.length} cars)`}</span>
+              <button disabled={carPage>=carPages-1} onClick={()=>{ setExpandedCars(new Set()); setCarPage(p=>p+1); window.scrollTo(0,0) }} style={{ ...S.btn('secondary'), padding:isMobile?'0 18px':'4px 12px', height:isMobile?44:undefined, fontSize:isMobile?14:12, opacity:carPage>=carPages-1?0.45:1 }}>Next →</button>
             </div>
           )}
           {!carGroups.length&&<div style={{ textAlign:'center', color:C.muted, padding:60, fontSize:15 }}>No cars match your filters.</div>}
@@ -453,6 +521,50 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
 
       {viewMode==='parts' && (
         <div>
+          {isMobile ? (<>
+            {/* Phone: no column headings to click, so sorting moves into a picker;
+                the 13-column grid becomes one card per part. */}
+            <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:10 }}>
+              <select value={sort.key || ''} onChange={e => { setSort({ key: e.target.value || null, dir:'asc' }); setPage(0) }} title="Sort the list" style={{ ...selSm, flex:1 }}>
+                <option value="">Sort: as captured</option>
+                {Object.keys(SORT_GETTERS).map(k => <option key={k} value={k}>Sort: {k}</option>)}
+              </select>
+              <button onClick={() => setSort(s => ({ ...s, dir: s.dir==='asc'?'desc':'asc' }))} disabled={!sort.key}
+                title={sort.dir==='asc'?'Sorting A→Z / low→high — tap to reverse':'Sorting Z→A / high→low — tap to reverse'}
+                style={{ ...S.btn('secondary'), width:44, height:44, padding:0, fontSize:13, opacity: sort.key?1:0.45 }}>{sort.dir==='asc'?'▲':'▼'}</button>
+            </div>
+            {ebayMode!=='off' && (
+              <label style={{ display:'flex', alignItems:'center', gap:10, minHeight:44, fontSize:15, color:C.text, cursor:'pointer', userSelect:'none' }}>
+                <input type="checkbox" checked={paged.length>0 && paged.every(p=>sel.has(p.id))}
+                  onChange={()=>setSel(s=>{ const n=new Set(s); const all=paged.every(p=>n.has(p.id)); paged.forEach(p=>all?n.delete(p.id):n.add(p.id)); return n })}
+                  style={{ width:22, height:22, cursor:'pointer' }} />
+                Select all on this page{sel.size ? ` · ${sel.size} selected` : ''}
+              </label>
+            )}
+            {paged.map(p => (
+              <PartCard key={p.id} part={p} cost={eff(p)}
+                selectable={ebayMode!=='off'} selected={sel.has(p.id)} onToggleSel={toggleSel}
+                onEdit={pt => { setEditingPart(pt); setShowForm(true) }}
+                onPreview={openPreview}
+                onPrintLabel={pt => printLabels(pt, labels)}
+                onDelete={setDeleteTarget} />
+            ))}
+            {!paged.length && <div style={{ textAlign:'center', color:C.muted, padding:40, fontSize:15 }}>No parts match your filters.</div>}
+            <div style={{ display:'flex', gap:8, alignItems:'center', justifyContent:'center', marginTop:12, flexWrap:'wrap' }}>
+              {pages>1 && (<>
+                <button disabled={page===0} onClick={()=>{ setPage(p=>p-1); window.scrollTo(0,0) }} style={{ ...S.btn('secondary'), height:44, padding:'0 18px', fontSize:14, opacity:page===0?0.45:1 }}>← Prev</button>
+                <span style={{ fontSize:13, color:C.muted }}>Page {page+1} of {pages}</span>
+                <button disabled={page>=pages-1} onClick={()=>{ setPage(p=>p+1); window.scrollTo(0,0) }} style={{ ...S.btn('secondary'), height:44, padding:'0 18px', fontSize:14, opacity:page>=pages-1?0.45:1 }}>Next →</button>
+              </>)}
+              <label style={{ fontSize:13, color:C.muted, display:'flex', alignItems:'center', gap:8, width:'100%', justifyContent:'center' }}>
+                Show
+                <select value={PAGE} onChange={e=>setPageSize(+e.target.value)} title="Records per page" style={{ ...selSm, width:'auto', minWidth:0 }}>
+                  {[20,50,100,250,500].map(n=><option key={n} value={n}>{n}</option>)}
+                </select>
+                per page
+              </label>
+            </div>
+          </>) : (<>
           <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:10, flexWrap:'wrap' }}>
             {pages>1&&(<>
               <button disabled={page===0} onClick={()=>setPage(p=>p-1)} style={{ ...S.btn('secondary'), padding:'4px 12px', fontSize:12 }}>← Prev</button>
@@ -548,6 +660,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
               </tfoot>
             </table>
           </div>
+          </>)}
           {ebayMode!=='off' && <EbayActions storeId={storeId} selectedParts={parts.filter(p=>sel.has(p.id))} onDone={refetch} onClear={()=>setSel(new Set())} />}
         </div>
       )}
