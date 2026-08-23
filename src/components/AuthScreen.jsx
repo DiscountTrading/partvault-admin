@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import QRCode from 'qrcode'
 import { sb, EDGE_FN } from '../lib/supabase'
 import { C, S } from '../lib/constants'
+import { passkeySupported, platformAuthenticatorAvailable, signInWithPasskey, biometricLabel, hasPasskeyHint } from '../lib/passkeys'
 
 const LAST_EMAIL_KEY = 'pv_last_email'
 
@@ -19,6 +20,29 @@ export default function AuthScreen() {
   const [otpSent, setOtpSent] = useState(false)
   const [otp, setOtp] = useState('')
   const [creating, setCreating] = useState(false) // true = creating a new account
+
+  // ── Passkey (Face ID / Touch ID / Windows Hello) ───────────────────────────
+  // A real sign-in, not the old app-lock: the device signs a challenge the
+  // server verifies, so it works on a machine with no session at all.
+  const [passkeyReady, setPasskeyReady] = useState(false)
+  const [passkeyBusy, setPasskeyBusy] = useState(false)
+  useEffect(() => {
+    let alive = true
+    if (!passkeySupported()) return
+    platformAuthenticatorAvailable().then(ok => { if (alive) setPasskeyReady(ok) })
+    return () => { alive = false }
+  }, [])
+  const signInWithFaceId = async () => {
+    setPasskeyBusy(true); setErr('')
+    try {
+      await signInWithPasskey()
+      // The session lands in the shared cookie; App picks it up from onAuthStateChange.
+    } catch (e) {
+      // A cancelled prompt isn't an error worth shouting about.
+      if (!/cancel|abort|NotAllowed/i.test(e.message)) setErr(e.message)
+    }
+    setPasskeyBusy(false)
+  }
 
   // ── Phone approval flow ────────────────────────────────────────────────────
   const [phone, setPhone] = useState(null)   // { rid, code, qr } | 'expired'
@@ -193,6 +217,27 @@ export default function AuthScreen() {
         <div style={{ fontSize:14, color:C.muted, marginTop:6 }}>Australian Car Parts Manager</div>
       </div>
       <div style={S.card}>
+        {/* Face ID first when this device can do it: one tap, nothing typed.
+            Shown above the email field because for a device that has a passkey
+            it IS the sign-in — the rest is the fallback. */}
+        {passkeyReady && (
+          <>
+            <button
+              style={{ ...S.btn(), width:'100%', padding:14, fontSize:15, marginBottom:10, opacity: passkeyBusy ? 0.6 : 1 }}
+              onClick={signInWithFaceId}
+              disabled={passkeyBusy}
+              title={`Sign in with ${biometricLabel()} — no email, no code`}
+            >
+              {passkeyBusy ? '⏳ Waiting for you…' : `🔒 Sign in with ${biometricLabel()}`}
+            </button>
+            {!hasPasskeyHint() && (
+              <div style={{ textAlign:'center', fontSize:12, color:C.muted, marginBottom:14 }}>
+                Set this up once in Settings → Account, on any device you're signed in on.
+              </div>
+            )}
+            <div style={{ textAlign:'center', fontSize:12, color:C.muted, marginBottom:16 }}>— or —</div>
+          </>
+        )}
         <div style={{ marginBottom:16 }}>
           <label style={S.label}>Email</label>
           <input

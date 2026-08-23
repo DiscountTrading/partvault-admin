@@ -5,6 +5,7 @@ import { sb, EDGE_FN, FN_URL } from '../lib/supabase'
 import { buildSkuPreview, SKU_TOKENS, DEFAULT_SKU_TEMPLATE, DEFAULT_SKU_PAD } from '../lib/sku'
 import { MARKETPLACES, MARKETPLACE_LIST } from '../lib/marketplaces'
 import useIsMobile from '../hooks/useIsMobile'
+import { passkeySupported, platformAuthenticatorAvailable, registerPasskey, listPasskeys, deletePasskey, deviceLabel, biometricLabel, rememberPasskeyOnThisDevice, forgetPasskeyOnThisDevice } from '../lib/passkeys'
 import { planState } from '../lib/plan'
 import { startCheckout, openBillingPortal } from '../lib/billing'
 import TeamAccess from './TeamAccess'
@@ -136,6 +137,43 @@ function StatCard({ label, value, color, sub }) {
 export default function Settings({ profile, storeId, onSignOut, refreshStores, onSettingsSaved, parts = [], onChanged, sync, initialTab }) {
   const isMobile = useIsMobile()
   const [tab, setTab] = useState(initialTab?.tab || 'account')
+
+  // ── Passkeys (Face ID / Touch ID / Windows Hello) ──────────────────────────
+  const [passkeyCapable, setPasskeyCapable] = useState(false)
+  const [passkeys, setPasskeys] = useState([])
+  const [passkeyBusy, setPasskeyBusy] = useState(false)
+  const [passkeyMsg, setPasskeyMsg] = useState('')
+  useEffect(() => {
+    let alive = true
+    if (!passkeySupported()) return
+    platformAuthenticatorAvailable().then(ok => {
+      if (!alive) return
+      setPasskeyCapable(ok)
+      if (ok) listPasskeys().then(ks => { if (alive) setPasskeys(ks) }).catch(() => {})
+    })
+    return () => { alive = false }
+  }, [])
+  const addPasskey = async () => {
+    setPasskeyBusy(true); setPasskeyMsg('')
+    try {
+      await registerPasskey(deviceLabel())
+      rememberPasskeyOnThisDevice()
+      setPasskeys(await listPasskeys())
+      setPasskeyMsg('✓ This device can sign you in now')
+    } catch (e) {
+      setPasskeyMsg(/cancel|abort|NotAllowed/i.test(e.message) ? '' : e.message)
+    }
+    setPasskeyBusy(false)
+  }
+  const removePasskey = async (k) => {
+    if (!confirm(`Remove ${k.device_label || 'this device'}? You'll need your email code to sign in on it again.`)) return
+    try {
+      await deletePasskey(k.id)
+      setPasskeys(await listPasskeys())
+      forgetPasskeyOnThisDevice()
+      setPasskeyMsg('✓ Removed')
+    } catch (e) { setPasskeyMsg(e.message) }
+  }
   // Banner deep-links (e.g. "Connect your store →") re-target the open Settings
   // page too — the ts nonce makes each click land even on the same tab twice.
   useEffect(() => { if (initialTab?.tab) setTab(initialTab.tab) }, [initialTab])
@@ -2100,6 +2138,44 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
             </div>
             <button style={{ ...S.btn('danger'), padding: '10px 24px' }} onClick={onSignOut}>Sign Out</button>
           </Section>
+
+          {/* Face ID / Touch ID / Windows Hello — a real passkey, not a screen
+              lock: the device signs a server challenge, so it signs you in on a
+              machine with no session. One passkey covers the admin AND the field
+              app (both live under partvault.app). */}
+          {passkeyCapable && (
+            <Section title={`🔒 Sign in with ${biometricLabel()}`}>
+              <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.7, marginBottom: 14 }}>
+                Set this up on a device once and you can sign in on it with your face or fingerprint —
+                no email, no code, nothing typed. It works on the field app too. Your face never leaves
+                the device; PartVault only ever sees a signature it can check.
+              </div>
+              {passkeys.length > 0 && (
+                <div style={{ marginBottom: 14 }}>
+                  {passkeys.map(k => (
+                    <div key={k.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 0', borderBottom: `1px solid ${C.border}` }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{k.device_label || 'A device'}</div>
+                        <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
+                          Added {new Date(k.created_at).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}
+                          {k.last_used_at ? ` · last used ${new Date(k.last_used_at).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })}` : ' · not used yet'}
+                        </div>
+                      </div>
+                      <button style={{ ...S.btn('secondary'), padding: '6px 14px', fontSize: 12 }}
+                        onClick={() => removePasskey(k)}>Remove</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                <button style={{ ...S.btn(), padding: '10px 20px', opacity: passkeyBusy ? 0.6 : 1 }}
+                  disabled={passkeyBusy} onClick={addPasskey}>
+                  {passkeyBusy ? 'Waiting for you…' : `+ Add this device`}
+                </button>
+                {passkeyMsg && <span style={{ fontSize: 13, color: passkeyMsg.startsWith('✓') ? C.green : C.red }}>{passkeyMsg}</span>}
+              </div>
+            </Section>
+          )}
 
           {/* Store-level config (moved from the eBay tab): plan, name, marketplace, timezone */}
               {/* Subscription plan + AI usage this month */}
