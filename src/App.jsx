@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import useIsMobile from './hooks/useIsMobile'
 import { useAuth } from './hooks/useAuth'
 import { useParts } from './hooks/useParts'
 import { useSales } from './hooks/useSales'
@@ -308,6 +309,8 @@ export default function App() {
   const { sales, refetchSales } = useSales(storeId)
   const { wf, setStage } = useSaleWorkflow(storeId)
   const [tab, setTab] = useState('dashboard')
+  const isMobile = useIsMobile()
+  const [mobMenu, setMobMenu] = useState(false) // phone header overflow menu
   const [toast, setToast] = useState(null)
   const lastFetchRef = useRef(Date.now())
   // Always the current store, so async loads for a previous store can detect they've
@@ -433,8 +436,35 @@ export default function App() {
   // Authenticated but not a member of any store yet — let them join with a code.
   if (!stores || stores.length === 0) return <JoinStore onJoined={(id) => refreshStores(id)} onSignOut={signOut} />
 
+  const goTab = (t) => {
+    const gated = t.id === 'analytics' && !plan.can('analytics')
+    if (gated) { alert(`${t.label} is part of the Pro plan. Upgrade to unlock analytics.`); return }
+    setTab(t.id); setMobMenu(false)
+  }
+
   return (
     <div style={S.app}>
+      {isMobile ? (
+        // ── Phone chrome: compact header + a fixed bottom tab bar ──────────────
+        <div style={{ background: C.headerBg, position: 'sticky', top: 0, zIndex: 100, display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', paddingTop: 'calc(10px + env(safe-area-inset-top))' }}>
+          <div style={{ color: '#fff', fontWeight: 800, fontSize: 16, fontFamily: "'Inter Tight',system-ui,sans-serif", whiteSpace: 'nowrap' }}>⚙ PartVault</div>
+          <div style={{ flex: 1, minWidth: 0 }}><StoreSwitcher stores={stores} activeStoreId={activeStoreId} setActiveStore={setActiveStore} refreshStores={refreshStores} /></div>
+          <SyncBadge status={syncStatus} />
+          <button onClick={() => setMobMenu(o => !o)} aria-label="Menu" style={{ background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.2)', color: '#fff', borderRadius: 8, width: 40, height: 40, fontSize: 18, cursor: 'pointer' }}>⋯</button>
+          {mobMenu && (
+            <>
+              <div onClick={() => setMobMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 110 }} />
+              <div style={{ position: 'absolute', top: '100%', right: 8, marginTop: 4, background: '#fff', border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: '0 12px 40px rgba(0,0,0,0.22)', zIndex: 111, minWidth: 210, overflow: 'hidden' }}>
+                <div style={{ padding: '9px 14px', fontSize: 11.5, color: C.muted, borderBottom: `1px solid ${C.border}` }}>v{APP_VERSION} · {totalCount} parts</div>
+                {ebayUsername && <a href={`https://www.${getActiveMarketplace()?.ebayDomain || 'ebay.com.au'}/usr/${encodeURIComponent(ebayUsername)}`} target="_blank" rel="noopener noreferrer" onClick={() => setMobMenu(false)} style={{ display: 'block', padding: '12px 14px', fontSize: 14, color: C.text, borderBottom: `1px solid ${C.border}` }}>🛒 View eBay store ↗</a>}
+                <a href="https://app.partvault.app" target="partvault-app" onClick={() => setMobMenu(false)} style={{ display: 'block', padding: '12px 14px', fontSize: 14, color: C.text, borderBottom: `1px solid ${C.border}` }}>📱 Field App ↗</a>
+                <button onClick={() => { refetch(); setMobMenu(false) }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '12px 14px', fontSize: 14, color: C.text, background: 'none', border: 'none', borderBottom: `1px solid ${C.border}`, cursor: 'pointer' }}>↻ Refresh</button>
+                <button onClick={() => { signOut(); setMobMenu(false) }} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '12px 14px', fontSize: 14, color: C.red, background: 'none', border: 'none', cursor: 'pointer' }}>Sign Out</button>
+              </div>
+            </>
+          )}
+        </div>
+      ) : (
       <nav style={S.nav}>
         <div style={S.logo}>⚙ PartVault Admin</div>
         <StoreSwitcher stores={stores} activeStoreId={activeStoreId} setActiveStore={setActiveStore} refreshStores={refreshStores} />
@@ -467,6 +497,7 @@ export default function App() {
           <button style={{ background: 'rgba(220,38,38,0.2)', border: '1px solid rgba(220,38,38,0.3)', color: 'rgba(255,255,255,0.7)', borderRadius: 6, padding: '6px 10px', cursor: 'pointer', fontSize: 12 }} onClick={signOut}>Sign Out</button>
         </div>
       </nav>
+      )}
       {plan.tier === 'trial' && !plan.expired && (
         <div style={{ background: '#eff6ff', borderBottom: '1px solid #bfdbfe', padding: '8px 24px', fontSize: 13, color: '#1d4ed8', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <span>✨ Free trial — {Math.max(plan.trialDaysLeft ?? 0, 0)} day{(plan.trialDaysLeft ?? 0) === 1 ? '' : 's'} left with full access.</span>
@@ -503,7 +534,7 @@ export default function App() {
           </button>
         </div>
       )}
-      <main style={S.main} key={marketplaceId}>{/* re-mounts content when the active store's currency changes */}
+      <main style={isMobile ? { padding: '14px 12px calc(80px + env(safe-area-inset-bottom))' } : S.main} key={marketplaceId}>{/* re-mounts content when the active store's currency changes */}
         {tab === 'dashboard' && <Dashboard parts={parts} sales={sales} costing={costingFull} inventory={inventory} listingStats={listingStats} storeId={storeId} onDrill={drillToInsights} onSeeSales={() => setTab('sales')} />}
         {tab === 'sales' && <Sales sales={sales} parts={parts} costing={costingFull} wf={wf} setStage={setStage} />}
         {tab === 'inventory' && (
@@ -527,9 +558,26 @@ export default function App() {
       {/* Floating context-aware help on every page (hidden on the Help tab itself) */}
       {tab !== 'help' && <FloatingHelp storeId={storeId} context={TABS.find(t => t.id === tab)?.label || tab} onOpenHelp={() => setTab('help')} />}
       {toast && (
-        <div style={{ position: 'fixed', bottom: 24, right: 24, background: toast.color, color: '#fff', padding: '12px 22px', borderRadius: 10, fontSize: 14, fontWeight: 600, zIndex: 1000, boxShadow: '0 8px 30px rgba(0,0,0,0.2)' }}>
+        <div style={{ position: 'fixed', bottom: isMobile ? 84 : 24, right: isMobile ? '50%' : 24, transform: isMobile ? 'translateX(50%)' : 'none', background: toast.color, color: '#fff', padding: '12px 22px', borderRadius: 10, fontSize: 14, fontWeight: 600, zIndex: 1000, boxShadow: '0 8px 30px rgba(0,0,0,0.2)', whiteSpace: 'nowrap' }}>
           {toast.msg}
         </div>
+      )}
+
+      {/* Fixed bottom tab bar — the phone's primary navigation */}
+      {isMobile && (
+        <nav style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 90, background: C.headerBg, display: 'flex', borderTop: '1px solid rgba(255,255,255,0.12)', paddingBottom: 'env(safe-area-inset-bottom)' }}>
+          {TABS.map(t => {
+            const on = tab === t.id
+            const gated = t.id === 'analytics' && !plan.can('analytics')
+            return (
+              <button key={t.id} onClick={() => goTab(t)}
+                style={{ flex: 1, minWidth: 0, background: 'none', border: 'none', cursor: 'pointer', padding: '8px 2px 7px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, color: on ? C.accentOnDark : 'rgba(255,255,255,0.6)', opacity: gated ? 0.5 : 1 }}>
+                <span style={{ fontSize: 19, lineHeight: 1 }}>{t.icon}</span>
+                <span style={{ fontSize: 10, fontWeight: on ? 700 : 500, whiteSpace: 'nowrap' }}>{t.label}{gated ? ' 🔒' : ''}</span>
+              </button>
+            )
+          })}
+        </nav>
       )}
     </div>
   )

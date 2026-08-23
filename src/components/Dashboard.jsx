@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { C, S, fmt, pct, totalCost, postageCostFor, estimatePostage, costsEnabled, partEffectiveCost, bucketByAge, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS, CATEGORY_NAMES } from '../lib/constants'
 import useFitScale from '../hooks/useFitScale'
+import useIsMobile from '../hooks/useIsMobile'
 
 function StatCard({ label, value, sub, color, title, warn, onWarnClick }) {
   return (
@@ -19,6 +20,7 @@ function StatCard({ label, value, sub, color, title, warn, onWarnClick }) {
 }
 
 export default function Dashboard({ parts, sales = [], costing, inventory, listingStats, onDrill, onSeeSales, storeId }) {
+  const isMobile = useIsMobile()
   // Fit the whole dashboard to the viewport height — "at a glance", no scroll,
   // on any subscriber's screen size.
   const { wrapRef, contentRef, wrapStyle, contentStyle } = useFitScale({ bottomMargin: 34, minScale: 0.55 })
@@ -145,8 +147,9 @@ export default function Dashboard({ parts, sales = [], costing, inventory, listi
   const agedValue = aged.reduce((a,p) => a + (+p.listPrice || +p.list_price || 0), 0)
 
   return (
-    <div ref={wrapRef} style={wrapStyle}>
-    <div ref={contentRef} style={contentStyle}>
+    <div ref={isMobile ? null : wrapRef} style={isMobile ? undefined : wrapStyle}>
+    {/* Fit-to-one-screen scaling is a desktop nicety; on a phone we let it scroll. */}
+    <div ref={isMobile ? null : contentRef} style={isMobile ? undefined : contentStyle}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10, paddingBottom:8, borderBottom:`1px solid ${C.border}` }}>
         <h2 style={{ ...S.h1, margin:0 }}>📊 Dashboard</h2>
         <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
@@ -165,7 +168,7 @@ export default function Dashboard({ parts, sales = [], costing, inventory, listi
           </div>
         </div>
       </div>
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(5,1fr)', gap:14, marginBottom:12 }}>
+      <div style={{ display:'grid', gridTemplateColumns:isMobile?'repeat(2,1fr)':'repeat(5,1fr)', gap:isMobile?8:14, marginBottom:12 }}>
         <StatCard label="Total Parts" value={active.length} sub={`${inStock.length} in stock`} />
         <StatCard label="Listed on eBay" value={listed.length} color={C.accent}
           sub={listedSub} title={listedTitle} warn={listedWarn}
@@ -174,7 +177,7 @@ export default function Dashboard({ parts, sales = [], costing, inventory, listi
         <StatCard label="Net sales" value={fmt(netSales)} color={C.green} sub={`after refunds & fees · ${periodLabel}`} />
         <StatCard label="Profit" value={fmt(profit)} color={margin>30?C.green:C.yellow} sub={pct(margin)+' margin'+(cogsEstimated?' · incl. est. cost':'')} />
       </div>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, marginBottom:14 }}>
+      <div style={{ display:'grid', gridTemplateColumns:isMobile?'1fr':'1fr 1fr', gap:isMobile?10:14, marginBottom:14 }}>
         <div style={{ ...S.card, padding:14 }}>
           <h2 style={{ ...S.h2, marginBottom:8 }}>Stock by Category</h2>
           {catBreak.slice(0,8).map(({cat,count})=>{
@@ -257,7 +260,7 @@ export default function Dashboard({ parts, sales = [], costing, inventory, listi
           </div>
         </div>
       </div>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, alignItems:'start' }}>
+      <div style={{ display:'grid', gridTemplateColumns:isMobile?'1fr':'1fr 1fr', gap:isMobile?10:14, alignItems:'start' }}>
         <div style={{ ...S.card, padding:14 }}>
           <h2 style={{ ...S.h2, marginBottom:8 }}>P&L Summary <span style={{ fontWeight:400, fontSize:12, color:C.muted }}>· {periodLabel}{cogsEstimated?' · cost incl. estimates':''}</span></h2>
           <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:12, rowGap:10 }}>
