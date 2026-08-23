@@ -1912,7 +1912,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
           horizontal scroller of 44pt pills rather than a wrapping, cramped row. */}
       <div className="pv-scroll" style={isMobile
         ? { display: 'flex', gap: 8, marginBottom: 16, overflowX: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: 6 }
-        : { display: 'flex', gap: 4, marginBottom: 20, borderBottom: `2px solid ${C.border}`, paddingBottom: 0 }}>
+        : { display: 'flex', gap: 4, marginBottom: 20, borderBottom: `2px solid ${C.border}`, paddingBottom: 0, overflowX: 'auto' }}>
         {SETTING_TABS.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} style={isMobile ? {
             background: tab === t.id ? C.accent : '#fff', cursor: 'pointer', flexShrink: 0,
@@ -1921,7 +1921,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
             color: tab === t.id ? '#fff' : C.text, whiteSpace: 'nowrap',
           } : {
             background: 'none', border: 'none', cursor: 'pointer',
-            padding: '8px 18px', fontSize: 13, fontWeight: tab === t.id ? 700 : 500,
+            padding: '8px 18px', fontSize: 13, fontWeight: tab === t.id ? 700 : 500, flexShrink: 0, whiteSpace: 'nowrap',
             color: tab === t.id ? C.accent : C.muted,
             borderBottom: tab === t.id ? `2px solid ${C.accent}` : '2px solid transparent',
             marginBottom: -2, transition: 'all .15s'

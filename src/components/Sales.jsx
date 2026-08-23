@@ -569,6 +569,9 @@ function SaleActions({ s, p, wf, setStage }) {
 
 export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, setStage = () => {} }) {
   const isMobile = useIsMobile()
+  // The graph|table split needs real width for BOTH columns; below ~900px (a
+  // tablet, or a half-width laptop window) it stacks instead of squeezing.
+  const isNarrow = useIsMobile(900)
   const [leftRef, leftH] = useMatchHeight()  // sales table column matches the graphs column height
   const [period, setPeriod] = useState(() => {
     // Default to whatever period the user last left the Sales page on.
@@ -811,7 +814,7 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
       <h2 style={{ ...S.h1, marginBottom: 4 }}>Recent Sales</h2>
       <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>Every eBay sale, newest first — what each item made after fees. Item &amp; SKU come from your inventory record (matched by eBay item number); sales with no inventory match are tagged <strong>eBay only</strong>.</div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(300px, 440px) 1fr', gap: 16, alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isNarrow ? '1fr' : 'minmax(300px, 440px) 1fr', gap: 16, alignItems: 'start' }}>
       {/* LEFT — performance graph, promoted listings, and the period totals */}
       <div ref={leftRef}>
       {/* Performance overview — trend + comparison against the previous period (compact). Always at the top. */}
@@ -873,7 +876,10 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
 
       {/* RIGHT — the full sales table; matches the graphs column's height so both
           columns end together, and scrolls internally to show all rows. */}
-      <div style={{ display: 'flex', flexDirection: 'column', height: isMobile ? undefined : (leftH || undefined), minHeight: isMobile ? undefined : 360 }}>
+      {/* minWidth:0 — a grid item's automatic minimum size is its CONTENT, so the
+          1000px-wide sales table pushed this column (and the page) wider than the
+          viewport on anything narrower than a desktop. */}
+      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, height: isNarrow ? undefined : (leftH || undefined), minHeight: isNarrow ? undefined : 360 }}>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
         <div style={{ fontSize: 13, color: C.muted, fontWeight: 600 }}>{periodTitle} · {rows.length} sale{rows.length === 1 ? '' : 's'}</div>
         <div style={{ flex: 1 }} />
