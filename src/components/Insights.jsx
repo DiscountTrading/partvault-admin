@@ -3,6 +3,7 @@ import { sb, EDGE_FN } from '../lib/supabase'
 import { C, S, fmt, partEffectiveCost } from '../lib/constants'
 import { getActiveMarketplace } from '../lib/marketplaces'
 import useFillHeight from '../hooks/useFillHeight'
+import useIsMobile from '../hooks/useIsMobile'
 
 const DEAD_DAYS = 90
 const DEAD_MARGIN = 10
@@ -82,13 +83,15 @@ function Card({ label, value, sub }) {
       <div style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>{label}</div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 18, fontWeight: 800, color: C.text }}>{value}</span>
-        {sub && <span style={{ fontSize: 10, color: C.muted }}>{sub}</span>}
+        {sub && <span style={{ fontSize: 11, color: C.muted }}>{sub}</span>}
       </div>
     </div>
   )
 }
 
 export default function Insights({ storeId, initial, parts = [], costing = {} }) {
+  const isMobile = useIsMobile()
+  const [filterSheet, setFilterSheet] = useState(false)   // phone: the column filters live in a sheet, not in table headings
   const [tableRef, tableH] = useFillHeight(52)  // fill to viewport; the "showing N" note sits below
   const [allRows, setAllRows] = useState([])
   const [loading, setLoading] = useState(true)
@@ -240,6 +243,7 @@ export default function Insights({ storeId, initial, parts = [], costing = {} })
     return f !== ''
   }
   const anyFilter = segment !== 'all' || COLS.some(c => active(c.key))
+  const filterCount = COLS.filter(c => active(c.key)).length
 
   const summary = useMemo(() => {
     const unsold = rows.filter(isUnsold)
@@ -423,6 +427,70 @@ export default function Insights({ storeId, initial, parts = [], costing = {} })
     return v ?? ''
   }
 
+  // One definition of a column's filter control, used by the desktop heading
+  // popover AND the phone filter sheet — so filtering works the same either way.
+  const filterEditor = (col, onDone, { hideDone } = {}) => {
+    if (col.type === 'text') return (
+      <div>
+        <input autoFocus={!isMobile} value={filters[col.key] || ''} onChange={e => setFilter(col.key, e.target.value)} onKeyDown={e => e.key === 'Enter' && onDone()}
+          placeholder="Contains…" style={{ ...S.input, marginBottom: 8, height: isMobile ? 44 : undefined, fontSize: isMobile ? 16 : 13 }} />
+        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+          <button onClick={() => clearFilter(col.key)} style={{ ...S.btn('secondary'), padding: isMobile ? '0 14px' : '5px 10px', height: isMobile ? 44 : undefined, fontSize: 12 }}>Clear</button>
+          {!hideDone && <button onClick={onDone} style={{ ...S.btn('primary'), padding: isMobile ? '0 14px' : '5px 10px', height: isMobile ? 44 : undefined, fontSize: 12 }}>Done</button>}
+        </div>
+      </div>
+    )
+    if (col.type === 'status') return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <button onClick={() => clearFilter(col.key)} style={{ textAlign: 'left', background: !active(col.key) ? '#fff4ef' : '#fff', border: 'none', padding: isMobile ? '0 10px' : '7px 10px', minHeight: isMobile ? 44 : undefined, borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600, color: C.text }}>All</button>
+        {statuses.map(s => (
+          <button key={s} onClick={() => { setFilter(col.key, s); onDone() }}
+            style={{ textAlign: 'left', background: filters[col.key] === s ? '#fff4ef' : '#fff', border: 'none', padding: isMobile ? '0 10px' : '7px 10px', minHeight: isMobile ? 44 : undefined, borderRadius: 6, cursor: 'pointer', fontSize: 13, color: C.text }}>{s}</button>
+        ))}
+      </div>
+    )
+    if (col.type === 'range') return (
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+          <input type="number" autoFocus={!isMobile} value={filters[col.key]?.min ?? ''} onChange={e => setFilter(col.key, { ...filters[col.key], min: e.target.value })}
+            placeholder="min" style={{ ...S.input, marginBottom: 0, width: isMobile ? undefined : 64, flex: isMobile ? 1 : undefined, height: isMobile ? 44 : undefined, padding: isMobile ? '0 10px' : '6px 8px', fontSize: isMobile ? 16 : 13 }} />
+          <span style={{ color: C.muted }}>–</span>
+          <input type="number" value={filters[col.key]?.max ?? ''} onChange={e => setFilter(col.key, { ...filters[col.key], max: e.target.value })}
+            placeholder="max" style={{ ...S.input, marginBottom: 0, width: isMobile ? undefined : 64, flex: isMobile ? 1 : undefined, height: isMobile ? 44 : undefined, padding: isMobile ? '0 10px' : '6px 8px', fontSize: isMobile ? 16 : 13 }} />
+        </div>
+        <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>Blank = no limit</div>
+        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+          <button onClick={() => clearFilter(col.key)} style={{ ...S.btn('secondary'), padding: isMobile ? '0 14px' : '5px 10px', height: isMobile ? 44 : undefined, fontSize: 12 }}>Clear</button>
+          {!hideDone && <button onClick={onDone} style={{ ...S.btn('primary'), padding: isMobile ? '0 14px' : '5px 10px', height: isMobile ? 44 : undefined, fontSize: 12 }}>Done</button>}
+        </div>
+      </div>
+    )
+    return null
+  }
+
+  // Phone: one card per part, carrying the SAME cells the table shows — identity
+  // on top, then every visible metric as a labelled figure.
+  const insightCard = (r) => {
+    const metrics = visCols.filter(c => !['sku', 'title', 'status'].includes(c.key))
+    return (
+      <div key={r.part_id} style={{ background: isDead(r) ? '#fff7ed' : '#fff', border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, marginBottom: 10 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: C.text, lineHeight: 1.3, wordBreak: 'break-word' }}>{r.title || 'Untitled'}</div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 }}>
+          <span style={{ fontSize: 13, color: C.muted }}>{r.sku || 'no SKU'}</span>
+          {r.status && <span style={{ ...S.pill(C.muted), fontSize: 11 }}>{r.status}</span>}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.border}` }}>
+          {metrics.map(col => (
+            <div key={col.key}>
+              <div style={{ fontSize: 11, color: C.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{col.label}</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{cell(r, col)}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
@@ -436,9 +504,9 @@ export default function Insights({ storeId, initial, parts = [], costing = {} })
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 12, color: C.muted, flexWrap: 'wrap', marginBottom: 12 }}>
         <span>Include:</span>
         {[['partvault', 'PartVault'], ['ebay', 'eBay API'], ['history', 'Imported history']].map(([k, label]) => (
-          <label key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}
+          <label key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: isMobile ? 8 : 4, minHeight: isMobile ? 44 : undefined, fontSize: isMobile ? 14 : undefined, cursor: 'pointer' }}
             title={k === 'ebay' ? "Parts synced from eBay listings" : k === 'history' ? 'Parts from the CSV order-history import' : 'Parts captured in PartVault'}>
-            <input type="checkbox" checked={srcSel[k]} onChange={e => setSrcSel(s => ({ ...s, [k]: e.target.checked }))} />
+            <input type="checkbox" checked={srcSel[k]} onChange={e => setSrcSel(s => ({ ...s, [k]: e.target.checked }))} style={isMobile ? { width: 20, height: 20 } : undefined} />
             {label}
           </label>
         ))}
@@ -448,7 +516,7 @@ export default function Insights({ storeId, initial, parts = [], costing = {} })
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
         {SEGMENTS.map(s => (
           <button key={s.id} onClick={() => pickSegment(s.id)}
-            style={{ padding: '7px 14px', borderRadius: 20, border: `1.5px solid ${segment === s.id ? C.accent : C.border}`, background: segment === s.id ? C.accent : '#fff', color: segment === s.id ? '#fff' : C.muted, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+            style={{ padding: isMobile ? '0 16px' : '7px 14px', height: isMobile ? 44 : undefined, borderRadius: 20, border: `1.5px solid ${segment === s.id ? C.accent : C.border}`, background: segment === s.id ? C.accent : '#fff', color: segment === s.id ? '#fff' : C.muted, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
             {s.label}
           </button>
         ))}
@@ -456,7 +524,7 @@ export default function Insights({ storeId, initial, parts = [], costing = {} })
           title="Show only parts SOLD within this window — e.g. Best performers or movers over the last 30 days.">
           <span style={{ fontWeight: 600 }}>Sold:</span>
           <select value={soldWithin} onChange={e => setSoldWithin(+e.target.value)}
-            style={{ fontSize: 12, padding: '6px 8px', borderRadius: 8, border: `1.5px solid ${soldWithin ? C.accent : C.border}`, background: soldWithin ? C.accent + '12' : '#fff', color: C.text, fontWeight: 600, cursor: 'pointer' }}>
+            style={{ fontSize: isMobile ? 16 : 12, padding: isMobile ? '0 10px' : '6px 8px', height: isMobile ? 44 : undefined, borderRadius: 8, border: `1.5px solid ${soldWithin ? C.accent : C.border}`, background: soldWithin ? C.accent + '12' : '#fff', color: C.text, fontWeight: 600, cursor: 'pointer' }}>
             <option value={0}>All time</option>
             <option value={7}>Last 7 days</option>
             <option value={30}>Last 30 days</option>
@@ -489,7 +557,7 @@ export default function Insights({ storeId, initial, parts = [], costing = {} })
         {/* Saved views — always present */}
         <div style={{ position: 'relative' }}>
           <button onClick={() => setViewMenuOpen(o => !o)}
-            style={{ ...S.btn('secondary'), padding: '7px 12px', fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6, fontStyle: currentViewLabel === 'Custom filter' ? 'italic' : 'normal' }}>
+            style={{ ...S.btn('secondary'), padding: isMobile ? '0 14px' : '7px 12px', height: isMobile ? 44 : undefined, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6, fontStyle: currentViewLabel === 'Custom filter' ? 'italic' : 'normal' }}>
             {currentViewLabel} <span style={{ opacity: 0.6 }}>▾</span>
           </button>
           {viewMenuOpen && (
@@ -513,14 +581,57 @@ export default function Insights({ storeId, initial, parts = [], costing = {} })
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', width: isMobile ? '100%' : undefined }}>
           <input value={viewName} onChange={e => setViewName(e.target.value)} placeholder="Save view as…" onKeyDown={e => e.key === 'Enter' && saveView()}
-            style={{ ...S.input, marginBottom: 0, padding: '7px 10px', width: 130 }} />
-          <button onClick={saveView} disabled={saving || !viewName.trim()} style={{ ...S.btn('primary'), padding: '7px 12px', fontSize: 12, opacity: (saving || !viewName.trim()) ? 0.6 : 1 }}>Save</button>
+            style={{ ...S.input, marginBottom: 0, padding: isMobile ? '0 12px' : '7px 10px', height: isMobile ? 44 : undefined, fontSize: isMobile ? 16 : undefined, width: isMobile ? undefined : 130, flex: isMobile ? 1 : undefined }} />
+          <button onClick={saveView} disabled={saving || !viewName.trim()} style={{ ...S.btn('primary'), padding: isMobile ? '0 16px' : '7px 12px', height: isMobile ? 44 : undefined, fontSize: isMobile ? 14 : 12, opacity: (saving || !viewName.trim()) ? 0.6 : 1 }}>Save</button>
         </div>
       </div>
 
-      {loading ? <div style={{ color: C.muted, padding: 20 }}>Loading…</div> : (
+      {loading ? <div style={{ color: C.muted, padding: 20 }}>Loading…</div> : isMobile ? (
+        <>
+          {/* Sorting and filtering live in the headings on desktop; a phone has no
+              headings to tap, so they move into a picker and a sheet. */}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+            <select value={sort.key} onChange={e => setSort({ key: e.target.value, dir: 'desc' })} title="Sort the list" style={{ ...S.select, height: 44, padding: '0 10px', fontSize: 16, flex: 1 }}>
+              {visCols.map(c => <option key={c.key} value={c.key}>Sort: {c.label}</option>)}
+            </select>
+            <button onClick={() => setSort(s => ({ ...s, dir: s.dir === 'asc' ? 'desc' : 'asc' }))} title="Reverse the sort order"
+              style={{ ...S.btn('secondary'), width: 44, height: 44, padding: 0, fontSize: 13 }}>{sort.dir === 'asc' ? '▲' : '▼'}</button>
+            <button onClick={() => setFilterSheet(true)} style={{ ...S.btn('secondary'), height: 44, padding: '0 14px', fontSize: 14, display: 'flex', alignItems: 'center', gap: 6 }}>
+              ⚙ Filters{filterCount ? <span style={{ background: C.accent, color: '#fff', borderRadius: 10, padding: '0 6px', fontSize: 11, fontWeight: 700 }}>{filterCount}</span> : null}
+            </button>
+          </div>
+          {shown.length === 0
+            ? <div style={{ padding: 24, textAlign: 'center', color: C.muted, background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>No parts in this view.</div>
+            : shown.map(insightCard)}
+          {filterSheet && (
+            <div onClick={() => setFilterSheet(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(23,21,15,0.45)', zIndex: 1000, display: 'flex', alignItems: 'flex-end' }}>
+              <div onClick={e => e.stopPropagation()} style={{ background: '#fff', width: '100%', maxHeight: '85vh', borderRadius: '16px 16px 0 0', display: 'flex', flexDirection: 'column' }}>
+                <div style={{ padding: '14px 16px', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>Filters</div>
+                  <div style={{ flex: 1 }} />
+                  {anyFilter && <button onClick={removeAll} style={{ ...S.btn('secondary'), height: 40, padding: '0 12px', fontSize: 13 }}>Remove all</button>}
+                  <button onClick={() => setFilterSheet(false)} aria-label="Close" style={{ background: 'none', border: 'none', fontSize: 22, color: C.muted, cursor: 'pointer', width: 44, height: 44 }}>✕</button>
+                </div>
+                <div style={{ overflowY: 'auto', padding: 16, paddingBottom: 'calc(16px + env(safe-area-inset-bottom))' }}>
+                  {visCols.filter(c => c.type !== 'date').map(col => (
+                    <div key={col.key} style={{ marginBottom: 18 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: active(col.key) ? C.accent : C.text, marginBottom: 6 }}>{col.label}</div>
+                      {filterEditor(col, () => setFilterSheet(false), { hideDone: true })}
+                    </div>
+                  ))}
+                </div>
+                <div style={{ padding: '12px 16px calc(12px + env(safe-area-inset-bottom))', borderTop: `1px solid ${C.border}` }}>
+                  <button onClick={() => setFilterSheet(false)} style={{ ...S.btn('primary'), width: '100%', height: 48, fontSize: 15 }}>
+                    Show {visible.length} {visible.length === 1 ? 'part' : 'parts'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
         <div ref={tableRef} className="pv-scroll" style={{ overflowX: 'scroll', overflowY: 'auto', maxHeight: tableH || '60vh', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>
           <table style={{ width: '100%', minWidth: visCols.reduce((s, c) => s + c.w, 0), borderCollapse: 'collapse', fontSize: 13, tableLayout: 'fixed', zoom: 'var(--table-zoom, 1)' }}>
             <colgroup>{visCols.map(c => <col key={c.key} style={{ width: c.w }} />)}</colgroup>
@@ -546,41 +657,7 @@ export default function Insights({ storeId, initial, parts = [], costing = {} })
                       <>
                         <div onClick={() => setOpenFilter(null)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
                         <div style={{ position: 'absolute', top: '100%', right: 8, marginTop: 4, zIndex: 41, background: '#fff', border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: '0 8px 30px rgba(0,0,0,0.15)', padding: 12, minWidth: 180 }}>
-                          {col.type === 'text' && (
-                            <div>
-                              <input autoFocus value={filters[col.key] || ''} onChange={e => setFilter(col.key, e.target.value)} onKeyDown={e => e.key === 'Enter' && setOpenFilter(null)}
-                                placeholder={`Contains…`} style={{ ...S.input, marginBottom: 8, fontSize: 13 }} />
-                              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                                <button onClick={() => clearFilter(col.key)} style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 12 }}>Clear</button>
-                                <button onClick={() => setOpenFilter(null)} style={{ ...S.btn('primary'), padding: '5px 10px', fontSize: 12 }}>Done</button>
-                              </div>
-                            </div>
-                          )}
-                          {col.type === 'status' && (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                              <button onClick={() => clearFilter(col.key)} style={{ textAlign: 'left', background: !active(col.key) ? '#fff4ef' : '#fff', border: 'none', padding: '7px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600, color: C.text }}>All</button>
-                              {statuses.map(s => (
-                                <button key={s} onClick={() => { setFilter(col.key, s); setOpenFilter(null) }}
-                                  style={{ textAlign: 'left', background: filters[col.key] === s ? '#fff4ef' : '#fff', border: 'none', padding: '7px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 13, color: C.text }}>{s}</button>
-                              ))}
-                            </div>
-                          )}
-                          {col.type === 'range' && (
-                            <div>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-                                <input type="number" autoFocus value={filters[col.key]?.min ?? ''} onChange={e => setFilter(col.key, { ...filters[col.key], min: e.target.value })}
-                                  placeholder="min" style={{ ...S.input, marginBottom: 0, width: 64, padding: '6px 8px', fontSize: 13 }} />
-                                <span style={{ color: C.muted }}>–</span>
-                                <input type="number" value={filters[col.key]?.max ?? ''} onChange={e => setFilter(col.key, { ...filters[col.key], max: e.target.value })}
-                                  placeholder="max" style={{ ...S.input, marginBottom: 0, width: 64, padding: '6px 8px', fontSize: 13 }} />
-                              </div>
-                              <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>Blank = no limit</div>
-                              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                                <button onClick={() => clearFilter(col.key)} style={{ ...S.btn('secondary'), padding: '5px 10px', fontSize: 12 }}>Clear</button>
-                                <button onClick={() => setOpenFilter(null)} style={{ ...S.btn('primary'), padding: '5px 10px', fontSize: 12 }}>Done</button>
-                              </div>
-                            </div>
-                          )}
+                          {filterEditor(col, () => setOpenFilter(null))}
                         </div>
                       </>
                     )}

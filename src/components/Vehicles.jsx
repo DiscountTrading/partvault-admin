@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback } from 'react'
 import { C, S, fmt, totalCost, estimateCostBasis, partEffectiveCost, storageCostFor, storageConfigured } from '../lib/constants'
 import { parseVehicle } from '../lib/vehicles'
 import useFillHeight from '../hooks/useFillHeight'
+import useIsMobile from '../hooks/useIsMobile'
 
 // ============================================================================
 // Vehicle analytics — which donor cars and which makes/models actually make
@@ -349,6 +350,7 @@ export default function Vehicles({ parts = [], cars = [], sales = [], costing = 
     { key: 'untapped', label: 'Untapped', align: 'right', w: 100, render: r => money(r.untapped) },
   ]
 
+  const isMobile = useIsMobile()
   const isModels = level === 'models'
   const cols = isModels ? MODEL_COLS : CAR_COLS
   const sort = isModels ? modelSort : carSort
@@ -379,18 +381,56 @@ export default function Vehicles({ parts = [], cars = [], sales = [], costing = 
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 12, color: C.muted, flexWrap: 'wrap' }}>
           <span>Include:</span>
           {[['partvault', 'PartVault'], ['ebay', 'eBay API'], ['history', 'Imported history']].map(([k, label]) => (
-            <label key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}
+            <label key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: isMobile ? 8 : 4, minHeight: isMobile ? 44 : undefined, fontSize: isMobile ? 14 : undefined, cursor: 'pointer' }}
               title={k === 'history' ? 'CSV-imported sales — model-level only (no donor car)' : ''}>
-              <input type="checkbox" checked={src[k]} onChange={e => setSrc(s => ({ ...s, [k]: e.target.checked }))} />
+              <input type="checkbox" checked={src[k]} onChange={e => setSrc(s => ({ ...s, [k]: e.target.checked }))} style={isMobile ? { width: 20, height: 20 } : undefined} />
               {label}
             </label>
           ))}
         </div>
         <div style={{ flex: 1 }} />
         <input value={query} onChange={e => setQuery(e.target.value)} placeholder={isModels ? 'Search models…' : 'Search vehicles…'}
-          style={{ ...S.input, marginBottom: 0, padding: '7px 12px', width: 180 }} />
+          style={{ ...S.input, marginBottom: 0, padding: isMobile ? '0 12px' : '7px 12px', height: isMobile ? 44 : undefined, fontSize: isMobile ? 16 : undefined, width: isMobile ? '100%' : 180 }} />
       </div>
 
+      {isMobile && (
+        // No column headings to tap on a phone, so sorting moves into a picker.
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+          <select value={sort.key} onChange={e => onSort(e.target.value)} title="Sort the list" style={{ ...S.select, height: 44, padding: '0 10px', fontSize: 16, flex: 1 }}>
+            {cols.map(c => <option key={c.key} value={c.key}>Sort: {c.label}</option>)}
+          </select>
+          <button onClick={() => onSort(sort.key)} title="Reverse the sort order"
+            style={{ ...S.btn('secondary'), width: 44, height: 44, padding: 0, fontSize: 13 }}>{sort.dir === 'asc' ? '▲' : '▼'}</button>
+        </div>
+      )}
+
+      {isMobile ? (
+        rows.length === 0 ? (
+          <div style={{ padding: 24, textAlign: 'center', color: C.muted, background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>
+            {isModels
+              ? (modelRows.length === 0 ? 'No parts yet.' : 'No models match.')
+              : (cars.length === 0 ? 'No donor cars yet. Add cars in Inventory to track per-vehicle ROI.' : 'No vehicles match.')}
+          </div>
+        ) : rows.map(r => {
+          const rest = cols.filter(c => !['name', 'score'].includes(c.key))
+          return (
+            <div key={r.id} style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12, padding: 12, marginBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: C.text, flex: 1, minWidth: 0 }}>{cols[0].render(r)}</div>
+                {cols.some(c => c.key === 'score') && scoreCell(r)}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.border}` }}>
+                {rest.map(col => (
+                  <div key={col.key}>
+                    <div style={{ fontSize: 11, color: C.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{col.label}</div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: col.pos ? posColor(r[col.key]) : C.text }}>{col.render(r)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )
+        })
+      ) : (
       <div ref={tableRef} className="pv-scroll" style={{ overflowX: 'scroll', overflowY: 'auto', maxHeight: tableH || '60vh', background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12 }}>
         <table style={{ width: '100%', minWidth: 1000, borderCollapse: 'collapse', fontSize: 13, tableLayout: 'fixed', zoom: 'var(--table-zoom, 1)' }}>
           <colgroup>{cols.map(c => <col key={c.key} style={{ width: c.w }} />)}</colgroup>
@@ -428,6 +468,7 @@ export default function Vehicles({ parts = [], cars = [], sales = [], costing = 
           </tbody>
         </table>
       </div>
+      )}
 
       <div style={{ marginTop: 10, fontSize: 12, color: C.muted, lineHeight: 1.6 }}>
         Showing {rows.length} {isModels ? 'models' : 'vehicles'}.
@@ -450,7 +491,7 @@ function Card({ label, value, sub, color }) {
       <div style={S.statLbl}>{label}</div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
         <span style={{ ...S.statVal, color: color || C.accent, fontSize: 18 }}>{value}</span>
-        {sub && <span style={{ fontSize: 10, color: C.muted }}>{sub}</span>}
+        {sub && <span style={{ fontSize: 11, color: C.muted }}>{sub}</span>}
       </div>
     </div>
   )

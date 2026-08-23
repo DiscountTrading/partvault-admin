@@ -11,6 +11,7 @@ import Sales from './components/Sales'
 import Analytics from './components/Analytics'
 import Settings from './components/Settings'
 import { C } from './lib/constants'
+import { sb } from './lib/supabase'
 
 const MAKES = [['Toyota','Corolla','2008'],['Ford','Ranger','2016'],['Holden','Commodore','2011']]
 const CATS = [['Brakes & Brake Parts','Brake Pads'],['Lighting & Bulbs','Tail Lights'],['Engines & Engine Parts','Cylinder Heads'],['Exterior Parts','Door Mirrors']]
@@ -42,6 +43,33 @@ const sales = parts.filter(p => p.status === 'sold').map((p, i) => ({
   id: `s${i}`, part_id: p.id, sku: p.sku, title: p.title, sold_price: p.list_price,
   soldAt: new Date(Date.now() - i * 864e5).toISOString(), source: 'ebay', fees: 8, postage: 12, stage: 'paid',
 }))
+
+// The harness has no session, so the Supabase-backed screens would render empty.
+// Stub ONLY the reads these screens make, in the harness file — the app itself
+// stays free of test hooks.
+const insightRows = parts.map((p, i) => ({
+  part_id: p.id, store_id: 'store-1', sku: p.sku, title: p.title, status: p.status,
+  make: p.make, model: p.model, part_number: p.partNumber, source: i % 5 === 0 ? 'ebay_import' : 'partvault',
+  days_on_shelf: 5 + i * 11, listing_count: i % 3, total_days_listed: i * 4,
+  total_cost: 20 + i, list_price: p.list_price, profit: p.list_price - (20 + i),
+  margin_pct: Math.round(((p.list_price - (20 + i)) / p.list_price) * 100),
+  market_price: 30 + i * 12, price_variance_pct: i % 2 ? 12 : -8,
+  market_checked_at: new Date(Date.now() - i * 864e5).toISOString(),
+  days_to_sell: p.status === 'sold' ? 10 + i : null, sold_at: p.status === 'sold' ? new Date().toISOString() : null,
+}))
+const STUBBED = { part_insights: insightRows, saved_views: [] }
+const origFrom = sb.from.bind(sb)
+sb.from = (table) => {
+  if (!(table in STUBBED)) return origFrom(table)
+  const rows = STUBBED[table]
+  const b = {
+    select: () => b, eq: () => b, order: () => b, range: () => b, limit: () => b,
+    single: () => Promise.resolve({ data: rows[0] || null, error: null }),
+    then: (res, rej) => Promise.resolve({ data: rows, error: null }).then(res, rej),
+  }
+  return b
+}
+
 const costing = { costsEnabled: true, acquisitionBase: 300, labourPerPart: 12, adminPerPart: 3 }
 
 const SCREENS = {
