@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { sb, FN_URL } from '../lib/supabase'
 import { C, S } from '../lib/constants'
+import useIsMobile from '../hooks/useIsMobile'
 
 const CAPS = [
   ['add_edit', 'Add / Edit'],
@@ -38,6 +39,7 @@ function Section({ title, children }) {
 }
 
 export default function TeamAccess({ storeId }) {
+  const isMobile = useIsMobile()
   const [members, setMembers] = useState([])
   const [edited, setEdited] = useState({})   // user_id -> permissions draft
   const [meId, setMeId] = useState(null)
@@ -236,7 +238,7 @@ export default function TeamAccess({ storeId }) {
         </div>
       </Section>
 
-      {toast && <div style={{ position: 'fixed', bottom: 24, right: 24, background: C.text, color: '#fff', padding: '10px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, zIndex: 1000 }}>{toast}</div>}
+      {toast && <div style={{ position: 'fixed', bottom: isMobile ? 'calc(92px + env(safe-area-inset-bottom))' : 24, right: isMobile ? 12 : 24, background: C.text, color: '#fff', padding: '10px 18px', borderRadius: 8, fontSize: 13, fontWeight: 600, zIndex: 1000 }}>{toast}</div>}
     </>
   )
 }
