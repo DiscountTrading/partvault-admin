@@ -95,7 +95,14 @@ export default function AuthScreen() {
 
   const shell = (children) => (
     <div style={{ minHeight:'100vh', background:'linear-gradient(135deg,#f5f4f0,#edeae3)', display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
-      <div style={{ maxWidth:400, width:'100%' }}>{children}</div>
+      <div style={{ maxWidth:400, width:'100%' }}>
+        {children}
+        <a href="https://partvault.app"
+          style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:6, marginTop:20, color:C.muted, fontSize:13, fontWeight:600, textDecoration:'none' }}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 10.5 12 3l9 7.5" /><path d="M5 9.5V21h5v-5h4v5h5V9.5" /></svg>
+          Home
+        </a>
+      </div>
     </div>
   )
 
