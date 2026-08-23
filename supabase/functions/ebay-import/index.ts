@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0'
+import { flattenSubtree, SUB_LISTS } from './taxonomy.js'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -14,7 +15,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.36.79'
+const EDGE_FN_VERSION         = '3.36.87'
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  HARD BLOCK — EDITING LIVE eBay LISTINGS IS DISABLED AT THE CODE LEVEL.
@@ -653,6 +654,38 @@ async function categoryMapFor(sb: any, mp: string): Promise<Record<string, strin
   return map
 }
 
+// ── eBay category id → our category + subcategory ───────────────────────────
+// The reverse direction of categoryMapFor, and the one the SYNC needs: eBay
+// hands us a leaf category id ("33710"), we need "Lighting & Bulbs" +
+// "Headlight Assemblies". This used to be a hand-written map of 45 ids, so any
+// listing in one of eBay's several hundred other parts categories imported with
+// NO category at all — 943 of them in the live store — and no imported part ever
+// got a subcategory. Now it is resolved from eBay's OWN taxonomy: walk the
+// subtree of each of our 16 top-level categories once, cache every descendant in
+// ebay_category_lookup, and any id resolves locally from then on.
+//
+// Subcategory names come from eBay's leaf, matched onto our own list where one
+// fits (eBay "Headlights" → our "Headlight Assemblies"); where nothing fits we
+// keep eBay's name rather than flattening it to "Other" — it's more specific,
+// and the part form already shows a value that isn't in its dropdown.
+//
+// The pure half of that lives in ./taxonomy.js so the Node tests exercise the
+// same code. This is the cached read: category id → { category, subcategory }.
+async function categoryLookupFor(sb: any, mp: string): Promise<Map<string, { category: string; subcategory: string | null }>> {
+  const out = new Map<string, { category: string; subcategory: string | null }>()
+  try {
+    // Paged: the AU parts tree is a few thousand nodes, past PostgREST's default cap.
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await sb.from('ebay_category_lookup')
+        .select('category_id, friendly_category, subcategory').eq('marketplace', mp).range(from, from + 999)
+      if (error || !data?.length) break
+      for (const r of data) out.set(String(r.category_id), { category: r.friendly_category, subcategory: r.subcategory })
+      if (data.length < 1000) break
+    }
+  } catch (_) { /* fall back to the legacy map at the call site */ }
+  return out
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
   console.log(`[${EDGE_FN_VERSION}] ${req.method} request received`)
@@ -736,6 +769,30 @@ async function handleRequest(req: Request): Promise<Response> {
 
   const getTag = (xml: string, tag: string): string =>
     xml.match(new RegExp(`<${tag}[^>]*>(.*?)</${tag}>`, 's'))?.[1]?.trim() ?? ''
+
+  // eBay category id → our category/subcategory, loaded once per request. Empty
+  // until ensureCatLookup() runs, and an empty lookup simply means a part imports
+  // with no category — exactly the old behaviour, never an error.
+  let CAT_LOOKUP = new Map<string, { category: string; subcategory: string | null }>()
+  let catLookupLoaded = false
+  const ensureCatLookup = async () => {
+    if (catLookupLoaded) return
+    catLookupLoaded = true
+    try {
+      const mkt = await storeMarketplace(sb, storeId)
+      CAT_LOOKUP = await categoryLookupFor(sb, mkt.mp)
+    } catch (_) { /* legacy map still applies below */ }
+  }
+  // The listing's own category, as eBay files it. PrimaryCategory comes first in
+  // the item XML, so the first CategoryID is the primary one.
+  const categoryFromXml = (xml: string) => {
+    const catId = getTag(xml, 'CategoryID')
+    if (!catId) return {}
+    const hit = CAT_LOOKUP.get(String(catId))
+    if (hit) return { category: hit.category, subcategory: hit.subcategory || null }
+    const legacy = CATEGORY_ID_MAP[String(catId)]     // the old 45-entry map, still a floor
+    return legacy ? { category: legacy } : {}
+  }
 
   const getTotalPages = (xml: string): number =>
     parseInt(xml.match(/<TotalNumberOfPages>(\d+)<\/TotalNumberOfPages>/)?.[1] ?? '1')
@@ -980,6 +1037,9 @@ async function handleRequest(req: Request): Promise<Response> {
       weight,
       weight_source: weight !== null ? 'ebay' : null,
       part_number:   extractItemSpecifics(xml)['Manufacturer Part Number'] ?? null,
+      // Where eBay itself files this listing. Without this every imported part
+      // arrived with a blank category and waited on a manual backfill.
+      ...categoryFromXml(xml),
       source:        'ebay_import',
       acquired_date: parseEbayStartDate(xml),
       costs:         { acquisition:0, labour:0, storage:0, packaging:0, postage:0, holding:0 },
@@ -1210,6 +1270,7 @@ async function handleRequest(req: Request): Promise<Response> {
     }
 
     if (action === 'process_chunk') {
+      await ensureCatLookup()
       const processChunk = async (): Promise<Response> => {
         const { data: job, error: jobErr } = await sb.from('jobs').select('*').eq('id', jobId).single()
         if (jobErr || !job) throw new Error('Job not found')
@@ -2633,6 +2694,7 @@ async function handleRequest(req: Request): Promise<Response> {
     // once GetItem confirms it is still Active; if eBay says it actually ended or
     // sold, we just correct the listing row's status instead (sync drift).
     if (action === 'split_shared_skus') {
+      await ensureCatLookup()
       const dryRun = !!body.dryRun
 
       // Everything currently recorded as live, grouped per part. Paginated —
@@ -2969,6 +3031,7 @@ async function handleRequest(req: Request): Promise<Response> {
     }
 
     if (action === 'retry') {
+      await ensureCatLookup()
       const { token, certId } = await getToken()
       const ids: string[] = body.retryIds ?? []
       if (!ids.length) throw new Error('No retry IDs provided')
@@ -3058,59 +3121,245 @@ async function handleRequest(req: Request): Promise<Response> {
       return json({ imported, failed, failedReasons })
     }
 
+    // Cache eBay's OWN category tree for this marketplace: walk the subtree of
+    // each of our 16 top-level categories and record every descendant. One pass
+    // replaces the hand-written id map, and it's how a category eBay adds next
+    // month resolves without a code change. Re-runnable: rows are upserted.
+    if (action === 'refresh_category_tree') {
+      const { token } = await getToken()
+      const mkt = await storeMarketplace(sb, storeId)
+      const ebayHeaders = {
+        'Authorization': `Bearer ${token}`, 'Accept': 'application/json',
+        'Content-Language': mkt.lang, 'X-EBAY-C-MARKETPLACE-ID': mkt.mp,
+      }
+      // Where to start each walk. The store's category_maps rows point at LEAF
+      // categories (you can only list into a leaf), so starting there would cache
+      // one node and nothing else — the branch above it is what we want. Start
+      // from the known branch id where we have one, else from the leaf and climb.
+      const listingIds = await categoryMapFor(sb, mkt.mp)
+      const starts: Record<string, string> = {}
+      for (const friendly of Object.keys(SUB_LISTS)) {
+        const id = AU_CATEGORY_FALLBACK[friendly] || listingIds[friendly]
+        if (id) starts[friendly] = id
+      }
+
+      // Climb to a top-level parts branch (level 3), whose subtree is every
+      // category eBay files under it. The response for a node conveniently
+      // carries its parent's URL, so climbing is just following that.
+      const branchNode = async (startId: string) => {
+        let url = `https://api.ebay.com/commerce/taxonomy/v1/category_tree/${mkt.treeId}/get_category_subtree?category_id=${startId}`
+        for (let hop = 0; hop < 6; hop++) {
+          const r = await fetch(url, { headers: ebayHeaders })
+          if (!r.ok) throw new Error(`HTTP ${r.status}`)
+          const d = await r.json()
+          const node = d.categorySubtreeNode
+          if (!node) throw new Error('no subtree')
+          const level = Number(node.categoryTreeNodeLevel ?? 0)
+          if (level <= 3 || !node.parentCategoryTreeNodeHref) return node
+          url = node.parentCategoryTreeNodeHref
+        }
+        throw new Error('could not find the branch')
+      }
+
+      const rows: any[] = []
+      const failures: Record<string, string> = {}
+      const seenRoot = new Set<string>()
+
+      for (const [friendly, startId] of Object.entries(starts)) {
+        try {
+          const node = await branchNode(String(startId))
+          const branchId = String(node.category?.categoryId || startId)
+          // Two of our names can climb to the same branch; the first one owns it,
+          // otherwise the second pass would overwrite its rows.
+          if (seenRoot.has(branchId)) { failures[friendly] = `shares branch ${branchId}`; continue }
+          seenRoot.add(branchId)
+          if (body.debug) {
+            return json({ ok: true, debug: true, friendly, startId, branchId, treeId: mkt.treeId,
+              level: node.categoryTreeNodeLevel, name: node.category?.categoryName,
+              childCount: (node.childCategoryTreeNodes || []).length })
+          }
+          flattenSubtree(node, friendly, branchId, rows, mkt.mp)
+        } catch (e) { failures[friendly] = (e as Error).message }
+      }
+
+      // Second pass: categories this store actually uses that sit OUTSIDE our 16
+      // branches — car audio, vehicle electronics, manuals. eBay files them
+      // elsewhere in its tree, so no branch walk reaches them, and they'd stay
+      // blank forever. Resolve each id on its own and file it under "Other Car &
+      // Truck Parts" with eBay's own leaf name as the subcategory: less precise
+      // than one of our categories, far better than nothing.
+      const known = new Set(rows.map((r: any) => r.category_id))
+      const used = new Set<string>()
+      for (let from = 0; ; from += 1000) {
+        const { data: page } = await sb.from('listings')
+          .select('platform_data').eq('store_id', storeId).eq('platform', 'ebay').range(from, from + 999)
+        if (!page?.length) break
+        for (const l of page) {
+          const cid = l.platform_data?.CategoryID?.toString()
+          if (cid && !known.has(cid)) used.add(cid)
+        }
+        if (page.length < 1000) break
+      }
+      // Anything already cached from an earlier run is fine as it stands.
+      if (used.size) {
+        const { data: cached } = await sb.from('ebay_category_lookup')
+          .select('category_id').eq('marketplace', mkt.mp).in('category_id', [...used])
+        for (const c of (cached || [])) used.delete(String(c.category_id))
+      }
+      let strays = 0
+      for (const cid of used) {
+        if (strays >= 200) break                     // sanity bound on a one-off pass
+        try {
+          const r = await fetch(
+            `https://api.ebay.com/commerce/taxonomy/v1/category_tree/${mkt.treeId}/get_category_subtree?category_id=${cid}`,
+            { headers: ebayHeaders })
+          if (!r.ok) continue
+          const d = await r.json()
+          const name = d?.categorySubtreeNode?.category?.categoryName
+          if (!name) continue
+          rows.push({
+            marketplace: mkt.mp, category_id: String(cid),
+            friendly_category: 'Other Car & Truck Parts',
+            leaf_name: name, subcategory: name, root_id: null,
+            updated_at: new Date().toISOString(),
+          })
+          strays++
+        } catch (_) { /* skip this id, keep going */ }
+      }
+
+      let saved = 0
+      for (let i = 0; i < rows.length; i += 500) {
+        const { error } = await sb.from('ebay_category_lookup')
+          .upsert(rows.slice(i, i + 500), { onConflict: 'marketplace,category_id' })
+        if (error) throw new Error(`Could not save the category tree: ${error.message}`)
+        saved += Math.min(500, rows.length - i)
+      }
+      return json({
+        ok: true, version: EDGE_FN_VERSION, marketplace: mkt.mp,
+        categories: Object.keys(starts).length, branches: seenRoot.size, strays, saved,
+        failures: Object.keys(failures).length ? failures : undefined,
+      })
+    }
+
+    // Fill in categories from what eBay says. Blanks only by default — a category
+    // a person set (or corrected) is never overwritten unless `force` is passed,
+    // because that would silently undo their work AND the eBay-category learning
+    // that keys off it. Time-boxed: returns hasMore so the caller can continue.
     if (action === 'backfill_categories') {
       const startTime = Date.now()
+      const force = !!body.force          // re-read EVERY part from eBay, overwriting
+      await ensureCatLookup()
 
-      const { data: uncategorised } = await sb
-        .from('parts')
-        .select('id')
-        .eq('store_id', storeId)
-        .or('category.is.null,category.eq.')
-        .is('deleted_at', null)
+      // Paged: PostgREST caps a select at 1000 rows and there are thousands.
+      const targets: any[] = []
+      for (let from = 0; ; from += 1000) {
+        let q = sb.from('parts').select('id, category, subcategory')
+          .eq('store_id', storeId).is('deleted_at', null).range(from, from + 999)
+        if (!force) q = q.or('category.is.null,category.eq.,subcategory.is.null,subcategory.eq.')
+        const { data: page } = await q
+        if (!page?.length) break
+        targets.push(...page)
+        if (page.length < 1000) break
+      }
+      if (!targets.length) return json({ updated: 0, noData: 0, hasMore: false })
 
-      if (!uncategorised?.length) return json({ updated: 0, noData: 0, hasMore: false })
+      const byId = new Map(targets.map((p: any) => [p.id, p]))
+      const ids = targets.map((p: any) => p.id)
 
-      const uncategorisedIds = uncategorised.map((p: any) => p.id)
-
-      // Pull CategoryID from platform_data already stored in listings table
+      // eBay's category id for each part, from the listing rows the sync stores.
       const partToCategoryId: Record<string, string> = {}
-      for (let i = 0; i < uncategorisedIds.length; i += 200) {
-        const chunk = uncategorisedIds.slice(i, i + 200)
-        const { data: listings } = await sb
-          .from('listings')
+      for (let i = 0; i < ids.length; i += 200) {
+        const { data: listings } = await sb.from('listings')
           .select('part_id, platform_data')
-          .eq('store_id', storeId)
-          .eq('platform', 'ebay')
-          .in('part_id', chunk)
+          .eq('store_id', storeId).eq('platform', 'ebay').in('part_id', ids.slice(i, i + 200))
         for (const l of (listings || [])) {
           const catId = l.platform_data?.CategoryID?.toString()
           if (catId && !partToCategoryId[l.part_id]) partToCategoryId[l.part_id] = catId
         }
       }
 
-      // Group by mapped category and batch update
-      const categoryGroups: Record<string, string[]> = {}
-      let noData = 0
-      for (const partId of uncategorisedIds) {
-        const catId   = partToCategoryId[partId]
-        const category = catId && CATEGORY_ID_MAP[catId]
-        if (!category) { noData++; continue }
-        if (!categoryGroups[category]) categoryGroups[category] = []
-        categoryGroups[category].push(partId)
+      // Group parts by the exact patch they need, so each group is one update.
+      const groups: Record<string, { patch: any; ids: string[] }> = {}
+      let noData = 0, unmapped = 0
+      for (const partId of ids) {
+        const catId = partToCategoryId[partId]
+        if (!catId) { noData++; continue }
+        const hit = CAT_LOOKUP.get(String(catId))
+        const category = hit?.category || CATEGORY_ID_MAP[String(catId)]
+        if (!category) { unmapped++; continue }
+        const cur = byId.get(partId) || {}
+        const patch: any = {}
+        if (force || !String(cur.category || '').trim()) patch.category = category
+        if (hit?.subcategory && (force || !String(cur.subcategory || '').trim())) patch.subcategory = hit.subcategory
+        if (!Object.keys(patch).length) continue
+        const key = JSON.stringify(patch)
+        if (!groups[key]) groups[key] = { patch, ids: [] }
+        groups[key].ids.push(partId)
       }
 
       let updated = 0
-      for (const [category, partIds] of Object.entries(categoryGroups)) {
-        if (Date.now() - startTime > 20000) {
-          return json({ updated, noData, hasMore: true })
-        }
+      for (const { patch, ids: partIds } of Object.values(groups)) {
+        if (Date.now() - startTime > 20000) return json({ updated, noData, unmapped, hasMore: true })
         for (let j = 0; j < partIds.length; j += 500) {
-          await sb.from('parts').update({ category }).in('id', partIds.slice(j, j + 500))
+          await sb.from('parts').update(patch).in('id', partIds.slice(j, j + 500))
           updated += Math.min(500, partIds.length - j)
         }
       }
 
-      return json({ updated, noData, hasMore: false })
+      // Parts whose listing row never captured a CategoryID (older sold-order
+      // imports built their listing rows without one) can't be resolved from
+      // what we hold, so ask eBay for the item itself. Batched 20 at a time,
+      // time-boxed like everything else here, and it fills the listing row too
+      // so the next run needs no calls at all.
+      let fetched = 0, legacy = 0
+      if (body.fetchMissing !== false && Date.now() - startTime < 12000) {
+        const missing = ids.filter(id => !partToCategoryId[id])
+        if (missing.length) {
+          const { data: rows } = await sb.from('listings')
+            .select('id, part_id, platform_listing_id, platform_data')
+            .eq('store_id', storeId).eq('platform', 'ebay').in('part_id', missing.slice(0, 400))
+          const withItem = (rows || []).filter((l: any) => l.platform_listing_id)
+          // Trading API GetItem, not the Shopping API: open.api.ebay.com's
+          // GetMultipleItems returns nothing for these — eBay has wound the legacy
+          // Shopping API down — which is part of why they were never filled in.
+          const { token, certId } = await getToken()
+          for (const l of withItem) {
+            if (Date.now() - startTime > 18000) return json({ updated, noData, unmapped, fetched, legacy, hasMore: fetched + legacy > 0 })
+            let catId = '', gone = false
+            try {
+              const xml = await trading(token, certId, 'GetItem', `<?xml version="1.0" encoding="utf-8"?>
+<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <ItemID>${l.platform_listing_id}</ItemID><DetailLevel>ReturnAll</DetailLevel>
+</GetItemRequest>`)
+              catId = getTag(xml, 'CategoryID')
+              if (!catId && /deleted|cannot be accessed|not found/i.test(getTag(xml, 'LongMessage'))) gone = true
+            } catch (e) {
+              if (/deleted|cannot be accessed|not found/i.test((e as Error).message)) gone = true
+            }
+            // eBay has purged the listing, so its real category is unrecoverable.
+            // File it under Legacy Items — the bucket the history import already
+            // uses for records with no detail — rather than leaving it blank and
+            // looking like a mapping gap we could still close.
+            if (!catId && gone) {
+              await sb.from('parts').update({ category: 'Legacy Items', subcategory: 'Other' }).eq('id', l.part_id)
+              legacy++
+              continue
+            }
+            if (!catId) continue
+            const hit = CAT_LOOKUP.get(catId)
+            const category = hit?.category || CATEGORY_ID_MAP[catId]
+            await sb.from('listings')
+              .update({ platform_data: { ...(l.platform_data || {}), CategoryID: catId } }).eq('id', l.id)
+            if (!category) { unmapped++; continue }
+            const patch: any = { category }
+            if (hit?.subcategory) patch.subcategory = hit.subcategory
+            await sb.from('parts').update(patch).eq('id', l.part_id)
+            updated++; fetched++
+          }
+        }
+      }
+
+      return json({ updated, noData, unmapped, fetched, legacy, hasMore: false, treeCached: CAT_LOOKUP.size })
     }
 
     // Resolve the store's eBay merchant (ship-from) location. eBay's Inventory API

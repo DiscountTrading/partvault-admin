@@ -993,16 +993,31 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     setImportingHistory(false)
   }
 
+  // Reads eBay's category tree first, then fills in the category (and now the
+  // subcategory) of every part that hasn't got one. Blanks only — a category you
+  // set by hand is never overwritten.
   const runCategoryBackfill = async () => {
     backfillCatCancelRef.current = false
     setBackfillingCats(true)
     setBackfillCatResult(null)
     let totalUpdated = 0
     let totalNoData  = 0
+    let totalUnmapped = 0
     try {
+      // One pass over eBay's taxonomy, so any category eBay has — not just the
+      // handful that used to be hard-coded — resolves from here on.
+      setBackfillCatResult({ progress: true, updated: 0, noData: 0, stage: 'Reading eBay’s category list…' })
+      const treeRes = await fetch(EDGE_FN, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'refresh_category_tree', storeId }),
+      })
+      const tree = await treeRes.json()
+      if (tree.error) throw new Error(tree.error)
+
       let hasMore = true
       while (hasMore && !backfillCatCancelRef.current) {
-        setBackfillCatResult({ progress: true, updated: totalUpdated, noData: totalNoData })
+        setBackfillCatResult({ progress: true, updated: totalUpdated, noData: totalNoData, stage: 'Matching parts…' })
         const res = await fetch(EDGE_FN, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1010,11 +1025,16 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         })
         const data = await res.json()
         if (data.error) throw new Error(data.error)
-        totalUpdated += data.updated || 0
-        totalNoData  += data.noData  || 0
+        totalUpdated  += data.updated  || 0
+        totalNoData   += data.noData   || 0
+        totalUnmapped += data.unmapped || 0
         hasMore = data.hasMore || false
       }
-      setBackfillCatResult({ done: true, cancelled: backfillCatCancelRef.current, updated: totalUpdated, noData: totalNoData })
+      setBackfillCatResult({
+        done: true, cancelled: backfillCatCancelRef.current,
+        updated: totalUpdated, noData: totalNoData, unmapped: totalUnmapped, cached: tree.saved || 0,
+      })
+      onChanged?.()
     } catch (e) {
       setBackfillCatResult({ error: e.message, updated: totalUpdated })
     }
@@ -3366,14 +3386,15 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                       : r.progress || 'Running…',
                   },
                   {
-                    label: 'Backfill Categories',
+                    label: 'Fix part categories',
+                    hint: 'Read the category eBay files each listing under, and fill in any part missing one. Categories you set yourself are left alone.',
                     running: backfillingCats,
                     onRun: runCategoryBackfill,
                     onCancel: () => { backfillCatCancelRef.current = true },
                     result: backfillCatResult,
                     resultText: r => r.done
-                      ? `${r.updated} updated · ${r.noData} no data${r.cancelled ? ' (cancelled)' : ''}`
-                      : 'Running…',
+                      ? `${r.updated} parts filled in${r.unmapped ? ` · ${r.unmapped} in a category we can’t place` : ''}${r.noData ? ` · ${r.noData} with no eBay listing` : ''}${r.cancelled ? ' (cancelled)' : ''}`
+                      : (r.stage || 'Running…'),
                   },
                   {
                     label: 'Backfill Listing Dates',
