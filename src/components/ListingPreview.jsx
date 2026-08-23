@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { C, S, fmt } from '../lib/constants'
+import useIsMobile from '../hooks/useIsMobile'
 import { sb, EDGE_FN } from '../lib/supabase'
 import { previewListing } from '../lib/ebay'
 
@@ -19,6 +20,7 @@ const blankFit = () => ({ make: '', model: '', yearFrom: '', yearTo: '', trim: '
 // item specifics, and compatible vehicles, persisted as ebay_overrides (which
 // win at publish). Hydrates instantly from the background snapshot when current.
 export default function ListingPreview({ storeId, part, onClose, onChanged }) {
+  const isMobile = useIsMobile()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState('')
@@ -193,7 +195,7 @@ export default function ListingPreview({ storeId, part, onClose, onChanged }) {
                 {editing ? (
                   <div>
                     {fitEdits.map((f, i) => (
-                      <div key={i} style={{ display: 'grid', gridTemplateColumns: '1.2fr 1.2fr 0.7fr 0.7fr 1fr auto', gap: 6, marginBottom: 6 }}>
+                      <div key={i} style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : '1.2fr 1.2fr 0.7fr 0.7fr 1fr auto', gap: 6, marginBottom: 6 }}>
                         <input value={f.make} onChange={e => setFit(i, 'make', e.target.value)} placeholder="Make" style={inp} />
                         <input value={f.model} onChange={e => setFit(i, 'model', e.target.value)} placeholder="Model" style={inp} />
                         <input value={f.yearFrom} onChange={e => setFit(i, 'yearFrom', e.target.value.replace(/\D/g, ''))} placeholder="From" style={inp} />

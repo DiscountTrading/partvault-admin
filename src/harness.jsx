@@ -11,6 +11,7 @@ import Sales from './components/Sales'
 import Analytics from './components/Analytics'
 import Settings from './components/Settings'
 import PartForm from './components/PartForm'
+import Help from './components/Help'
 import { C } from './lib/constants'
 import { sb } from './lib/supabase'
 
@@ -82,6 +83,7 @@ const SCREENS = {
   analytics: () => <Analytics storeId="store-1" parts={parts} cars={cars} sales={sales} costing={costing} onVehiclesChanged={() => {}} />,
   partform: () => <PartForm part={parts[0]} cars={cars} storeId="store-1" costing={costing} aiSettings={{}} footer="" allParts={parts}
     onSave={async () => {}} onSaveAndAdd={async () => {}} onCancel={() => {}} />,
+  help: () => <Help storeId="store-1" />,
   settings: () => <Settings profile={{ id: 'u1', email: 'demo@partvault.app' }} storeId="store-1" parts={parts}
     onSignOut={() => {}} refreshStores={() => {}} onSettingsSaved={() => {}} onChanged={() => {}} sync={{}} />,
 }

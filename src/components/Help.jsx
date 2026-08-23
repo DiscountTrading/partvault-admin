@@ -1,11 +1,13 @@
 import { C, S } from '../lib/constants'
+import useIsMobile from '../hooks/useIsMobile'
 import HelpAssistant from './HelpAssistant'
 import SupportChat from './SupportChat'
 
 // Top-level Help tab: AI assistant + Message-us side by side.
 export default function Help({ storeId }) {
+  const isMobile = useIsMobile()
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignItems: 'start' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 16, alignItems: 'start' }}>
       <div style={S.card}>
         <h2 style={S.h2}>🤖 Ask the assistant</h2>
         <HelpAssistant storeId={storeId} />
