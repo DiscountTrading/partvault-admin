@@ -132,3 +132,21 @@ end $$;
 create unique index if not exists parts_store_sku_unique
   on public.parts (store_id, sku)
   where sku is not null;
+
+-- ============================================================================
+--  ⚠ ADDED 2026-08-25 during the security audit — DO NOT REMOVE.
+--
+--  The two `create or replace function` blocks above (increment_ai_usage at
+--  line 73, consume_ai_credit at line 93) are copies of the int-amount RPCs.
+--  Running this file creates those function objects fresh, and a NEW function
+--  signature in Postgres is created with EXECUTE granted to PUBLIC. Without the
+--  revokes below, pasting this file into the SQL editor silently re-opens the
+--  hole that 20260825_ai_metering_acl_fix.sql closed: both functions are
+--  SECURITY DEFINER, take a caller-supplied store_id and contain no membership
+--  check, so PUBLIC EXECUTE lets anyone drain any store's AI credit balance.
+--
+--  These functions are only ever called by edge functions on the service-role
+--  key, which keeps EXECUTE regardless.
+-- ============================================================================
+revoke execute on function public.increment_ai_usage(uuid, text, int) from public, anon, authenticated;
+revoke execute on function public.consume_ai_credit(uuid, int)        from public, anon, authenticated;
