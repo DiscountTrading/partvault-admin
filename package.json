@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check:edge": "node scripts/check-edge.mjs",
+    "check:edge:selftest": "node scripts/check-edge.mjs --self-test"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.103.0",

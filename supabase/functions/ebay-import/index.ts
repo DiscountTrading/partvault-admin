@@ -6,6 +6,20 @@ const CORS = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+// ── RESPONSE HELPER ─────────────────────────────────────────────────────────
+// MODULE scope on purpose. This used to be declared ~430 lines INSIDE
+// handleRequest while purge_scan and purge_deleted_stores call it near the top
+// of that same function — a temporal dead zone, so both actions threw
+// "Cannot access 'json' before initialization" every time. purge_scan runs
+// nightly from pg_cron ('partvault-purge-deleted', 03:30), so the store
+// retention alert has never once been sent. It closes over nothing but CORS,
+// so module scope is both the fix and where it belonged.
+const json = (data: unknown, status = 200): Response =>
+  new Response(JSON.stringify(data), {
+    status,
+    headers: { ...CORS, 'Content-Type': 'application/json' },
+  })
+
 const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 // eBay developer keyset — a single application identity shared by every store.
 // These are platform-level config, NOT per-store data. Set them as edge-function
@@ -15,7 +29,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.36.87'
+const EDGE_FN_VERSION         = '3.36.88'
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  HARD BLOCK — EDITING LIVE eBay LISTINGS IS DISABLED AT THE CODE LEVEL.
@@ -709,6 +723,13 @@ async function handleRequest(req: Request): Promise<Response> {
   const body = await req.json()
   const { action, storeId, jobId } = body
 
+  // Which build is actually live? Nothing else could answer that cheaply:
+  // sync_status requires membership and then makes up to 50 eBay API calls just
+  // to return a string. A failed deploy keeps serving the OLD function with a
+  // 200, so every deploy from here on is verified against this.
+  // No auth, no database, no eBay — it reads one constant.
+  if (action === 'version') return json({ ok: true, version: EDGE_FN_VERSION })
+
   // ── Purge SAFETY: report-only scan (this is what the daily cron calls) ───────
   // Finds stores past their retention window and EMAILS an alert — it NEVER
   // deletes. Nothing is erased without an explicit, confirmed manual purge below.
@@ -1129,14 +1150,6 @@ async function handleRequest(req: Request): Promise<Response> {
       if (error) console.warn('photos table sync failed', partId, error.message)
     }
   }
-
-  // ── RESPONSE HELPER ─────────────────────────────────────────────────────────
-
-  const json = (data: unknown, status = 200): Response =>
-    new Response(JSON.stringify(data), {
-      status,
-      headers: { ...CORS, 'Content-Type': 'application/json' },
-    })
 
   // One summary row per eBay sync into the existing audit_log (table_name 'sync',
   // action 'SYNC'). Shows in the Activity view as a single readable line instead
@@ -2557,6 +2570,11 @@ async function handleRequest(req: Request): Promise<Response> {
       const date = (d: number) => iso(d).slice(0, 10)
 
       let commodore: string | null = null, falcon: string | null = null, hilux: string | null = null
+      // Counted here rather than read off carRows below: carRows is block-scoped
+      // to the branch, so the summary at the end of this action threw
+      // "carRows is not defined" — AFTER every sample row had been inserted.
+      // A buy-in store never enters the branch at all, so it failed there too.
+      let carCount = 0
       if (!carless) {
         // Three demo donor cars — the Analytics "which car should I buy" story.
         const carRows = [
@@ -2567,6 +2585,7 @@ async function handleRequest(req: Request): Promise<Response> {
         const { data: cars, error: carErr } = await sb.from('cars').insert(carRows).select('id')
         if (carErr) throw new Error(`Sample cars failed: ${carErr.message}`)
         ;[commodore, falcon, hilux] = (cars ?? []).map((c: any) => c.id)
+        carCount = carRows.length
       }
 
       // Part template: [car, category, subcategory, title, cost, list, status, soldDaysAgo, soldPrice, weightKg, row/bay/shelf]
@@ -2653,7 +2672,7 @@ async function handleRequest(req: Request): Promise<Response> {
       const { error: sErr } = await sb.from('ebay_sales').insert(saleRows)
       if (sErr) throw new Error(`Sample sales failed: ${sErr.message}`)
 
-      return json({ ok: true, version: EDGE_FN_VERSION, cars: carRows.length, parts: partRows.length, listings: listingRows.length, sales: saleRows.length })
+      return json({ ok: true, version: EDGE_FN_VERSION, cars: carCount, parts: partRows.length, listings: listingRows.length, sales: saleRows.length })
     }
 
     if (action === 'remove_sample_data') {
