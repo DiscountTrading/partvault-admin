@@ -29,7 +29,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.36.89'
+const EDGE_FN_VERSION         = '3.36.90'
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  HARD BLOCK — EDITING LIVE eBay LISTINGS IS DISABLED AT THE CODE LEVEL.
@@ -723,6 +723,24 @@ async function handleRequest(req: Request): Promise<Response> {
   const body = await req.json()
   const { action, storeId, jobId } = body
 
+  // Is the caller a member of the store they named? Declared HERE, at the top of
+  // handleRequest, rather than beside the first action that happened to need it.
+  // It used to live ~1,800 lines down, which put 22 earlier actions in its
+  // temporal dead zone: adding a guard to any of them would have thrown
+  // "Cannot access 'requireStoreMember' before initialization" at runtime — the
+  // identical failure that left purge_scan returning HTTP 500 every night for
+  // months. tsc cannot see that (a TDZ violation is legal to type-check), so
+  // position is the only defence.
+  const requireStoreMember = async () => {
+    const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '')
+    if (!jwt) throw new Error('Sign-in required')
+    const { data: u, error: uErr } = await sb.auth.getUser(jwt)
+    if (uErr || !u?.user) throw new Error('Sign-in required')
+    const { data: m } = await sb.from('store_members').select('user_id')
+      .eq('store_id', storeId).eq('user_id', u.user.id).limit(1)
+    if (!m?.length) throw new Error('Not a member of this store')
+  }
+
   // Which build is actually live? Nothing else could answer that cheaply:
   // sync_status requires membership and then makes up to 50 eBay API calls just
   // to return a string. A failed deploy keeps serving the OLD function with a
@@ -1205,6 +1223,7 @@ async function handleRequest(req: Request): Promise<Response> {
 
 
     if (action === 'exchange_oauth_code') {
+      await requireStoreMember()
       const { code } = body
       if (!code) throw new Error('Missing authorisation code')
 
@@ -1460,6 +1479,7 @@ async function handleRequest(req: Request): Promise<Response> {
     // Record a single summary line for a manual (client-driven) sync into the
     // audit log. The client passes the composed summary + totals on completion.
     if (action === 'log_sync') {
+      await requireStoreMember()
       await logSyncEvent(storeId, body.summary || 'eBay sync', { kind: 'manual', ...(body.data || {}) })
       return json({ ok: true })
     }
@@ -1595,6 +1615,7 @@ async function handleRequest(req: Request): Promise<Response> {
     }
 
     if (action === 'backfill_orders') {
+      await requireStoreMember()
       const { token, certId } = await getToken()
 
       const fromDate = body.fromDate
@@ -1667,6 +1688,7 @@ async function handleRequest(req: Request): Promise<Response> {
     }
 
     if (action === 'import_sold_history') {
+      await requireStoreMember()
       const startTime = Date.now()
       const { token, certId } = await getToken()
 
@@ -1791,6 +1813,7 @@ async function handleRequest(req: Request): Promise<Response> {
     }
 
     if (action === 'backfill_listing_dates') {
+      await requireStoreMember()
       // Repair parts that have no acquired_date by re-fetching their eBay listing
       // StartTime (the original listing date) from the Shopping API. Forward-only
       // keyset pagination by part id, so parts we can't resolve (eBay no longer
@@ -2113,6 +2136,7 @@ async function handleRequest(req: Request): Promise<Response> {
     // We best-effort link a part by item number but NEVER change a part's status —
     // current inventory stays authoritative.
     if (action === 'import_orders_csv') {
+      await requireStoreMember()
       const rows: any[] = Array.isArray(body.rows) ? body.rows : []
       if (!rows.length) return json({ ok: true, version: EDGE_FN_VERSION, inserted: 0, linked: 0, skippedExisting: 0, skippedNoItem: 0 })
 
@@ -2210,6 +2234,7 @@ async function handleRequest(req: Request): Promise<Response> {
     // price-dependent, so the bulk per-row write is done in one SQL statement via the
     // apply_historical_costs() function. Refuses if already locked unless force=true.
     if (action === 'apply_historical_costs') {
+      await requireStoreMember()
       const m = body.model || {}
       const now = new Date().toISOString()
       const { data: store } = await sb.from('stores').select('settings').eq('id', storeId).single()
@@ -2236,6 +2261,7 @@ async function handleRequest(req: Request): Promise<Response> {
     // Lift the lock so the costs can be recomputed. The client warns that this can
     // change historical figures that may already have been used in financials.
     if (action === 'unlock_historical_costs') {
+      await requireStoreMember()
       const { data: store } = await sb.from('stores').select('settings').eq('id', storeId).single()
       const settings = store?.settings || {}
       const lock = settings.historicalCostLock || {}
@@ -2529,15 +2555,6 @@ async function handleRequest(req: Request): Promise<Response> {
     // then delete it all in one pass. ebay_sales has no client write policy, so
     // both actions run here under the service role — gated on the caller being a
     // signed-in member of the store.
-    const requireStoreMember = async () => {
-      const jwt = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '')
-      if (!jwt) throw new Error('Sign-in required')
-      const { data: u, error: uErr } = await sb.auth.getUser(jwt)
-      if (uErr || !u?.user) throw new Error('Sign-in required')
-      const { data: m } = await sb.from('store_members').select('user_id')
-        .eq('store_id', storeId).eq('user_id', u.user.id).limit(1)
-      if (!m?.length) throw new Error('Not a member of this store')
-    }
 
     if (action === 'seed_sample_data') {
       await requireStoreMember()
@@ -2698,6 +2715,7 @@ async function handleRequest(req: Request): Promise<Response> {
     // once GetItem confirms it is still Active; if eBay says it actually ended or
     // sold, we just correct the listing row's status instead (sync drift).
     if (action === 'split_shared_skus') {
+      await requireStoreMember()
       await ensureCatLookup()
       const dryRun = !!body.dryRun
 
@@ -2928,6 +2946,7 @@ async function handleRequest(req: Request): Promise<Response> {
     }
 
     if (action === 'enrich_stale') {
+      await requireStoreMember()
       const { token, certId } = await getToken()
       const ids: string[] = body.itemIds ?? []
       if (!ids.length) throw new Error('No item IDs provided')
@@ -2983,6 +3002,7 @@ async function handleRequest(req: Request): Promise<Response> {
     }
 
     if (action === 'apply_stale_resolution') {
+      await requireStoreMember()
       const resolutions: Array<{
         listingId:  string
         partId:     string
@@ -3035,6 +3055,7 @@ async function handleRequest(req: Request): Promise<Response> {
     }
 
     if (action === 'retry') {
+      await requireStoreMember()
       await ensureCatLookup()
       const { token, certId } = await getToken()
       const ids: string[] = body.retryIds ?? []
@@ -3130,6 +3151,7 @@ async function handleRequest(req: Request): Promise<Response> {
     // replaces the hand-written id map, and it's how a category eBay adds next
     // month resolves without a code change. Re-runnable: rows are upserted.
     if (action === 'refresh_category_tree') {
+      await requireStoreMember()
       const { token } = await getToken()
       const mkt = await storeMarketplace(sb, storeId)
       const ebayHeaders = {
@@ -3250,6 +3272,7 @@ async function handleRequest(req: Request): Promise<Response> {
     // because that would silently undo their work AND the eBay-category learning
     // that keys off it. Time-boxed: returns hasMore so the caller can continue.
     if (action === 'backfill_categories') {
+      await requireStoreMember()
       const startTime = Date.now()
       const force = !!body.force          // re-read EVERY part from eBay, overwriting
       await ensureCatLookup()
@@ -3390,6 +3413,7 @@ async function handleRequest(req: Request): Promise<Response> {
     }
 
     if (action === 'create_draft_listings') {
+      await requireStoreMember()
       const { token } = await getToken()
       const partIds: string[] = body.partIds ?? []
       if (!partIds.length) throw new Error('No part IDs provided')
@@ -3875,6 +3899,7 @@ async function handleRequest(req: Request): Promise<Response> {
 
     // Search eBay's live category tree so the user can correct a wrong category.
     if (action === 'category_suggestions') {
+      await requireStoreMember()
       const q = String(body.query || '').trim()
       if (!q) return json({ suggestions: [] })
       const { token } = await getToken()
@@ -3938,6 +3963,7 @@ async function handleRequest(req: Request): Promise<Response> {
     // READ-ONLY: fetches from eBay, writes NOTHING (here or on eBay). Paged, so
     // the caller loops with nextOffset until hasMore is false, then classifies.
     if (action === 'sku_reconcile_report') {
+      await requireStoreMember()
       const { token, certId } = await getToken()
       const offset = +body.offset || 0
       const LIMIT = 30
@@ -4410,6 +4436,7 @@ async function handleRequest(req: Request): Promise<Response> {
     }
 
     if (action === 'get_ebay_username') {
+      await requireStoreMember()
       const { token, certId } = await getToken()
       const xml = await trading(token, certId, 'GetUser', `<?xml version="1.0" encoding="utf-8"?>
 <GetUserRequest xmlns="urn:ebay:apis:eBLBaseComponents">
@@ -4420,6 +4447,7 @@ async function handleRequest(req: Request): Promise<Response> {
     }
 
     if (action === 'setup_ebay_location') {
+      await requireStoreMember()
       const { token } = await getToken()
       const address = body.address
       if (!address?.addressLine1 || !address?.city || !address?.postalCode || !address?.country) {
