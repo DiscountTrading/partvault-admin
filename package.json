@@ -9,7 +9,9 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "check:edge": "node scripts/check-edge.mjs",
-    "check:edge:selftest": "node scripts/check-edge.mjs --self-test"
+    "check:edge:selftest": "node scripts/check-edge.mjs --self-test",
+    "check:drift": "node scripts/check-drift.mjs",
+    "check": "npm run lint && npm run check:edge && npm run check:drift"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.103.0",
