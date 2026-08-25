@@ -223,10 +223,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   const [locationMsg, setLocationMsg] = useState(null)
   const [ebayTesting, setEbayTesting] = useState(false)
   const [ebayTestResult, setEbayTestResult] = useState(null)
-  const [importing, setImporting] = useState(false)
-  const [importJob, setImportJob] = useState(null)
   const [showAdvSync, setShowAdvSync] = useState(false)
-  const [syncingAll, setSyncingAll] = useState(false)
   const [syncPhase, setSyncPhase] = useState('')
   const [syncStatus, setSyncStatus] = useState(null)
   const [statusLoading, setStatusLoading] = useState(false)
@@ -241,7 +238,6 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       setLastRun(cur)
     } catch { /* ignore */ }
   }
-  const fmtLastRun = (iso) => iso ? `last run ${new Date(iso).toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : 'not run yet'
   // Nightly auto-sync state lives server-side in sync_runs (written by pg_cron),
   // so the manual lastRun (localStorage) never reflects it. Read it directly.
   const [nightly, setNightly] = useState(null)
@@ -304,31 +300,9 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     } catch (e) { console.error('Sync interval save failed', e) }
   }
   // AI model tier — quality vs credit cost per part (economy/standard/premium).
-  const [aiModel, setAiModel] = useState('standard')
-  const [amSaved, setAmSaved] = useState(false)
-  const saveAiModel = async (m) => {
-    setAiModel(m)
-    if (!storeId) return
-    try {
-      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      await sb.from('stores').update({ settings: { ...(current?.settings || {}), aiModel: m } }).eq('id', storeId)
-      setAmSaved(true); setTimeout(() => setAmSaved(false), 2000)
-    } catch (e) { console.error('AI model save failed', e) }
-  }
   // Which AI engine does the (token-heavy) part assessment: Gemini (cheap) or
   // Claude. Gemini is the default; Claude tiers below still apply to the Claude
   // path and to the reasoning tasks that always use Claude.
-  const [assessProvider, setAssessProvider] = useState('gemini')
-  const [apSaved, setApSaved] = useState(false)
-  const saveAssessProvider = async (p) => {
-    setAssessProvider(p)
-    if (!storeId) return
-    try {
-      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      await sb.from('stores').update({ settings: { ...(current?.settings || {}), assessProvider: p } }).eq('id', storeId)
-      setApSaved(true); setTimeout(() => setApSaved(false), 2000)
-    } catch (e) { console.error('AI provider save failed', e) }
-  }
   // Per-area AI control (the 🧠 AI tab): settings.aiModels = { area: { provider,
   // model } }. Saving an area also syncs the legacy keys (assessProvider /
   // specificsProvider / aiModel) so the mobile app + any not-yet-updated reader
@@ -370,17 +344,6 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   // (the token-heavy publish-adjacent vision call). Gemini (cheap) is the
   // default; either way it falls back to Claude on any error so a listing never
   // loses its specifics.
-  const [specificsProvider, setSpecificsProvider] = useState('gemini')
-  const [spSaved, setSpSaved] = useState(false)
-  const saveSpecificsProvider = async (p) => {
-    setSpecificsProvider(p)
-    if (!storeId) return
-    try {
-      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      await sb.from('stores').update({ settings: { ...(current?.settings || {}), specificsProvider: p } }).eq('id', storeId)
-      setSpSaved(true); setTimeout(() => setSpSaved(false), 2000)
-    } catch (e) { console.error('Specifics provider save failed', e) }
-  }
   // Subscription plan + this month's AI usage (usage metered server-side).
   const [plan, setPlan] = useState(() => planState(null))
   const [aiUsage, setAiUsage] = useState(null)
@@ -473,9 +436,6 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   const [backfillingDates, setBackfillingDates] = useState(false)
   const [backfillDateResult, setBackfillDateResult] = useState(null)
   const backfillDateCancelRef = useRef(false)
-  const [parsing, setParsing] = useState(false)
-  const [parseProgress, setParseProgress] = useState(null) // { processed, total, failed }
-  const parseCancelRef = useRef(false)
   const pollRef = useRef(null)
   const reconcileRef = useRef(null) // scroll target for "Review & resolve"
 
@@ -569,9 +529,6 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         if (data.settings.timezone) setTimezone(data.settings.timezone)
         else saveTimezone(browserTz)
         if (data.settings.syncIntervalHours) setSyncInterval(+data.settings.syncIntervalHours)
-        if (data.settings.aiModel) setAiModel(data.settings.aiModel)
-        if (data.settings.assessProvider) setAssessProvider(data.settings.assessProvider)
-        if (data.settings.specificsProvider) setSpecificsProvider(data.settings.specificsProvider)
         // Per-area AI picks; seed missing areas from the legacy keys so the AI tab
         // reflects what the edge fns will actually do.
         {
@@ -717,7 +674,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     setSavingLocation(true)
     setLocationMsg(null)
     try {
-      const { addressLine1, city, stateOrProvince, postalCode, country } = shipAddress
+      const { addressLine1, city, postalCode, country } = shipAddress
       if (!addressLine1 || !city || !postalCode || !country) throw new Error('Please fill in address line, city, postcode, and country')
 
       const { data: storeRow } = await sb.from('stores').select('settings').eq('id', storeId).single()
@@ -860,58 +817,6 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
 
   // Returns a promise that resolves when the chunked import finishes (or
   // fails/cancels), so it can be chained in the unified "Sync with eBay" flow.
-  const importAllListings = () => new Promise((resolve) => {
-    setImporting(true)
-    setImportJob({ status: 'starting', current_item: 'Fetching eBay listing IDs...' })
-    ;(async () => {
-      try {
-        const res = await fetch(EDGE_FN, {
-          method: 'POST',
-          headers: await edgeHeaders(),
-          body: JSON.stringify({ action: 'start', storeId }),
-        })
-        const data = await res.json()
-        if (data.error) throw new Error(data.error)
-
-        const jobId = data.jobId
-        setImportJob({ status: 'running', current_item: 'Starting...', total_items: data.totalIds, imported: 0, skipped: 0, failed: 0, id: jobId })
-
-        const processNext = async () => {
-          const { data: jobCheck } = await sb.from('jobs').select('status').eq('id', jobId).single()
-          if (jobCheck?.status === 'cancelled') {
-            setImporting(false); setImportJob(j => ({ ...j, status: 'cancelled' })); resolve(); return
-          }
-          try {
-            const chunkRes = await fetch(EDGE_FN, {
-              method: 'POST',
-              headers: await edgeHeaders(),
-              body: JSON.stringify({ action: 'process_chunk', jobId, storeId }),
-            })
-            const chunk = await chunkRes.json()
-            if (chunk.error && chunk.retry) { setTimeout(processNext, 2000); return }
-            if (chunk.error) throw new Error(chunk.error)
-
-            setImportJob(j => ({
-              ...j, id: jobId, status: chunk.status,
-              imported: chunk.imported, skipped: chunk.skipped, failed: chunk.failed,
-              batch_offset: chunk.offset, total_items: chunk.total,
-              current_item: chunk.isComplete
-                ? `✓ Complete — ${chunk.imported} imported, ${chunk.skipped} skipped`
-                : `Processing ${chunk.offset} of ${chunk.total}...`,
-            }))
-
-            if (chunk.isComplete || chunk.status === 'completed') { markRun('import'); setImporting(false); resolve(); return }
-            setTimeout(processNext, 500)
-          } catch (e) {
-            setImportJob(j => ({ ...j, status: 'failed', error_message: e.message })); setImporting(false); resolve()
-          }
-        }
-        setTimeout(processNext, 300)
-      } catch (e) {
-        setImportJob({ status: 'failed', error_message: e.message }); setImporting(false); resolve()
-      }
-    })()
-  })
 
   const runBackfill = async (daysBack = 5 * 365) => {
     backfillCancelRef.current = false
@@ -1108,13 +1013,6 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     setBackfillingDates(false)
   }
 
-  const cancelImport = async () => {
-    if (!importJob?.id) return
-    // Mark cancelled in Supabase — processNext loop checks this before each chunk
-    await sb.from('jobs').update({ status: 'cancelled', completed_at: new Date().toISOString() }).eq('id', importJob.id)
-    setImporting(false)
-    setImportJob(j => ({ ...j, status: 'cancelled' }))
-  }
 
   // ─── RECONCILE ───────────────────────────────────────────────────────────
   const runReconcile = async () => {
@@ -1255,43 +1153,11 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   // One-click full sync: import new listings → update sold orders (last ~4
   // months) → reconcile against eBay. Each step shows its own progress below.
   // Order-complete sold import via eBay getOrders (matches Seller Hub exactly).
-  const runSoldOrders = async (days = 120) => {
-    let created = 0, updated = 0, skipped = 0, failed = 0
-    const failedReasons = []
-    let startOffset = 0, ebayOrders = 0
-    do {
-      const d = await callEdge({ action: 'import_sold_orders', storeId, days, startOffset }, 'Sold-orders import')
-      created += d.created || 0
-      updated += d.updated || 0
-      skipped += d.skipped || 0
-      failed  += d.failed  || 0
-      if (d.failedReasons) failedReasons.push(...d.failedReasons)
-      ebayOrders = d.ebayOrders || ebayOrders
-      startOffset = d.nextOffset || 0
-      if (!d.hasMore) break
-    } while (startOffset < 5000)
-    markRun('backfill')
-    return { created, updated, skipped, failed, failedReasons, ebayOrders }
-  }
 
-  const runFees = async (days = 120) => callEdge({ action: 'import_fees', storeId, days }, 'Fee import')
   // Fees are secondary to listings/sold/reconcile and eBay's Finances API throws
   // intermittent 500s — never let a fee hiccup abort the whole sync.
-  const runFeesSafe = async (days = 120) => {
-    try { return await runFees(days) }
-    catch (e) { return { feeTotal: 0, ordersMatched: 0, feesFailed: true, feeError: e.message } }
-  }
 
   // Write one summary line per manual sync into the audit log (Activity view).
-  const logSync = async (summary, data = {}) => {
-    try {
-      await fetch(EDGE_FN, {
-        method: 'POST', headers: await edgeHeaders(),
-        body: JSON.stringify({ action: 'log_sync', storeId, summary, data }),
-      })
-      fetchNightly()
-    } catch { /* best-effort */ }
-  }
 
   // One-click "Sync now" — drives the SAME server-side resumable pipeline the
   // nightly cron uses (action: cron_sync, manual:true). The driver + progress now
@@ -1317,47 +1183,6 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   }, [sync?.completedTs])
 
   // Skips listing import — just sold orders → fees → reconcile. Fast (~30s).
-  const quickSync = async () => {
-    setSyncingAll(true)
-    setImportJob({ status: 'running', current_item: 'Importing sold orders…', total_items: 100, imported: 0, skipped: 0, failed: 0 })
-    setDisplayProgress(5)
-    setRpm(60)
-    try {
-      setSyncPhase('1/3 · Importing sold orders…')
-      const so = await runSoldOrders(120)
-      setDisplayProgress(33)
-      setRpm(80)
-      const soFail = so.failed > 0 ? ` · ${so.failed} failed${so.failedReasons?.length ? ': ' + so.failedReasons[0] : ''}` : ''
-      const soMsg = `Sold orders: ${so.created ?? 0} new, ${so.updated ?? 0} updated${soFail}`
-      setSyncPhase(`1/3 · ${soMsg}`)
-      setImportJob(j => ({ ...j, current_item: 'Importing eBay fees…' }))
-      setSyncPhase('2/3 · Importing eBay fees…')
-      setDisplayProgress(50)
-      const f = await runFeesSafe(120)
-      setDisplayProgress(66)
-      setRpm(70)
-      const fMsg = f.feesFailed ? `Fees skipped (${f.feeError}) — continuing` : `Fees: $${(f.feeTotal ?? 0).toFixed(2)} across ${f.ordersMatched ?? 0} orders`
-      setSyncPhase(`2/3 · ${fMsg}`)
-      setImportJob(j => ({ ...j, current_item: 'Reconciling with eBay…' }))
-      setSyncPhase('3/3 · Reconciling with eBay…')
-      setDisplayProgress(80)
-      setRpm(50)
-      const rec = await runReconcile()
-      setDisplayProgress(100)
-      setRpm(0)
-      setImportJob(j => ({ ...j, status: 'completed', current_item: `✓ ${soMsg} · ${fMsg}` }))
-      setSyncPhase('✓ Quick sync complete')
-      await logSync(
-        `Quick sync ✓ · ${so.created ?? 0} sold new/${so.updated ?? 0} updated · $${f.feeTotal ?? 0} fees`,
-        { soldNew: so.created ?? 0, soldUpdated: so.updated ?? 0, feeTotal: f.feeTotal ?? 0, missing: rec?.missingCount ?? 0, stale: rec?.staleCount ?? 0 },
-      )
-    } catch (e) {
-      setSyncPhase(`Sync stopped: ${e.message}`)
-      setImportJob(j => ({ ...j, status: 'failed', current_item: e.message }))
-      await logSync(`Quick sync failed: ${e.message}`, { ok: false })
-    }
-    setSyncingAll(false)
-  }
 
   const retryFailed = async () => {
     if (!reconcileResult?.failedItems?.length) return
@@ -1510,116 +1335,8 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     setClearingFlag(null)
   }
 
-  // ===== Persistent parse loop (lives on window, survives component unmount) =====
-  // Settings.jsx mounts → reattaches to in-flight parse if any.
-  // Settings.jsx unmounts → loop keeps running because it's not tied to React.
 
-  // On mount, sync local state from window.__partvaultParse if a parse is in progress
-  useEffect(() => {
-    const w = typeof window !== 'undefined' ? window : null
-    if (!w) return
-    if (w.__partvaultParse?.running) {
-      setParsing(true)
-      setParseProgress(w.__partvaultParse.progress || null)
-    }
-    const onUpdate = () => {
-      const p = w.__partvaultParse
-      if (p?.running) {
-        setParsing(true)
-        setParseProgress(p.progress)
-      } else {
-        setParsing(false)
-        setParseProgress(null)
-      }
-    }
-    w.addEventListener('partvault-parse-update', onUpdate)
-    return () => w.removeEventListener('partvault-parse-update', onUpdate)
-  }, [])
 
-  const parseMakeModelYear = async () => {
-    if (window.__partvaultParse?.running) {
-      alert('A parse is already running.')
-      return
-    }
-
-    // Initialise the singleton on window
-    const job = window.__partvaultParse = {
-      running: true,
-      cancelled: false,
-      progress: { processed: 0, total: 0, failed: 0, current: 'Loading parts…' },
-    }
-    const broadcast = () => window.dispatchEvent(new CustomEvent('partvault-parse-update'))
-    broadcast()
-
-    try {
-      const { data: parts, error } = await sb
-        .from('parts')
-        .select('id,title')
-        .eq('store_id', storeId)
-        .or('make.is.null,make.eq.')
-        .range(0, 9999)
-      if (error) throw error
-      if (!parts?.length) {
-        alert('No unprocessed parts found.')
-        job.running = false
-        broadcast()
-        delete window.__partvaultParse
-        return
-      }
-      const total = parts.length
-      job.progress = { processed: 0, total, failed: 0, current: '' }
-      broadcast()
-
-      let processed = 0
-      let failed = 0
-      for (const part of parts) {
-        if (job.cancelled) break
-        job.progress = { processed, total, failed, current: part.title?.slice(0, 60) || '' }
-        broadcast()
-        try {
-          const { data: { session } } = await sb.auth.getSession()
-          const res = await fetch(FN_URL('ai-assess'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-            body: JSON.stringify({ storeId, mode: 'parse-title', title: part.title }),
-          })
-          const d = await res.json()
-          if (!res.ok || d.error) throw new Error(d.error || `HTTP ${res.status}`)
-          const parsed = d.result || {}
-          await sb.from('parts').update({
-            make: parsed.make || null,
-            model: parsed.model || null,
-            year: parsed.year || null,
-          }).eq('id', part.id)
-        } catch (err) {
-          console.error('Parse failed for part', part.id, err)
-          failed += 1
-        }
-        processed += 1
-        job.progress = { processed, total, failed, current: part.title?.slice(0, 60) || '' }
-        broadcast()
-        await new Promise(r => setTimeout(r, 400))
-      }
-
-      const wasCancelled = job.cancelled
-      const summary = `${wasCancelled ? 'Cancelled' : 'Done'}. Processed ${processed} of ${total} parts. ${failed} failed.`
-      job.running = false
-      job.summary = summary
-      broadcast()
-      alert(summary)
-    } catch (e) {
-      job.running = false
-      broadcast()
-      alert(`Parse failed: ${e.message}`)
-    } finally {
-      // Clear after a short delay so the UI can react to running=false
-      setTimeout(() => { delete window.__partvaultParse; broadcast() }, 500)
-    }
-  }
-
-  const cancelParse = () => {
-    if (window.__partvaultParse) window.__partvaultParse.cancelled = true
-  }
 
   const setAi = (k, v) => setAiSettings(s => ({ ...s, [k]: v }))
 
@@ -1649,54 +1366,6 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     { id: 'team', label: '👥 User Access' },
     { id: 'activity', label: '📋 Activity' },
   ]
-
-  const importProgress = importJob ? (() => {
-    const total = importJob.total_items || 0
-    const done = (importJob.imported || 0) + (importJob.skipped || 0) + (importJob.failed || 0)
-    return total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0
-  })() : 0
-
-  // Smooth display progress: trickles forward between real updates so the bar
-  // always moves. Resets to 0 on each new job, snaps forward on real updates.
-  const [displayProgress, setDisplayProgress] = useState(0)
-  const lastJobId = useRef(null)
-  useEffect(() => {
-    if (!importJob) { setDisplayProgress(0); lastJobId.current = null; return }
-    // Reset to 0 whenever a brand-new job starts
-    if (importJob.id && importJob.id !== lastJobId.current) {
-      lastJobId.current = importJob.id
-      setDisplayProgress(0)
-    }
-    if (importJob.status === 'completed') { setDisplayProgress(100); return }
-    // Snap forward if real progress jumped ahead
-    setDisplayProgress(p => p < importProgress ? importProgress : p)
-    // Trickle toward a ceiling just ahead of real progress
-    const ceiling = Math.min(importProgress + 2, 99)
-    const id = setInterval(() => {
-      setDisplayProgress(p => p >= ceiling ? p : Math.min(p + 0.4, ceiling))
-    }, 300)
-    return () => clearInterval(id)
-  }, [importProgress, importJob?.status, importJob?.id])
-
-  // Tachometer RPM — spikes when chunks process fast, decays slowly to idle floor
-  const [rpm, setRpm] = useState(0)
-  const rpmTrackRef = useRef({ time: Date.now(), progress: 0 })
-  const rpmOscRef = useRef(0)
-  useEffect(() => {
-    if (!importJob || importJob.status === 'completed') { setRpm(0); return }
-    const now = Date.now()
-    const dt = (now - rpmTrackRef.current.time) / 1000
-    const delta = importProgress - rpmTrackRef.current.progress
-    rpmTrackRef.current = { time: now, progress: importProgress }
-    if (delta > 0 && dt > 0) setRpm(prev => Math.min(100, Math.max(prev, (delta / dt) * 15)))
-    // Decay slowly to a breathing idle floor — never drops to zero while active
-    const decay = setInterval(() => {
-      rpmOscRef.current += 0.12
-      const idleFloor = 18 + Math.sin(rpmOscRef.current) * 6
-      setRpm(r => Math.max(idleFloor, r - 0.7))
-    }, 200)
-    return () => clearInterval(decay)
-  }, [importProgress, importJob?.id, importJob?.status])
 
   // ─── RECONCILE SECTION COMPONENT ─────────────────────────────────────────
   const ReconcileSection = () => (
@@ -1782,8 +1451,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                     <tbody>
                       {(reconcileResult.staleListings || []).map((l, i) => {
                         const enriched = enrichedData?.[l.platformListingId]
-                        const action = enriched ? getRowAction(l.id, enriched) : null
-                        const suggestedKey = enriched ? suggestedActionKey(enriched) : null
+                                                const suggestedKey = enriched ? suggestedActionKey(enriched) : null
                         return (
                           <tr key={l.id} style={{ borderTop: i > 0 ? `1px solid ${C.border}` : 'none', background: '#fff' }}>
                             <td style={{ padding: '8px 12px', color: C.muted, fontFamily: 'monospace', fontSize: 12 }}>{l.platformListingId}</td>
@@ -3006,12 +2674,12 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
               {(() => {
                 // Full "Sync now" state comes from the app-level hook (sync.*) so the
                 // gauges track it wherever the user navigates; other flows (e.g. a
-                // local importJob) still drive it when no full sync is running.
+                // the app-level sync runner) drives it.
                 const syncOn = !!sync?.running
-                const active = syncOn || importJob?.status === 'running'
-                const done   = !syncOn && (importJob?.status === 'completed' || sync?.status === 'completed')
-                const pct    = syncOn ? Math.round(sync.progress || 0) : (done ? 100 : (importJob?.status === 'running' ? displayProgress : 0))
-                const tacho  = syncOn ? (sync.rpm || 0) : (done ? 0 : (importJob?.status === 'running' ? rpm : 0))
+                const active = syncOn
+                const done   = !syncOn && sync?.status === 'completed'
+                const pct    = syncOn ? Math.round(sync.progress || 0) : (done ? 100 : 0)
+                const tacho  = syncOn ? (sync.rpm || 0) : 0
 
                 const MIN_A = 150, SWEEP_A = 240
                 const toRad = a => a * Math.PI / 180
@@ -3124,7 +2792,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                     {/* Current-phase caption */}
                     <div style={{ padding: '3px 4px 0', textAlign: 'center',
                       fontSize: 10, color: done ? '#22c55e' : active ? C.text : C.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {done ? '🏁 Sync complete' : active ? (syncPhase || importJob?.current_item || 'Working…') : 'Idle — ready to sync'}
+                      {done ? '🏁 Sync complete' : active ? (syncPhase || 'Working…') : 'Idle — ready to sync'}
                     </div>
                   </div>
                 )
@@ -3376,7 +3044,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
               )}
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: syncPhase ? 6 : 10 }}>
-                <button style={{ ...S.btn('primary'), opacity: (sync?.running || !ebayConnected) ? 0.6 : 1 }} onClick={runSync} disabled={sync?.running || importing || backfilling || reconciling || !ebayConnected}>
+                <button style={{ ...S.btn('primary'), opacity: (sync?.running || !ebayConnected) ? 0.6 : 1 }} onClick={runSync} disabled={sync?.running || backfilling || reconciling || !ebayConnected}>
                   {sync?.running ? '⏳ Syncing…' : '🔄 Sync now'}
                 </button>
                 <span style={{ fontSize: 12, color: C.muted, flex: '1 1 240px', lineHeight: 1.45 }}>
