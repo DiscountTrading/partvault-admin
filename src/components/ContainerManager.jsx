@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { sb } from '../lib/supabase'
 import { C, S } from '../lib/constants'
-import { warehouseConfig, formatGridLoc } from '../lib/warehouse'
+import { warehouseConfig } from '../lib/warehouse'
 import { printContainerLabels, DEFAULT_LABELS } from '../lib/labels'
 
 // Admin manager for storage containers (tubs/buckets). Create, name, park at a

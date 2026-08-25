@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
-import { C, S, totalCost, partEffectiveCost, CATEGORY_NAMES, canonicalCategory, PART_CONDITIONS, STATUS_LABELS } from '../lib/constants'
+import { C, S, partEffectiveCost, CATEGORY_NAMES, canonicalCategory, PART_CONDITIONS, STATUS_LABELS } from '../lib/constants'
 import { printLabels, DEFAULT_LABELS } from '../lib/labels'
 import { WAREHOUSE_DEFAULTS } from '../lib/warehouse'
 import BulkEdit from './BulkEdit'
@@ -24,7 +24,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
   const [filterStatus, setFilterStatus] = useState('')
   const [filterCond, setFilterCond] = useState('')
   const [hideSold, setHideSold] = useState(false)
-  const [showDeleted, setShowDeleted] = useState(false)
+  const [showDeleted] = useState(false)
   const [newOnly, setNewOnly] = useState(false)
   const [newWindow, setNewWindow] = useState(24) // hours; default last 24h
   const [showFilters, setShowFilters] = useState(false) // collapse the advanced filter row to save space
@@ -588,7 +588,7 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
                 <tr style={{ background:'#f5f4f0' }}>
                   {/* Column widths are locked by the colgroup + table-layout:fixed, so the
                       grid is identical across By-Part / List / De-list. */}
-                  {BYPART_COLS.map(([h,w,align])=>{
+                  {BYPART_COLS.map(([h,,align])=>{
                     const sortable = !!SORT_GETTERS[h]
                     return (
                     <th key={h} onClick={sortable?()=>toggleSort(h):undefined} title={sortable?`Sort by ${h}`:undefined}

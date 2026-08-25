@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { C, S, fmt, pct, totalCost, postageCostFor, estimatePostage, costsEnabled, partEffectiveCost, bucketByAge, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS, CATEGORY_NAMES } from '../lib/constants'
+import { C, S, fmt, pct, postageCostFor, estimatePostage, costsEnabled, partEffectiveCost, bucketByAge, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS, CATEGORY_NAMES } from '../lib/constants'
 import useFitScale from '../hooks/useFitScale'
 import useIsMobile from '../hooks/useIsMobile'
 
