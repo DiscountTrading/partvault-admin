@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { C, S, fmt, estimateCostBasis, storageCostFor, rentPerDay } from '../lib/constants'
 import { sb, EDGE_FN } from '../lib/supabase'
+import { edgeHeaders } from '../lib/edge'
 
 const WINDOW_DAYS = 90
 
@@ -53,7 +54,7 @@ export default function HistoricalCosts({ storeId }) {
         for (let attempt = 0; attempt < 3; attempt++) {
           try {
             const res = await fetch(EDGE_FN, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              method: 'POST', headers: await edgeHeaders(),
               body: JSON.stringify({ action: 'import_fees', storeId, fromDate, toDate }),
             })
             const text = await res.text()
@@ -149,7 +150,7 @@ export default function HistoricalCosts({ storeId }) {
 
       // 4. eBay fee → listing vs promotion split via the real 90-day ratio.
       const fr = await fetch(EDGE_FN, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: await edgeHeaders(),
         body: JSON.stringify({ action: 'import_fees', storeId, days: WINDOW_DAYS, dryRun: true }),
       })
       const fd = await fr.json().catch(() => ({}))
@@ -181,7 +182,7 @@ export default function HistoricalCosts({ storeId }) {
     setBusy(true); setError('')
     try {
       const res = await fetch(EDGE_FN, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: await edgeHeaders(),
         body: JSON.stringify({ action: 'apply_historical_costs', storeId, model: draft, force: lock?.locked || false }),
       })
       const d = await res.json().catch(() => ({}))
@@ -200,7 +201,7 @@ export default function HistoricalCosts({ storeId }) {
     setBusy(true); setError('')
     try {
       const res = await fetch(EDGE_FN, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: await edgeHeaders(),
         body: JSON.stringify({ action: 'unlock_historical_costs', storeId }),
       })
       const d = await res.json().catch(() => ({}))

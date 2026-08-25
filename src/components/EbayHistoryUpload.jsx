@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { C, S, fmt } from '../lib/constants'
 import { sb, EDGE_FN } from '../lib/supabase'
+import { edgeHeaders } from '../lib/edge'
 
 // Same edge endpoint the rest of Settings uses.
 
@@ -158,7 +159,7 @@ export default function EbayHistoryUpload({ storeId, canUpload }) {
       for (let i = 0; i < rows.length; i += 300) {
         const batch = rows.slice(i, i + 300)
         const res = await fetch(EDGE_FN, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: await edgeHeaders(),
           body: JSON.stringify({ action: 'import_orders_csv', storeId, rows: batch }),
         })
         const d = await res.json().catch(() => ({}))

@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { sb, EDGE_FN } from '../lib/supabase'
+import { edgeHeaders } from '../lib/edge'
 
 
 // Progress bands per phase. Import dominates (thousands of listings) so it gets
@@ -94,7 +95,7 @@ export function useSyncRunner({ storeId }) {
         let d
         try {
           const res = await fetch(EDGE_FN, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            method: 'POST', headers: await edgeHeaders(),
             body: JSON.stringify({ action: 'cron_sync', storeId: sid, manual: true }),
           })
           d = await res.json()

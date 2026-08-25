@@ -18,6 +18,7 @@ import { WAREHOUSE_DEFAULTS } from '../lib/warehouse'
 import EbayHistoryUpload from './EbayHistoryUpload'
 import HistoricalCosts from './HistoricalCosts'
 import SkuReconcile from './SkuReconcile'
+import { edgeHeaders } from '../lib/edge'
 
 // Small inline %/$ (or rate) toggle used on the costing fields.
 function ModeToggle({ mode, onChange, opts }) {
@@ -725,7 +726,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
 
       const res = await fetch(EDGE_FN, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await edgeHeaders(),
         body: JSON.stringify({ action: 'setup_ebay_location', storeId, address: shipAddress }),
       })
       const data = await res.json()
@@ -773,7 +774,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     setEbayUsernameStatus('loading')
     setEbayUsernameError(null)
     try {
-      const res = await fetch(EDGE_FN, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'get_ebay_username', storeId }) })
+      const res = await fetch(EDGE_FN, { method: 'POST', headers: await edgeHeaders(), body: JSON.stringify({ action: 'get_ebay_username', storeId }) })
       const d = await res.json()
       if (d.username) {
         setEbayUsername(d.username)
@@ -866,7 +867,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       try {
         const res = await fetch(EDGE_FN, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: await edgeHeaders(),
           body: JSON.stringify({ action: 'start', storeId }),
         })
         const data = await res.json()
@@ -883,7 +884,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
           try {
             const chunkRes = await fetch(EDGE_FN, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: await edgeHeaders(),
               body: JSON.stringify({ action: 'process_chunk', jobId, storeId }),
             })
             const chunk = await chunkRes.json()
@@ -940,7 +941,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
 
         const res = await fetch(EDGE_FN, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: await edgeHeaders(),
           body: JSON.stringify({
             action:   'backfill_orders',
             storeId,
@@ -997,7 +998,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         while (hasMore && !historyCancelRef.current) {
           const res = await fetch(EDGE_FN, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: await edgeHeaders(),
             body: JSON.stringify({
               action:   'import_sold_history',
               storeId,
@@ -1047,7 +1048,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       setBackfillCatResult({ progress: true, updated: 0, noData: 0, stage: 'Reading eBay’s category list…' })
       const treeRes = await fetch(EDGE_FN, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await edgeHeaders(),
         body: JSON.stringify({ action: 'refresh_category_tree', storeId }),
       })
       const tree = await treeRes.json()
@@ -1058,7 +1059,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         setBackfillCatResult({ progress: true, updated: totalUpdated, noData: totalNoData, stage: 'Matching parts…' })
         const res = await fetch(EDGE_FN, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: await edgeHeaders(),
           body: JSON.stringify({ action: 'backfill_categories', storeId }),
         })
         const data = await res.json()
@@ -1090,7 +1091,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         setBackfillDateResult({ progress: true, updated: totalUpdated, noData: totalNoData })
         const res = await fetch(EDGE_FN, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: await edgeHeaders(),
           body: JSON.stringify({ action: 'backfill_listing_dates', storeId, afterId }),
         })
         const data = await res.json()
@@ -1127,7 +1128,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     try {
       const res = await fetch(EDGE_FN, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await edgeHeaders(),
         body: JSON.stringify({ action: 'reconcile', storeId }),
       })
       const data = await res.json()
@@ -1192,7 +1193,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     const sleep = (ms) => new Promise(r => setTimeout(r, ms))
     for (let attempt = 0; attempt < 4; attempt++) {
       const res = await fetch(EDGE_FN, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: await edgeHeaders(),
         body: JSON.stringify(payload),
       })
       let d = {}
@@ -1285,7 +1286,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   const logSync = async (summary, data = {}) => {
     try {
       await fetch(EDGE_FN, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: await edgeHeaders(),
         body: JSON.stringify({ action: 'log_sync', storeId, summary, data }),
       })
       fetchNightly()
@@ -1366,7 +1367,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       const ids = reconcileResult.failedItems.map(f => f.itemId)
       const res = await fetch(EDGE_FN, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await edgeHeaders(),
         body: JSON.stringify({ action: 'retry', storeId, retryIds: ids }),
       })
       const data = await res.json()
@@ -1390,7 +1391,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       const itemIds = listings.map(l => l.platformListingId).filter(Boolean)
       const res = await fetch(EDGE_FN, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await edgeHeaders(),
         body: JSON.stringify({ action: 'enrich_stale', storeId, itemIds }),
       })
       const data = await res.json()
@@ -1434,7 +1435,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     try {
       const res = await fetch(EDGE_FN, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await edgeHeaders(),
         body: JSON.stringify({
           action: 'apply_stale_resolution',
           storeId,
@@ -1479,7 +1480,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       })
       const res = await fetch(EDGE_FN, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await edgeHeaders(),
         body: JSON.stringify({ action: 'apply_stale_resolution', storeId, resolutions }),
       })
       const data = await res.json()
