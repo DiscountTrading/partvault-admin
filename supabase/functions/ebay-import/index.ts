@@ -29,7 +29,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.36.88'
+const EDGE_FN_VERSION         = '3.36.89'
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  HARD BLOCK — EDITING LIVE eBay LISTINGS IS DISABLED AT THE CODE LEVEL.
@@ -765,6 +765,22 @@ async function handleRequest(req: Request): Promise<Response> {
   // so it can never run unattended or mass-delete. (Phone/SMS second factor to be
   // added once Twilio is set up.)
   if (action === 'purge_deleted_stores') {
+    // This hard-deletes store rows and removes their photos from storage. Until
+    // now the only thing standing in front of it was confirm:'PERMANENTLY-DELETE'
+    // — a constant that lives in this repo, not a secret — on a function deployed
+    // --no-verify-jwt with the service-role key. Anyone who could read a store id
+    // could destroy that store. Requires a platform admin now.
+    const adminJwt = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '')
+    if (!adminJwt) return json({ error: 'Sign-in required' }, 401)
+    const { data: adminUser, error: adminErr } = await sb.auth.getUser(adminJwt)
+    if (adminErr || !adminUser?.user) return json({ error: 'Sign-in required' }, 401)
+    // platform_admins read directly rather than via is_platform_admin(), which
+    // resolves auth.uid() — null here, because this function holds the service
+    // role, not the caller's session.
+    const { data: padmin } = await sb.from('platform_admins')
+      .select('user_id').eq('user_id', adminUser.user.id).limit(1)
+    if (!padmin?.length) return json({ error: 'Not authorised' }, 403)
+
     if (body.confirm !== 'PERMANENTLY-DELETE' || !Array.isArray(body.storeIds) || !body.storeIds.length) {
       return json({ error: 'Confirmed purge requires confirm:"PERMANENTLY-DELETE" and an explicit storeIds list.' }, 400)
     }
@@ -1186,17 +1202,7 @@ async function handleRequest(req: Request): Promise<Response> {
 
   try {
 
-    if (action === 'status') {
-      const { data: job } = await sb.from('jobs').select('*').eq('id', jobId).single()
-      return json(job ?? { error: 'Job not found' })
-    }
 
-    if (action === 'cancel') {
-      await sb.from('jobs')
-        .update({ status: 'cancelled', completed_at: new Date().toISOString() })
-        .eq('id', jobId)
-      return json({ ok: true })
-    }
 
     if (action === 'exchange_oauth_code') {
       const { code } = body
@@ -2408,27 +2414,6 @@ async function handleRequest(req: Request): Promise<Response> {
     // TEMP DEBUG: for a list of item IDs, report whether GetSellerList (the recent
     // supplement) returns them, and what GetItem says. Read-only. Used to diagnose
     // why specific active listings aren't importing. Safe to remove later.
-    if (action === 'debug_listings') {
-      const { token, certId } = await getToken()
-      const ids: string[] = body.itemIds ?? []
-      const recent = await fetchRecentlyListedIds(token, certId, 30)
-      const recentSet = new Set(recent)
-      const perId: any[] = []
-      for (const id of ids) {
-        let gi: Record<string, unknown> = {}
-        try {
-          const xml = await trading(token, certId, 'GetItem', `<?xml version="1.0" encoding="utf-8"?>
-<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents"><ItemID>${id}</ItemID><DetailLevel>ReturnAll</DetailLevel></GetItemRequest>`)
-          gi = {
-            ack: getTag(xml, 'Ack'), listingStatus: getTag(xml, 'ListingStatus'),
-            sellingState: getTag(xml, 'SellingState'), sku: getTag(xml, 'SKU'),
-            title: getTag(xml, 'Title').slice(0, 60), error: getTag(xml, 'LongMessage'),
-          }
-        } catch (e) { gi = { ack: 'FETCH_ERROR', error: (e as Error).message } }
-        perId.push({ id, inGetSellerList30d: recentSet.has(id), getItem: gi })
-      }
-      return json({ ok: true, version: EDGE_FN_VERSION, getSellerListCount: recent.length, perId })
-    }
 
     // Lightweight, frequent "catch new listings" check (pg_cron calls this every
     // 5 min). One GetSellerList call over a short window; imports ONLY listings not
