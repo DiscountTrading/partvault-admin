@@ -8,6 +8,9 @@ import {
   applyAiAspects, ensureDonorFitment, compatibilityAspects, fillRequiredNeutral,
   applyWarranty, applyOverrides, expandYears, SPECIFICS_SYSTEM_PROMPT,
 } from './ebay/aspects.ts'
+import {
+  AU_CATEGORY_FALLBACK, storeMarketplace, requireMarketplace, categoryMapFor, categoryLookupFor,
+} from './ebay/marketplace.ts'
 import { resolveGeminiModel, toGeminiParts, callGemini } from './ai/gemini.ts'
 
 const CORS = {
@@ -264,78 +267,9 @@ async function getAppToken(): Promise<string> {
   return d.access_token
 }
 
-// ── Multi-marketplace support ────────────────────────────────────────────────
-// A store's marketplace (settings.marketplace, default EBAY_AU) drives the eBay
-// headers, currency, and which category_maps row resolves the category id at
-// list time. Parts store only the neutral friendly category; the eBay id is
-// resolved here, per the store's marketplace — never stored on the part.
-const MARKETPLACE_CFG: Record<string, { currency: string; lang: string; treeId: string }> = {
-  EBAY_AU: { currency: 'AUD', lang: 'en-AU', treeId: '15' },
-  EBAY_US: { currency: 'USD', lang: 'en-US', treeId: '100' }, // US vehicle parts = eBay Motors tree 100
-  EBAY_GB: { currency: 'GBP', lang: 'en-GB', treeId: '3' },
-  EBAY_CA: { currency: 'CAD', lang: 'en-CA', treeId: '2' },
-}
-// Legacy AU category ids — fallback if category_maps has no row (matches the
-// pre-multi-country hardcoded map, so AU behaviour is unchanged).
-const AU_CATEGORY_FALLBACK: Record<string, string> = {
-  'Air & Fuel Delivery':'33549','Air Conditioning & Heating':'33542','Brakes & Brake Parts':'33559',
-  'Engines & Engine Parts':'33612','Engine Cooling':'33599','Exhaust & Emission':'33605',
-  'Exterior Parts':'33637','Ignition Systems':'33687','Interior Parts':'33694',
-  'Lighting & Bulbs':'33707','Starters, Alternators & Wiring':'33572','Steering & Suspension':'33579',
-  'Transmission & Drivetrain':'33726','Wheels, Tyres & Parts':'33743','Towing Parts':'180143',
-  'Other Car & Truck Parts':'9886','Legacy Items':'9886',
-}
-async function storeMarketplace(sb: any, storeId: string): Promise<{ mp: string; currency: string; lang: string; treeId: string }> {
-  let mp = 'EBAY_AU'
-  try {
-    const { data } = await sb.from('stores').select('settings').eq('id', storeId).single()
-    const m = data?.settings?.marketplace
-    if (m && MARKETPLACE_CFG[m]) mp = m
-  } catch (_) { /* default AU */ }
-  return { mp, ...MARKETPLACE_CFG[mp] }
-}
-// friendly category -> eBay category id for this marketplace (from category_maps,
-// built by the ebay-taxonomy fn). Falls back to the legacy AU ids.
-async function categoryMapFor(sb: any, mp: string): Promise<Record<string, string>> {
-  const map: Record<string, string> = { ...AU_CATEGORY_FALLBACK }
-  try {
-    const { data } = await sb.from('category_maps').select('friendly_category, ebay_category_id').eq('marketplace', mp)
-    for (const r of (data || [])) if (r.ebay_category_id) map[r.friendly_category] = r.ebay_category_id
-  } catch (_) { /* fallback stands */ }
-  return map
-}
-
-// ── eBay category id → our category + subcategory ───────────────────────────
-// The reverse direction of categoryMapFor, and the one the SYNC needs: eBay
-// hands us a leaf category id ("33710"), we need "Lighting & Bulbs" +
-// "Headlight Assemblies". This used to be a hand-written map of 45 ids, so any
-// listing in one of eBay's several hundred other parts categories imported with
-// NO category at all — 943 of them in the live store — and no imported part ever
-// got a subcategory. Now it is resolved from eBay's OWN taxonomy: walk the
-// subtree of each of our 16 top-level categories once, cache every descendant in
-// ebay_category_lookup, and any id resolves locally from then on.
-//
-// Subcategory names come from eBay's leaf, matched onto our own list where one
-// fits (eBay "Headlights" → our "Headlight Assemblies"); where nothing fits we
-// keep eBay's name rather than flattening it to "Other" — it's more specific,
-// and the part form already shows a value that isn't in its dropdown.
-//
-// The pure half of that lives in ./taxonomy.js so the Node tests exercise the
-// same code. This is the cached read: category id → { category, subcategory }.
-async function categoryLookupFor(sb: any, mp: string): Promise<Map<string, { category: string; subcategory: string | null }>> {
-  const out = new Map<string, { category: string; subcategory: string | null }>()
-  try {
-    // Paged: the AU parts tree is a few thousand nodes, past PostgREST's default cap.
-    for (let from = 0; ; from += 1000) {
-      const { data, error } = await sb.from('ebay_category_lookup')
-        .select('category_id, friendly_category, subcategory').eq('marketplace', mp).range(from, from + 999)
-      if (error || !data?.length) break
-      for (const r of data) out.set(String(r.category_id), { category: r.friendly_category, subcategory: r.subcategory })
-      if (data.length < 1000) break
-    }
-  } catch (_) { /* fall back to the legacy map at the call site */ }
-  return out
-}
+// Marketplace config, category-id maps and the eBay-id -> our-category lookup
+// moved to ./ebay/marketplace.ts, together with the reason they now report a
+// failed read instead of silently answering "EBAY_AU".
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
@@ -472,7 +406,7 @@ async function handleRequest(req: Request): Promise<Response> {
     catLookupLoaded = true
     try {
       const mkt = await storeMarketplace(sb, storeId)
-      CAT_LOOKUP = await categoryLookupFor(sb, mkt.mp)
+      CAT_LOOKUP = (await categoryLookupFor(sb, mkt.mp)).lookup
     } catch (_) { /* legacy map still applies below */ }
   }
   // The listing's own category, as eBay files it. PrimaryCategory comes first in
@@ -2799,7 +2733,7 @@ async function handleRequest(req: Request): Promise<Response> {
       // categories (you can only list into a leaf), so starting there would cache
       // one node and nothing else — the branch above it is what we want. Start
       // from the known branch id where we have one, else from the leaf and climb.
-      const listingIds = await categoryMapFor(sb, mkt.mp)
+      const listingIds = (await categoryMapFor(sb, mkt.mp)).map
       const starts: Record<string, string> = {}
       for (const friendly of Object.keys(SUB_LISTS)) {
         const id = AU_CATEGORY_FALLBACK[friendly] || listingIds[friendly]
@@ -3063,7 +2997,10 @@ async function handleRequest(req: Request): Promise<Response> {
       if (partsErr) throw partsErr
       if (!parts?.length) throw new Error('No parts found')
 
-      const mkt = await storeMarketplace(sb, storeId)
+      // requireMarketplace, not storeMarketplace: this path SENDS to eBay, and a
+      // read we could not complete must not be answered with a guessed country
+      // and currency. See the note at the top of ./ebay/marketplace.ts.
+      const mkt = await requireMarketplace(sb, storeId)
       const ebayHeaders = {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
@@ -3100,7 +3037,7 @@ async function handleRequest(req: Request): Promise<Response> {
       }
 
       // Resolved per the store's marketplace (category_maps; AU fallback).
-      const CATEGORY_ID = await categoryMapFor(sb, mkt.mp)
+      const CATEGORY_ID = (await categoryMapFor(sb, mkt.mp)).map
 
       let drafted = 0
       let failed  = 0
@@ -3314,7 +3251,7 @@ async function handleRequest(req: Request): Promise<Response> {
         'Authorization': `Bearer ${token}`, 'Accept': 'application/json',
         'Content-Language': mkt.lang, 'X-EBAY-C-MARKETPLACE-ID': mkt.mp,
       }
-      const map = await categoryMapFor(sb, mkt.mp)
+      const map = (await categoryMapFor(sb, mkt.mp)).map
       const categoryId = map[category] || '9886'
       const categoryTreeId = mkt.treeId
       let specs: any[] = []
@@ -3428,7 +3365,7 @@ async function handleRequest(req: Request): Promise<Response> {
         'Content-Language': mkt.lang,
         'X-EBAY-C-MARKETPLACE-ID': mkt.mp,
       }
-      const PREVIEW_CATEGORY_ID = await categoryMapFor(sb, mkt.mp)
+      const PREVIEW_CATEGORY_ID = (await categoryMapFor(sb, mkt.mp)).map
       // Tree id per marketplace (US = eBay Motors tree 100 — its default tree has no vehicle parts).
       const categoryTreeId = mkt.treeId
       // Store config (same as publish): footer, shipping, best offer, image mix,
@@ -3724,7 +3661,10 @@ async function handleRequest(req: Request): Promise<Response> {
       if (partsErr) throw partsErr
       if (!parts?.length) throw new Error('No parts found')
 
-      const mkt = await storeMarketplace(sb, storeId)
+      // requireMarketplace, not storeMarketplace: this path SENDS to eBay, and a
+      // read we could not complete must not be answered with a guessed country
+      // and currency. See the note at the top of ./ebay/marketplace.ts.
+      const mkt = await requireMarketplace(sb, storeId)
       const ebayHeaders = {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
@@ -3758,7 +3698,7 @@ async function handleRequest(req: Request): Promise<Response> {
         'For Parts Only': 'FOR_PARTS_OR_NOT_WORKING', 'Refurbished': 'SELLER_REFURBISHED',
       }
       // Resolved per the store's marketplace (category_maps; AU fallback).
-      const CATEGORY_ID = await categoryMapFor(sb, mkt.mp)
+      const CATEGORY_ID = (await categoryMapFor(sb, mkt.mp)).map
 
       // Store-wide image composition config: shared car/marketing images added
       // to every listing, with per-source budgets (eBay allows up to 24 images).
