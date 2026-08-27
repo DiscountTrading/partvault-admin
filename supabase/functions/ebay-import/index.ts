@@ -3520,11 +3520,27 @@ async function handleRequest(req: Request): Promise<Response> {
       let learnedKey = ''
       if (catId && learn) {
         learnedKey = categoryKeyFor(part)
-        const { data: sRow } = await sb.from('stores').select('settings').eq('id', storeId).single()
-        const settings = sRow?.settings || {}
-        const map = { ...(settings.categoryLearning || {}) }
-        map[learnedKey] = { id: catId, name: catName, at: new Date().toISOString() }
-        await sb.from('stores').update({ settings: { ...settings, categoryLearning: map } }).eq('id', storeId)
+        // The read has to be checked before the write. supabase-js does not
+        // throw, so on a failed read `settings` would be {} and this update
+        // would replace the store's ENTIRE configuration — marketplace,
+        // listing defaults, AI models, labels, the lot — with nothing but
+        // categoryLearning. Learning a category is the least important thing
+        // this function does; skipping it costs one correction, and it is a
+        // correction the user can make again.
+        const { data: sRow, error: sErr } = await sb.from('stores').select('settings').eq('id', storeId).single()
+        if (sErr || !sRow) {
+          console.warn(`category learning skipped for store ${storeId}: could not read settings — ${sErr?.message || 'no row'}`)
+          learnedKey = ''
+        } else {
+          const settings = sRow.settings || {}
+          const map = { ...(settings.categoryLearning || {}) }
+          map[learnedKey] = { id: catId, name: catName, at: new Date().toISOString() }
+          const { error: uErr } = await sb.from('stores').update({ settings: { ...settings, categoryLearning: map } }).eq('id', storeId)
+          if (uErr) {
+            console.warn(`category learning not saved for store ${storeId}: ${uErr.message}`)
+            learnedKey = ''
+          }
+        }
       }
       return json({ ok: true, categoryId: catId, categoryName: catName, ebay_overrides: ov, learnedKey })
     }

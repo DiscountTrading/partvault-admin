@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { C, S, fmt, APP_VERSION, DEFAULT_POSTAGE_TIERS, defaultPostageTiers, DEFAULT_AGED_THRESHOLD_DAYS, DEFAULT_AGE_BRACKETS, rentPerDay, sourcingMode, flagsFromSourcing, sourcingFromFlags } from '../lib/constants'
 import { printLabels, DEFAULT_LABELS } from '../lib/labels'
 import { sb, EDGE_FN, FN_URL } from '../lib/supabase'
+import { updateStoreSettings } from '../lib/storeSettings'
 import { buildSkuPreview, SKU_TOKENS, DEFAULT_SKU_TEMPLATE, DEFAULT_SKU_PAD } from '../lib/sku'
 import { MARKETPLACES, MARKETPLACE_LIST } from '../lib/marketplaces'
 import useIsMobile from '../hooks/useIsMobile'
@@ -280,8 +281,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     setTimezone(tz)
     if (!storeId) return
     try {
-      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      await sb.from('stores').update({ settings: { ...(current?.settings || {}), timezone: tz } }).eq('id', storeId)
+      await updateStoreSettings(sb, storeId, { timezone: tz })
       setTzSaved(true); setTimeout(() => setTzSaved(false), 2000)
     } catch (e) { console.error('Timezone save failed', e) }
   }
@@ -294,8 +294,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     setSyncInterval(v)
     if (!storeId) return
     try {
-      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      await sb.from('stores').update({ settings: { ...(current?.settings || {}), syncIntervalHours: v } }).eq('id', storeId)
+      await updateStoreSettings(sb, storeId, { syncIntervalHours: v })
       setSiSaved(true); setTimeout(() => setSiSaved(false), 2000)
     } catch (e) { console.error('Sync interval save failed', e) }
   }
@@ -327,7 +326,6 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     setAiModels(next)
     if (!storeId) return
     try {
-      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
       const legacy = {}
       if (g.areas.includes('assess')) {
         legacy.assessProvider = cur.provider
@@ -335,7 +333,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       }
       if (g.areas.includes('specifics')) legacy.specificsProvider = cur.provider
       // Keep the stored aiModels' help entry untouched (no UI for it — platform tool).
-      await sb.from('stores').update({ settings: { ...(current?.settings || {}), aiModels: next, ...legacy } }).eq('id', storeId)
+      await updateStoreSettings(sb, storeId, { aiModels: next, ...legacy })
       setAiAreaSaved(groupId); setTimeout(() => setAiAreaSaved(null), 2000)
     } catch (e) { console.error('AI group save failed', e) }
   }
@@ -380,9 +378,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     const prev = sourcing
     setSourcing(mode)
     try {
-      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const { error } = await sb.from('stores').update({ settings: { ...(current?.settings || {}), sourcing: mode } }).eq('id', storeId)
-      if (error) throw error
+      await updateStoreSettings(sb, storeId, { sourcing: mode })
       setSourcingSaved(true); setTimeout(() => setSourcingSaved(false), 2000)
     } catch (e) { setSourcing(prev); alert(e.message || 'Could not save') }
   }
@@ -390,9 +386,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     const prev = marketplace
     setMarketplace(mp)
     try {
-      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const { error } = await sb.from('stores').update({ settings: { ...(current?.settings || {}), marketplace: mp } }).eq('id', storeId)
-      if (error) throw error
+      await updateStoreSettings(sb, storeId, { marketplace: mp })
       setMpSaved(true); setTimeout(() => setMpSaved(false), 2000)
     } catch (e) {
       setMarketplace(prev) // DB trigger rejects the change once parts exist
@@ -584,8 +578,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   const persistWarehouse = async (wh) => {
     if (!storeId) return
     try {
-      const { data: cur } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      await sb.from('stores').update({ settings: { ...(cur?.settings || {}), warehouse: wh } }).eq('id', storeId)
+      await updateStoreSettings(sb, storeId, { warehouse: wh })
       onSettingsSaved?.({ warehouse: wh })
     } catch (e) { console.error('Warehouse save failed', e) }
   }
@@ -615,8 +608,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
   }
 
   const persistMarketing = async (arr) => {
-    const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-    await sb.from('stores').update({ settings: { ...(current?.settings || {}), marketingImages: arr } }).eq('id', storeId)
+    await updateStoreSettings(sb, storeId, { marketingImages: arr })
   }
 
   const uploadMarketing = async (e) => {
@@ -2096,8 +2088,8 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
               <p style={{ fontSize: 13, color: C.muted, marginBottom: 16, lineHeight: 1.6 }}>
                 What the AI fills in automatically when a part is captured on the phone. The part name is always pre-filled. Everything else (description, item specifics, fitment) is done here in admin.
               </p>
-              <Toggle label="Assess category at capture" desc="Auto-pick the part category from the photo." value={captureAssess.category} onChange={v => { if (readOnly) return; const next = { ...captureAssess, category: v }; setCaptureAssess(next); sb.from('stores').select('settings').eq('id', storeId).single().then(({ data: cu }) => sb.from('stores').update({ settings: { ...(cu?.settings || {}), captureAssess: next } }).eq('id', storeId)) }} />
-              <Toggle label="Suggest a sale price at capture" desc="Fill a suggested list price (only when none was entered)." value={captureAssess.price} onChange={v => { if (readOnly) return; const next = { ...captureAssess, price: v }; setCaptureAssess(next); sb.from('stores').select('settings').eq('id', storeId).single().then(({ data: cu }) => sb.from('stores').update({ settings: { ...(cu?.settings || {}), captureAssess: next } }).eq('id', storeId)) }} />
+              <Toggle label="Assess category at capture" desc="Auto-pick the part category from the photo." value={captureAssess.category} onChange={v => { if (readOnly) return; const next = { ...captureAssess, category: v }; setCaptureAssess(next); updateStoreSettings(sb, storeId, { captureAssess: next }).catch(e => alert(e.message)) }} />
+              <Toggle label="Suggest a sale price at capture" desc="Fill a suggested list price (only when none was entered)." value={captureAssess.price} onChange={v => { if (readOnly) return; const next = { ...captureAssess, price: v }; setCaptureAssess(next); updateStoreSettings(sb, storeId, { captureAssess: next }).catch(e => alert(e.message)) }} />
             </Section>
 
             <Section title="📊 Credits this month">

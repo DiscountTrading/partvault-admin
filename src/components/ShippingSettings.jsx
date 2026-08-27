@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { sb, FN_URL } from '../lib/supabase'
+import { updateStoreSettings } from '../lib/storeSettings'
 import { C, S, CATEGORY_NAMES } from '../lib/constants'
 
 const AUSPOST_FN = FN_URL('auspost-rates')
@@ -95,9 +96,15 @@ export default function ShippingSettings({ storeId }) {
         defaultDimsCm: (+defDims.l > 0 || +defDims.w > 0 || +defDims.h > 0) ? { l: +defDims.l || undefined, w: +defDims.w || undefined, h: +defDims.h || undefined } : undefined,
         categories: cleanCats,
       }
-      const { data: cur } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const auspost = String(apFrom).trim() ? { ...(cur?.settings?.auspost || {}), fromPostcode: String(apFrom).trim() } : (cur?.settings?.auspost || undefined)
-      await sb.from('stores').update({ settings: { ...(cur?.settings || {}), shipping, allowOffers, auspost } }).eq('id', storeId)
+      // The auspost patch depends on what is already stored, so it is computed
+      // from settings we actually read — never from a {} standing in for a
+      // failed read, which would drop the existing AusPost config.
+      await updateStoreSettings(sb, storeId, (cur) => ({
+        shipping, allowOffers,
+        auspost: String(apFrom).trim()
+          ? { ...(cur.auspost || {}), fromPostcode: String(apFrom).trim() }
+          : (cur.auspost || undefined),
+      }))
       setSaved(true); setTimeout(() => setSaved(false), 2000)
     } catch (e) { alert(`Save failed: ${e.message}`) }
     setSaving(false)

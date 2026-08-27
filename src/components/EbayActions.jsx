@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { sb } from '../lib/supabase'
+import { updateStoreSettings } from '../lib/storeSettings'
 import { C, S, fmt } from '../lib/constants'
 import { publishListings, delistListings, setupEbayLocation, canPublish as checkCanPublish } from '../lib/ebay'
 import useIsMobile from '../hooks/useIsMobile'
@@ -54,8 +55,7 @@ export default function EbayActions({ storeId, selectedParts, onDone, onClear })
     setBusy(true); setAddrErr('')
     try {
       if (!addr.addressLine1 || !addr.city || !addr.postalCode || !addr.country) throw new Error('Fill in address, city, postcode and country.')
-      const { data: cur } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      await sb.from('stores').update({ settings: { ...(cur?.settings || {}), shipAddress: addr } }).eq('id', storeId)
+      await updateStoreSettings(sb, storeId, { shipAddress: addr })
       await setupEbayLocation(storeId, addr)
       setNeedAddr(false); setBusy(false)
       await doPublish()
