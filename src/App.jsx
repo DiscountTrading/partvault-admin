@@ -82,7 +82,15 @@ function StoreSwitcher({ stores, activeStoreId, setActiveStore, refreshStores })
       try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '' } catch { /* optional */ }
       // New stores start with no cost applied to parts — pure eBay revenue until
       // the seller turns on the cost base in Settings → Costs.
-      await sb.from('stores').update({ settings: { marketplace: newMarketplace, costing: { enabled: false }, ...(tz ? { timezone: tz } : {}) } }).eq('id', data)
+      // A brand-new store, so writing the whole settings object is right here —
+      // there is nothing to merge with. The error is not optional though: if
+      // this fails silently the seller lands in a store with no marketplace and
+      // no costing flag, and the first thing they notice is a listing in the
+      // wrong currency.
+      const { error: cfgErr } = await sb.from('stores')
+        .update({ settings: { marketplace: newMarketplace, costing: { enabled: false }, ...(tz ? { timezone: tz } : {}) } })
+        .eq('id', data).select('id')
+      if (cfgErr) throw new Error(`Store created, but its settings could not be saved: ${cfgErr.message}`)
       await refreshStores(data) // data = new store id -> switch to it
       setNewName(''); setCreating(false); setOpen(false)
     } catch (e) { setErr(e.message) }

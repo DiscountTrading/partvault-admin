@@ -560,9 +560,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     if (!storeId) return
     setSaving(true)
     try {
-      const { data: current } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const merged = { ...(current?.settings || {}), footer, listingDefaults, aiDescription: aiSettings, captureAssess, costing, inventory, storage, warehouse, labels, timezone }
-      await sb.from('stores').update({ settings: merged }).eq('id', storeId)
+      const merged = await updateStoreSettings(sb, storeId, { footer, listingDefaults, aiDescription: aiSettings, captureAssess, costing, inventory, storage, warehouse, labels, timezone })
       onSettingsSaved?.(merged) // let the app refresh costing/inventory-driven views live
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
@@ -669,9 +667,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       const { addressLine1, city, postalCode, country } = shipAddress
       if (!addressLine1 || !city || !postalCode || !country) throw new Error('Please fill in address line, city, postcode, and country')
 
-      const { data: storeRow } = await sb.from('stores').select('settings').eq('id', storeId).single()
-      const newSettings = { ...(storeRow?.settings || {}), shipAddress }
-      await sb.from('stores').update({ settings: newSettings }).eq('id', storeId)
+      await updateStoreSettings(sb, storeId, { shipAddress })
 
       const res = await fetch(EDGE_FN, {
         method: 'POST',
@@ -681,8 +677,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
       const data = await res.json()
       if (!res.ok || data.error) throw new Error(data.error || 'Failed to create eBay location')
 
-      const finalSettings = { ...newSettings, ebayLocationKey: data.merchantLocationKey }
-      await sb.from('stores').update({ settings: finalSettings }).eq('id', storeId)
+      await updateStoreSettings(sb, storeId, { ebayLocationKey: data.merchantLocationKey })
       setEbayLocationKey(data.merchantLocationKey)
       setLocationMsg({ ok: true, msg: `eBay location created (${data.merchantLocationKey})` })
     } catch (e) {
@@ -732,9 +727,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         setEbayNeedsReconnect(false)
         // Persist into stores.settings so it survives reloads and transient fetch failures
         try {
-          const { data: cur } = await sb.from('stores').select('settings').eq('id', storeId).single()
-          const merged = { ...(cur?.settings || {}), ebayUsername: d.username }
-          await sb.from('stores').update({ settings: merged }).eq('id', storeId)
+          await updateStoreSettings(sb, storeId, { ebayUsername: d.username })
           // Surface the account name (and connection status) in the store switcher
           refreshStores?.()
         } catch (persistErr) {

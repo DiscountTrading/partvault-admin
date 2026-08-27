@@ -38,7 +38,12 @@ export default function JoinStore({ onJoined, onSignOut }) {
       try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '' } catch { /* optional */ }
       // New stores start with no cost applied to parts (costing.enabled=false) —
       // pure eBay revenue until the seller opts in from Settings → Costs.
-      await sb.from('stores').update({ settings: { marketplace, sourcing, costing: { enabled: false }, ...(tz ? { timezone: tz } : {}) } }).eq('id', storeId)
+      // New store: the whole object is correct, but a failure here must not be
+      // silent — it leaves the store with no marketplace and no costing flag.
+      const { error: cfgErr } = await sb.from('stores')
+        .update({ settings: { marketplace, sourcing, costing: { enabled: false }, ...(tz ? { timezone: tz } : {}) } })
+        .eq('id', storeId).select('id')
+      if (cfgErr) throw new Error(`Store created, but its settings could not be saved: ${cfgErr.message}`)
       if (withSample) {
         setBusyMsg('Loading sample data…')
         try {
