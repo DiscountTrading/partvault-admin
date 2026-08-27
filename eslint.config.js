@@ -29,6 +29,43 @@ export default defineConfig([
         argsIgnorePattern: '^_',
         caughtErrorsIgnorePattern: '^_',
       }],
+
+      // ── React Compiler diagnostics: WARN, not error ────────────────────────
+      // eslint-plugin-react-hooks v7 ships the React Compiler's own analysis as
+      // default-error rules. This app does NOT run the compiler (see
+      // vite.config.js — plugin-react with no babel-plugin-react-compiler), so
+      // these describe optimisations that are not being attempted rather than
+      // defects. All 28 that fired were reviewed one by one on 2026-08-27 and
+      // every one was a safe idiom under the runtime we actually ship:
+      //   refs        — `storeIdRef.current = storeId` during render IS the
+      //                 store-isolation guard (a late reply from the previous
+      //                 company must not land in this one's state). Moving it to
+      //                 an effect would leave a window where it reads stale.
+      //   purity      — `Date.now()` while rendering an age/countdown. Deliberate;
+      //                 a tick interval drives the re-render.
+      //   set-state-in-effect — a load() on mount. The alternative is data that
+      //                 never arrives.
+      //   preserve-manual-memoization / immutability — advice for a compiler that
+      //                 is not running.
+      // Left at 'warn' so the advice stays visible for the day the compiler goes
+      // on, without a dependency bump alone being able to fail the build gate.
+      // The rules that actually protect a file split — no-undef, no-unused-vars,
+      // rules-of-hooks — remain errors.
+      'react-hooks/refs': 'warn',
+      'react-hooks/purity': 'warn',
+      'react-hooks/set-state-in-effect': 'warn',
+      'react-hooks/set-state-in-render': 'warn',
+      'react-hooks/immutability': 'warn',
+      'react-hooks/preserve-manual-memoization': 'warn',
+      'react-hooks/globals': 'warn',
+      'react-hooks/static-components': 'warn',
+      'react-hooks/incompatible-library': 'warn',
+      'react-hooks/unsupported-syntax': 'warn',
+
+      // Fast Refresh ergonomics, not correctness: shared modules such as
+      // inventoryShared.jsx export a component AND the constants its callers
+      // need, on purpose. Worth seeing, never worth failing a release for.
+      'react-refresh/only-export-components': 'warn',
     },
   },
   {

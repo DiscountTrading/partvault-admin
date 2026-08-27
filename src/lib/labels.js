@@ -1,3 +1,8 @@
+/* eslint-disable no-useless-escape -- The print documents below embed a literal
+   `<\/script>`. The backslash is redundant to JavaScript, which is exactly why
+   ESLint flags it, but it is what stops a real `</script>` from closing the
+   surrounding block should this markup ever be emitted inline rather than
+   written into a document via document.write. Deliberate, not a typo. */
 import QRCode from 'qrcode'
 import { formatGridLoc } from './warehouse'
 

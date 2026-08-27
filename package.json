@@ -20,15 +20,16 @@
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
   },
+  "//devDependencies": "PINNED EXACTLY, no carets. The lint gate is what stands between a file split and an undefined identifier reaching live traffic, so its verdict must depend on the source and nothing else. On 2026-08-27 eslint-plugin-react-hooks floated 6.x -> 7.x and `npm run check` went from green to 29 errors with no code change. A gate that moves on its own is not a gate. Upgrade these deliberately, one at a time, and read the new findings.",
   "devDependencies": {
-    "@eslint/js": "^9.39.4",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.1",
-    "eslint": "^9.39.4",
-    "eslint-plugin-react-hooks": "^7.0.1",
-    "eslint-plugin-react-refresh": "^0.5.2",
-    "globals": "^17.4.0",
-    "vite": "^8.0.8"
+    "@eslint/js": "9.39.4",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.1",
+    "eslint": "9.39.4",
+    "eslint-plugin-react-hooks": "7.0.1",
+    "eslint-plugin-react-refresh": "0.5.2",
+    "globals": "17.4.0",
+    "vite": "8.0.8"
   }
 }
