@@ -3,6 +3,11 @@ import { flattenSubtree, SUB_LISTS } from './taxonomy.js'
 import { CATEGORY_ID_MAP } from './ebay/categories.ts'
 import { parseVehicle } from './ebay/vehicles.ts'
 import { buildDescription, hydrateVehicleFromCar, partTypeToken, categoryKeyFor, learnedCategoryFor, resolveShipping } from './ebay/listing-helpers.ts'
+import {
+  type AspectSpec, parseAspectSpecs, applyDerived, aspectsToAsk, aspectPromptList,
+  applyAiAspects, ensureDonorFitment, compatibilityAspects, fillRequiredNeutral,
+  applyWarranty, applyOverrides, expandYears, SPECIFICS_SYSTEM_PROMPT,
+} from './ebay/aspects.ts'
 import { resolveGeminiModel, toGeminiParts, callGemini } from './ai/gemini.ts'
 
 const CORS = {
@@ -111,6 +116,10 @@ async function meterAIOp(sb: any, storeId: string | undefined, w: number): Promi
 // structured data, AI-fill the rest from the part photos, neutral fallback for
 // required leftovers. Shared by publish_listings and preview_listing so the
 // preview shows exactly what will be sent.
+//
+// The decisions each pass makes now live in ./ebay/aspects.ts and are tested
+// directly; what remains here is the part that cannot be: the taxonomy fetch and
+// the vision call.
 async function fillAspects(
   part: any,
   categoryId: string,
@@ -122,56 +131,18 @@ async function fillAspects(
 ): Promise<{ aspects: Record<string, string[]>; fitmentList: any[]; specs: any[] }> {
   const aspects: Record<string, string[]> = {}
   let fitmentList: any[] = []
-  let specsOut: any[] = [] // full list of every aspect eBay offers for this category
-  const titleLc = (part.title || '').toLowerCase()
-  const placement = () => {
-    const out: string[] = []
-    if (/\bfront\b/.test(titleLc)) out.push('Front')
-    if (/\b(rear|back)\b/.test(titleLc)) out.push('Rear')
-    if (/\b(left|lh|l\/h|driver)\b/.test(titleLc)) out.push('Left')
-    if (/\b(right|rh|r\/h|passenger)\b/.test(titleLc)) out.push('Right')
-    return out.length ? out.join(', ') : null
-  }
-  const derive = (name: string): string | null => {
-    const n = name.toLowerCase()
-    // "Manufacturer Warranty" contains "manufacturer" but is a warranty PERIOD,
-    // not the brand — never fill it with the make (handled separately below).
-    if (/\b(brand|manufacturer)\b/.test(n) && !/part/.test(n) && !/warrant/.test(n)) return part.make || null
-    if (/make/.test(n)) return part.make || null
-    if (/model/.test(n)) return part.model || null
-    if (/year/.test(n)) return part.year ? String(part.year) : null
-    if (/(part\s*number|^mpn$|oe[\/\s]?oem|reference|interchange|supersed)/.test(n)) return part.part_number || null
-    if (/placement/.test(n)) return placement()
-    // NB: do NOT derive "Type" from our internal category — eBay's Type aspect
-    // means the product type (e.g. "Headlight Bulb"), not our taxonomy. Let the
-    // AI fill it from the photo instead.
-    return null
-  }
+  let specsOut: AspectSpec[] = [] // full list of every aspect eBay offers for this category
   try {
     const aRes = await fetch(`https://api.ebay.com/commerce/taxonomy/v1/category_tree/${categoryTreeId}/get_item_aspects_for_category?category_id=${categoryId}`, { headers: ebayHeaders })
     if (aRes.ok) {
-      const aData = await aRes.json()
-      const NEUTRAL = ['unbranded', 'does not apply', 'unknown', 'not specified', 'unspecified', 'other', 'na', 'n/a']
-      const specs = (aData.aspects || []).map((a: any) => ({
-        name: a.localizedAspectName as string,
-        required: !!a.aspectConstraint?.aspectRequired,
-        selectionOnly: a.aspectConstraint?.aspectMode === 'SELECTION_ONLY',
-        allowed: (a.aspectValues || []).map((v: any) => v.localizedValue).filter(Boolean) as string[],
-      }))
+      const specs = parseAspectSpecs(await aRes.json())
       specsOut = specs
-      const inAllowedOf = (allowed: string[], val: string) => allowed.find((v) => v.toLowerCase() === String(val).toLowerCase())
 
       // Pass 1 — fill from our own structured part/car data.
-      for (const s of specs) {
-        if (aspects[s.name]) continue
-        const d = derive(s.name)
-        if (!d) continue
-        if (!s.selectionOnly || !s.allowed.length) aspects[s.name] = [d]
-        else { const m = inAllowedOf(s.allowed, d); if (m) aspects[s.name] = [m] }
-      }
+      applyDerived(specs, part, aspects)
 
       // Pass 2 — AI fills the remaining specifics + confident fitment from the photos.
-      const todo = specs.filter((s: any) => !aspects[s.name]).slice(0, 30)
+      const todo = aspectsToAsk(specs, aspects)
       const ANTHROPIC = Deno.env.get('ANTHROPIC_API_KEY')
       const geminiReady = !!Deno.env.get('GEMINI_API_KEY')
       // Provider routing: this token-heavy vision call defaults to Gemini (~10×
@@ -185,10 +156,8 @@ async function fillAspects(
       const gate = await meterAIOp(opts.sb, opts.storeId, specW)
       if (gate.allowed && (ANTHROPIC || geminiReady) && aiPhotos.length && todo.length) {
         try {
-          const aspList = todo.map((s: any) => s.selectionOnly && s.allowed.length
-            ? `- ${s.name} (choose exactly one, verbatim: ${s.allowed.slice(0, 40).join(' | ')})`
-            : `- ${s.name} (free text, max 60 chars)`).join('\n')
-          const sys = `You are an expert Australian auto-parts eBay lister. Identify the part from the PHOTOS first — the provided Category is only a hint and may be wrong; trust the photos if they disagree. From the part photos and the known donor vehicle, do TWO things and return JSON only:\n{"aspects": {<aspectName>: <value>}, "fitment": [{"make":"","model":"","yearFrom":2012,"yearTo":2017,"trim":"","engine":""}]}\ntrim and engine are optional — include them only when the part is specific to that trim/engine; leave "" otherwise.\nASPECTS: fill in as MANY of the listed aspects as you reasonably can — do not leave fields blank when a sensible value is determinable. Use the photos, the identified part type, the donor vehicle, and standard knowledge of this kind of used auto part. Infer reasonable values for things like Type, Placement, Brand (the OEM make, or "Unbranded" for generic), Colour, Material, Surface Finish, Country/Region of Manufacture, and — for a clearly identified part — typical specs (e.g. the Voltage/Wattage/base size of a known bulb, the standard size of a known component). For "choose one" aspects return ONE listed option verbatim (pick the closest match), otherwise omit. Read any dimension, size, wattage, voltage, bulb base or part number that is PRINTED or visible in the photos and fill the matching aspect (Item Diameter, Item Length, Bulb Size, Voltage, Wattage, etc.). Do NOT fabricate a precise measurement, exact part number, or warranty term you cannot see or safely infer. Leave an aspect blank ONLY when you genuinely cannot determine a sensible value.\nFITMENT — list the vehicles this part actually fits (confidence is about whether it genuinely fits, NOT about how few you list):\n• VEHICLE-SPECIFIC parts (body panels, light assemblies, looms, ECUs, trim, mirrors): list only vehicles you are confident share the IDENTICAL part (same OEM/interchange number) — the donor vehicle plus platform-shared siblings you are sure about. Omit uncertain ones.\n• STANDARDISED / UNIVERSAL parts (a globe/bulb of a standard base such as H1/H4/H7/H11/HB3/9005, a fuse, a wiper blade of a given size, a standard spin-on oil filter, a common belt): these genuinely fit MANY vehicles. First identify the exact specification, then list the common Australian-market vehicles that use that spec — up to 20 popular models with realistic year ranges. This is accurate, not guessing, so do NOT restrict it to just the donor car.\nNever list a vehicle that does not actually take this part. Return an empty array only if you truly cannot tell.`
+          const aspList = aspectPromptList(todo)
+          const sys = SPECIFICS_SYSTEM_PROMPT
           const usr = `Part: ${part.title || ''}\nVehicle: ${part.make || ''} ${part.model || ''} ${part.year || ''}\nCategory: ${part.category || ''}\nPart number: ${part.part_number || 'unknown'}\n${aiPhotos.length > 1 ? `\nThe ${aiPhotos.length} photos are all of the SAME part from different angles/close-ups — use them together.` : ''}\nAspects to fill:\n${aspList}`
           const content = [
             ...aiPhotos.map((u: string) => ({ type: 'image', source: { type: 'url', url: u } })),
@@ -248,13 +217,7 @@ async function fillAspects(
           if (raw) {
             let map: any = null
             try { map = JSON.parse(raw) } catch { const mm = raw.match(/\{[\s\S]*\}/); if (mm) map = JSON.parse(mm[0]) }
-            const aspMap = map?.aspects || map || {}
-            for (const s of todo) {
-              const v = aspMap[s.name]
-              if (!v || typeof v !== 'string') continue
-              if (s.selectionOnly && s.allowed.length) { const m = inAllowedOf(s.allowed, v); if (m) aspects[s.name] = [m] }
-              else aspects[s.name] = [v.slice(0, 65)]
-            }
+            applyAiAspects(todo, map?.aspects || map || {}, aspects)
             if (Array.isArray(map?.fitment)) fitmentList = map.fitment.slice(0, 50)
           }
         } catch (_) { /* AI is best-effort */ }
@@ -262,75 +225,22 @@ async function fillAspects(
 
       // Always include the donor vehicle in the fitment (the AI adds extra models
       // on top). Never let the donor car be dropped.
-      if (part.make && part.model) {
-        const dl = (s: any) => String(s || '').toLowerCase()
-        const hasDonor = fitmentList.some((f: any) => dl(f.make) === dl(part.make) && dl(f.model) === dl(part.model))
-        if (!hasDonor) {
-          const ys = String(part.year || '').match(/\d{4}/g) || []
-          fitmentList.unshift({ make: part.make, model: part.model, yearFrom: ys[0] ? +ys[0] : undefined, yearTo: ys[1] ? +ys[1] : (ys[0] ? +ys[0] : undefined), trim: '', engine: '' })
-        }
-      }
+      fitmentList = ensureDonorFitment(fitmentList, part)
 
       // Compatible-vehicle item specifics (multi-value) from the fitment.
-      if (fitmentList.length) {
-        const uniq = (xs: string[]) => [...new Set(xs.filter(Boolean))]
-        const makes = uniq(fitmentList.map((f: any) => f.make))
-        const models = uniq(fitmentList.map((f: any) => f.model))
-        const years = uniq(fitmentList.flatMap((f: any) => {
-          const out: string[] = []; const yf = +f.yearFrom, yt = +f.yearTo || yf
-          if (yf) for (let y = yf; y <= yt && y - yf < 40; y++) out.push(String(y))
-          return out
-        }))
-        for (const s of specs) {
-          const nlc = s.name.toLowerCase()
-          if (!/compat/.test(nlc)) continue
-          let vals = /make/.test(nlc) ? makes : /model/.test(nlc) ? models : /year/.test(nlc) ? years : []
-          if (s.allowed.length) vals = vals.map((v) => inAllowedOf(s.allowed, v)).filter(Boolean) as string[]
-          if (vals.length) aspects[s.name] = uniq([...(aspects[s.name] || []), ...vals]).slice(0, 30)
-        }
-      }
+      compatibilityAspects(specs, fitmentList, aspects)
 
       // Pass 3 — required-but-empty → sensible/neutral value.
-      for (const s of specs) {
-        if (aspects[s.name] || !s.required) continue
-        const nlc = s.name.toLowerCase()
-        if (/\b(brand|manufacturer)\b/.test(nlc) && !/part/.test(nlc) && !/warrant/.test(nlc))
-          aspects[s.name] = [s.allowed.length ? (inAllowedOf(s.allowed, 'Unbranded') || s.allowed[0]) : (part.make || 'Unbranded')]
-        else if (/part\s*number|mpn/i.test(nlc)) aspects[s.name] = [part.part_number || 'Does Not Apply']
-        else if (s.allowed.length) aspects[s.name] = [s.allowed.find((v: string) => NEUTRAL.includes(v.toLowerCase())) || s.allowed[0]]
-        else aspects[s.name] = ['Unbranded']
-      }
+      fillRequiredNeutral(specs, part, aspects)
 
-      // Warranty aspect(s) — a warranty PERIOD, set deterministically and never
-      // derived from the make/brand. Uses the store default (Settings → Listing
-      // Defaults) or "1 Month" when unset. Authoritative: overrides anything the
-      // passes above may have put here (e.g. a stray make value). For "choose one"
-      // aspects only a listed value is set (1 Month ≈ 30 Days), so eBay never gets
-      // an invalid term; otherwise the free-text value is written.
-      const warrantyVal = String(listingDefaults?.warranty || '').trim() || '1 Month'
-      for (const s of specs) {
-        if (!/warrant/i.test(s.name)) continue
-        if (s.selectionOnly && s.allowed.length) {
-          const m = inAllowedOf(s.allowed, warrantyVal)
-            || (/1\s*month|30\s*day/i.test(warrantyVal) ? s.allowed.find((v: string) => /1\s*month|30\s*day/i.test(v)) : undefined)
-          if (m) aspects[s.name] = [m] // else leave any valid value already set (never a make, per the derive/Pass-3 fixes)
-        } else {
-          aspects[s.name] = [warrantyVal]
-        }
-      }
+      // Warranty is a PERIOD, never the brand — set last so it is authoritative.
+      applyWarranty(specs, aspects, listingDefaults)
     }
   } catch (_) { /* best effort */ }
   // Manual overrides win over the AI — the user's corrections in the listing
   // preview (and, later, the mapping page) are authoritative.
-  const ov = part.ebay_overrides || {}
-  if (ov.specifics && typeof ov.specifics === 'object') {
-    for (const [k, v] of Object.entries(ov.specifics)) {
-      if (v == null || v === '') delete aspects[k]
-      else aspects[k] = [String(v)]
-    }
-  }
-  if (Array.isArray(ov.fitment)) fitmentList = ov.fitment
-  return { aspects, fitmentList, specs: specsOut }
+  const ovd = applyOverrides(part, aspects, fitmentList)
+  return { aspects: ovd.aspects, fitmentList: ovd.fitmentList, specs: specsOut }
 }
 
 // Build the full listing description (body + "Compatible with" block + footer)
@@ -4001,10 +3911,19 @@ async function handleRequest(req: Request): Promise<Response> {
               const compatibleProducts: any[] = []
               for (const f of fitmentList) {
                 if (!f.make || !f.model) continue
-                const yf = +f.yearFrom, yt = +f.yearTo || yf
-                const years: string[] = []
-                if (yf) for (let y = yf; y <= yt && y - yf < 40; y++) years.push(String(y))
-                else years.push('')
+                // Same expansion the Compatible Year aspect uses — one function so
+                // the specifics and the compatibility list can never claim different
+                // years for the same part.
+                //
+                // ⚠ Behaviour change (2026-08-27): a row whose years cannot be
+                // expanded now yields a make+model entry with no Year property.
+                // Previously that was true only when yearFrom was MISSING; a
+                // BACKWARDS range (yearFrom 2015, yearTo 2010 — the model does
+                // produce these) fell through the loop and the vehicle vanished
+                // from compatibility entirely, with nothing logged. Same treatment
+                // for both now, on the path eBay search actually matches.
+                const years: string[] = expandYears(f)
+                if (!years.length) years.push('')
                 for (const y of years) {
                   const props: any[] = [{ name: 'Make', value: String(f.make) }, { name: 'Model', value: String(f.model) }]
                   if (y) props.push({ name: 'Year', value: y })
