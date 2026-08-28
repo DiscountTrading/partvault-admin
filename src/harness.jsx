@@ -12,7 +12,7 @@ import Analytics from './components/Analytics'
 import Settings from './components/Settings'
 import PartForm from './components/PartForm'
 import Help from './components/Help'
-import { C } from './lib/constants'
+import { C, S } from './lib/constants'
 import { sb } from './lib/supabase'
 
 const MAKES = [['Toyota','Corolla','2008'],['Ford','Ranger','2016'],['Holden','Commodore','2011']]
@@ -93,9 +93,13 @@ const render = SCREENS[screen] || SCREENS.inventory
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <div style={{ background: C.bg, color: C.text, minHeight: '100vh', padding: '14px 12px 90px' }}>
-      <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>harness · {screen} · {window.innerWidth}px</div>
-      {render()}
+    <div style={{ background: C.bg, color: C.text, minHeight: '100vh', paddingBottom: 90 }}>
+      <div style={{ fontSize: 11, color: C.muted, padding: '10px 12px 0' }}>harness · {screen} · {window.innerWidth}px</div>
+      {/* The app wraps every screen in S.main, which carries a maxWidth of 1600.
+          The harness used its own padding and no cap, so it measured screens on a
+          wider canvas than they ever get in the app — density numbers taken here
+          came out flattering on any monitor wider than 1600px. Use the real one. */}
+      <div style={S.main}>{render()}</div>
     </div>
   </StrictMode>
 )
