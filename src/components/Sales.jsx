@@ -766,7 +766,11 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
   const PERIOD_TITLES = { 0: 'All time', 7: 'Last 7 days', 30: 'Last 30 days', 90: 'Last 90 days', 365: 'Last 12 months' }
   const periodTitle = period === 'custom' ? 'Selected range' : (PERIOD_TITLES[period] || `Last ${period} days`)
   const th = { textAlign: 'left', padding: '9px 12px', color: C.muted, fontWeight: 700, fontSize: 11, whiteSpace: 'nowrap', position: 'sticky', top: 0, background: '#fff', zIndex: 5 }
-  const td = (align = 'left') => ({ textAlign: align, padding: '9px 12px', color: C.text, whiteSpace: 'nowrap' })
+  // Padding matched to Inventory (4px 8px, 12px type), which Paul named as the
+  // density every table should hit. At 9px 12px a sale row was 42px against
+  // Inventory's 30 — half again as tall for the same one line of text, which is
+  // what "two row spaces per part" was.
+  const td = (align = 'left') => ({ textAlign: align, padding: '4px 8px', fontSize: 12, color: C.text, whiteSpace: 'nowrap' })
 
   // The four "click a figure for its breakdown" popups. One definition each, so
   // the desktop table cell and the phone card open exactly the same explanation.

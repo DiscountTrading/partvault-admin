@@ -31,6 +31,12 @@
          chip that is decoration next to a real control, never the tap target. */
       button:not(.pv-compact) { min-height: 44px; }
     }
+    /* Column layouts (the part form, the settings pages). A card is one object:
+       a column break through the middle of it separates a control from its label
+       and reads as a rendering fault, not a layout. Applied to every child of the
+       container rather than to each card, because the cards are styled a dozen
+       different ways and the next one added would silently be missed. */
+    .pv-cols > * { break-inside: avoid; -webkit-column-break-inside: avoid; }
   </style>
 </head>
 <body>

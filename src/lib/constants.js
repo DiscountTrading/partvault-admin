@@ -1,4 +1,4 @@
-export const APP_VERSION = '3.36.95'
+export const APP_VERSION = '3.36.96'
 
 import { getActiveMarketplace } from './marketplaces'
 
@@ -98,7 +98,11 @@ export const S = {
   logo:{ color:'#fff', fontWeight:800, fontSize:20, fontFamily:"'Inter Tight',system-ui,sans-serif", padding:'14px 24px 14px 20px', borderRight:'1px solid rgba(255,255,255,0.12)', whiteSpace:'nowrap', letterSpacing:'-0.5px' },
   navBtn: a => ({ background:a?C.accent:'transparent', color:a?'#fff':'rgba(255,255,255,0.6)', border:'none', cursor:'pointer', padding:'14px 16px', fontSize:13, fontWeight:a?600:400, transition:'all .15s' }),
   main:{ padding:'28px 32px', maxWidth:1600, margin:'0 auto' },
-  card:{ background:C.card, border:`1px solid ${C.border}`, borderRadius:12, padding:24, boxShadow:'0 1px 3px rgba(0,0,0,0.06)' },
+  // breakInside:'avoid' belongs on the token, not on each screen that happens to
+  // use columns. A card is a single object; a column (or a print page) breaking
+  // one in half mid-control reads as a rendering fault. Settings proved it: the
+  // Plan card ended one column and its buttons started the next.
+  card:{ background:C.card, border:`1px solid ${C.border}`, borderRadius:12, padding:24, boxShadow:'0 1px 3px rgba(0,0,0,0.06)', breakInside:'avoid', WebkitColumnBreakInside:'avoid' },
   label:{ fontSize:12, color:C.muted, fontWeight:600, marginBottom:6, display:'block', letterSpacing:'0.2px' },
   input:{ width:'100%', background:'#fff', border:`1.5px solid ${C.border}`, borderRadius:8, padding:'10px 14px', color:C.text, fontSize:14, boxSizing:'border-box', outline:'none' },
   select:{ width:'100%', background:'#fff', border:`1.5px solid ${C.border}`, borderRadius:8, padding:'10px 14px', color:C.text, fontSize:14, boxSizing:'border-box' },

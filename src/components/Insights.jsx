@@ -671,7 +671,16 @@ export default function Insights({ storeId, initial, parts = [], costing = {} })
               ) : shown.map(r => (
                 <tr key={r.part_id} style={{ borderBottom: `1px solid ${C.border}`, background: isDead(r) ? '#fff7ed' : '#fff' }}>
                   {visCols.map(col => (
-                    <td key={col.key} style={{ textAlign: col.align, padding: '9px 12px', color: C.text, whiteSpace: col.key === 'title' ? 'normal' : 'nowrap', maxWidth: col.key === 'title' ? 280 : undefined, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    // The title used to be the one column allowed to WRAP
+                    // (whiteSpace:'normal' at maxWidth 280), which is why a real
+                    // part like "Holden Camry 2008 Dell Laptop AC Power Adapter
+                    // Charger Cable OEM" took two or three row-heights and the
+                    // table read as one part per several rows. It now behaves
+                    // like Inventory's: one line, ellipsis, full text on hover.
+                    // Padding matches Inventory too (4px 8px / 12px), because
+                    // Inventory is the density this screen is measured against.
+                    <td key={col.key} title={col.key === 'title' ? String(r.title || '') : undefined}
+                      style={{ textAlign: col.align, padding: '4px 8px', fontSize: 12, color: C.text, whiteSpace: 'nowrap', maxWidth: col.key === 'title' ? 420 : undefined, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {cell(r, col)}
                     </td>
                   ))}

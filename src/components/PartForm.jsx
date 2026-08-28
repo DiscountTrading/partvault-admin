@@ -328,7 +328,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
 
           Sections pass `span` to break out across all columns; that is what
           columnSpan is for, and it is why the wide ones still get the room. */}
-      <div style={{ columnWidth:400, columnGap:14 }}>
+      <div className="pv-cols" style={{ columnWidth:400, columnGap:14 }}>
       {/* Photos / AI Quick Add — eBay puts photos first */}
       {!part && (
         <Section title="Photos" hint="Add a photo and AI fills in the listing details." accent="#7c3aed"

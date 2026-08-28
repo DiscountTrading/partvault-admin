@@ -93,8 +93,11 @@ const AI_GROUPS = [
 const fmtCredits = (n) => `${n % 1 === 0 ? n : n.toFixed(1)} credit${n === 1 ? '' : 's'} (~${Math.round(n * 10)}¢)`
 
 function Section({ title, children }) {
+  // breakInside:'avoid' is load-bearing once the panel below flows in columns —
+  // without it a card gets cut in half and continued in the next column, which
+  // reads as a rendering fault rather than a layout.
   return (
-    <div style={{ ...S.card, marginBottom: 16 }}>
+    <div style={{ ...S.card, marginBottom: 16, breakInside: 'avoid', WebkitColumnBreakInside: 'avoid' }}>
       <h2 style={S.h2}>{title}</h2>
       {children}
     </div>
@@ -1340,6 +1343,8 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     return preview
   }
 
+  // Tabs that are a list of small controls rather than a wide table.
+  const SETTINGS_COLUMN_TABS = ['account', 'ai', 'descriptions', 'costs']
   const SETTING_TABS = [
     { id: 'account', label: '👤 Account' },
     { id: 'ai', label: '🧠 AI' },
@@ -1641,6 +1646,17 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         ))}
       </div>
 
+      {/* Settings pages were a stack of full-width cards, each holding one
+          small control: a select 250px wide sitting alone in an 1848px card,
+          then the next one below it. That is the "too much white space" —
+          horizontal, not vertical, and no amount of padding-trimming fixes it.
+
+          The tabs that are LISTS OF SETTINGS now flow into columns, the same
+          way the part form does. The ones that hold wide tables (eBay sync,
+          user access, activity, warehouse, shipping) are left in a single
+          column on purpose — squeezing a table into a 460px column would trade
+          one kind of unusable for another. */}
+      <div className={SETTINGS_COLUMN_TABS.includes(tab) ? 'pv-cols' : undefined} style={SETTINGS_COLUMN_TABS.includes(tab) ? { columnWidth: 460, columnGap: 16 } : undefined}>
       {/* SHIPPING TAB */}
       {tab === 'shipping' && <ShippingSettings storeId={storeId} />}
 
@@ -3231,6 +3247,7 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
           </div>
         </div>
       )}
+      </div>
     </div>
   )
 }
