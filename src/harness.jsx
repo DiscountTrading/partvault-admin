@@ -10,6 +10,8 @@ import Dashboard from './components/Dashboard'
 import Sales from './components/Sales'
 import Analytics from './components/Analytics'
 import Settings from './components/Settings'
+import Vehicles from './components/Vehicles'
+import BulkEdit from './components/BulkEdit'
 import PartForm from './components/PartForm'
 import Help from './components/Help'
 import { C, S } from './lib/constants'
@@ -83,6 +85,9 @@ const SCREENS = {
   analytics: () => <Analytics storeId="store-1" parts={parts} cars={cars} sales={sales} costing={costing} onVehiclesChanged={() => {}} />,
   partform: () => <PartForm part={parts[0]} cars={cars} storeId="store-1" costing={costing} aiSettings={{}} footer="" allParts={parts}
     onSave={async () => {}} onSaveAndAdd={async () => {}} onCancel={() => {}} />,
+  bymodel: () => <Vehicles parts={parts} cars={cars} sales={sales} costing={costing} level="models" />,
+  bycar: () => <Vehicles parts={parts} cars={cars} sales={sales} costing={costing} level="cars" />,
+  bulkedit: () => <BulkEdit parts={parts} cars={cars} storeId="store-1" onClose={() => {}} onSaved={() => {}} />,
   help: () => <Help storeId="store-1" />,
   settings: () => <Settings profile={{ id: 'u1', email: 'demo@partvault.app' }} storeId="store-1" parts={parts}
     onSignOut={() => {}} refreshStores={() => {}} onSettingsSaved={() => {}} onChanged={() => {}} sync={{}} />,

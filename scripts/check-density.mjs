@@ -52,7 +52,15 @@ const SCREENS = [
   { id: 'sales',     unit: 'sale',  sel: 'table tbody tr',                    label: 'Sales' },
   { id: 'analytics', unit: 'row',   sel: 'table tbody tr',                    label: 'Analytics — By part' },
   { id: 'settings',  unit: 'control', sel: 'input, select, textarea, button', label: 'Settings' },
-  { id: 'dashboard', unit: 'tile',  sel: '[data-tile], .tile',                label: 'Dashboard' },
+  // ⚠ Dashboard's selector was '[data-tile], .tile' and matched NOTHING — it sat
+  // in the report showing 0 units and 0 px/unit for days, which reads as "fine"
+  // rather than "never measured". Its cards are inline S.card divs inside two
+  // grids, so target the grid children.
+  { id: 'dashboard', unit: 'card',  sel: 'div[style*="grid"] > div[style*="border-radius"]', label: 'Dashboard' },
+  { id: 'bymodel',   unit: 'row',   sel: 'table tbody tr',                    label: 'Analytics — By model' },
+  { id: 'bycar',     unit: 'row',   sel: 'table tbody tr',                    label: 'Analytics — By car' },
+  { id: 'bulkedit',  unit: 'row',   sel: 'table tbody tr',                    label: 'Bulk edit' },
+  { id: 'help',      unit: 'block', sel: 'h2, h3, p, li',                     label: 'Help' },
 ]
 
 // ── The page-side measurement ───────────────────────────────────────────────

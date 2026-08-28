@@ -459,7 +459,11 @@ export default function Vehicles({ parts = [], cars = [], sales = [], costing = 
             ) : rows.map(r => (
               <tr key={r.id} style={{ borderBottom: `1px solid ${C.border}` }}>
                 {cols.map(col => (
-                  <td key={col.key} style={{ textAlign: col.align, padding: '10px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: col.key === 'name' ? 600 : 400, color: col.pos ? posColor(r[col.key]) : C.text }}>
+                  // 4px 8px / 12px matches Inventory and the By-part table. At
+                  // 10px 12px these rows were 43px against By-part's 24 — the
+                  // same table of the same parts, pivoted differently, costing
+                  // nearly twice the height per row.
+                  <td key={col.key} style={{ textAlign: col.align, padding: '4px 8px', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: col.key === 'name' ? 600 : 400, color: col.pos ? posColor(r[col.key]) : C.text }}>
                     {col.render(r)}
                   </td>
                 ))}
