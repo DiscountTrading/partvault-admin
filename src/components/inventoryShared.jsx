@@ -98,10 +98,18 @@ const BYPART_COLS = [
   ['List$', 80, 'right'], ['Cost', 80, 'right'], ['Profit', 86, 'right'], ['Del', 54, 'center'],
 ]
 const BYPART_MINW = BYPART_COLS.reduce((n, c) => n + c[1], 0)
-function Section({ title, hint, action, children, accent }) {
+// `span` makes a section take the full width of the form grid instead of one
+// column — for the ones that genuinely need the room (a description textarea, a
+// listing preview, a wide cost table). Everything else sits in a column, which
+// is what stopped the form being three pages of scrolling.
+//
+// breakInside:'avoid' is load-bearing: without it a multi-column layout will
+// happily split a card down the middle and continue it in the next column,
+// which looks like a rendering fault rather than a layout.
+function Section({ title, hint, action, children, accent, span }) {
   return (
-    <div style={{ background:'#fff', border:`1px solid ${C.border}`, borderRadius:14, padding:'18px 22px', marginBottom:16, boxShadow:'0 1px 2px rgba(0,0,0,0.04)' }}>
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14, gap:12 }}>
+    <div style={{ background:'#fff', border:`1px solid ${C.border}`, borderRadius:14, padding:'14px 18px', marginBottom:14, boxShadow:'0 1px 2px rgba(0,0,0,0.04)', breakInside:'avoid', WebkitColumnBreakInside:'avoid', columnSpan: span ? 'all' : undefined }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10, gap:12 }}>
         <div style={{ display:'flex', alignItems:'center', gap:10, minWidth:0 }}>
           <span style={{ width:4, height:18, borderRadius:2, background:accent||EBAY_BLUE, flexShrink:0 }} />
           <div style={{ minWidth:0 }}>

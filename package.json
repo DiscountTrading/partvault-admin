@@ -12,6 +12,9 @@
     "check:edge:selftest": "node scripts/check-edge.mjs --self-test",
     "check:drift": "node scripts/check-drift.mjs",
     "check:writes": "node scripts/check-writes.mjs",
+    "//check:density": "Needs the dev server running, so it is NOT in `npm run check` — a gate that fails when a server is not up teaches people to skip gates.",
+    "check:density": "node scripts/check-density.mjs",
+    "check:density:selftest": "node scripts/check-density.mjs --self-test",
     "check:writes:selftest": "node scripts/check-writes.mjs --self-test",
     "check": "npm run lint && npm run check:edge && npm run check:drift && npm run check:writes && npm test",
     "test": "node --experimental-strip-types tests/vehicles.test.mjs && node --experimental-strip-types tests/listing-helpers.test.mjs && node --experimental-strip-types tests/aspects.test.mjs && node --experimental-strip-types tests/marketplace.test.mjs && node tests/store-settings.test.mjs && node tests/category-map.test.mjs && node tests/passkeys.test.mjs"
@@ -32,6 +35,7 @@
     "eslint-plugin-react-hooks": "7.0.1",
     "eslint-plugin-react-refresh": "0.5.2",
     "globals": "17.4.0",
+    "puppeteer-core": "24.16.1",
     "vite": "8.0.8"
   }
 }

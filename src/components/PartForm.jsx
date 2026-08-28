@@ -287,7 +287,11 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
     : { background:'#fff', color:EBAY_BLUE, border:`1.5px solid ${EBAY_BLUE}`, borderRadius:24, padding:'11px 22px', fontSize:14, fontWeight:600, cursor:'pointer' }
 
   return (
-    <div style={{ maxWidth: 820, paddingBottom: 84 }}>
+    // No width cap. This was maxWidth:820, which on a 1872px monitor used 41% of
+    // the screen and left 1,098px empty — so every section had to stack, and
+    // adding a part ran to three full pages of scrolling. Inventory, the screen
+    // that already felt efficient, uses 99% of the width; this now can too.
+    <div style={{ paddingBottom: 84 }}>
       {uncheckedWarning && (
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:999, display:'flex', alignItems:'center', justifyContent:'center' }}>
           <div style={{ ...S.card, maxWidth:400, width:'90%', textAlign:'center', borderColor:C.yellow, borderWidth:2 }}>
@@ -311,6 +315,20 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
         <button style={S.btn('secondary')} onClick={onCancel}>Cancel</button>
       </div>
 
+      {/* The form flows its sections into COLUMNS rather than stacking them.
+          columnWidth (not a column count) means the browser picks how many fit:
+          one on a phone, two on a laptop, four on a wide monitor — no
+          breakpoints to keep in sync and nothing tuned to one monitor.
+
+          Multi-column rather than grid on purpose. A grid lays out in ROWS, so a
+          150px card sitting beside a 387px one leaves 237px of dead space under
+          it, and the last card gets a row to itself with three empty columns
+          beside it — which is how the first attempt still came to two screens.
+          Columns flow, so each one packs to its own height.
+
+          Sections pass `span` to break out across all columns; that is what
+          columnSpan is for, and it is why the wide ones still get the room. */}
+      <div style={{ columnWidth:400, columnGap:14 }}>
       {/* Photos / AI Quick Add — eBay puts photos first */}
       {!part && (
         <Section title="Photos" hint="Add a photo and AI fills in the listing details." accent="#7c3aed"
@@ -355,7 +373,7 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
 
       {/* eBay listing preview — see the exact category + item specifics + fitment */}
       {part && (
-        <Section title="eBay listing preview" accent="#1d4ed8"
+        <Section span title="eBay listing preview" accent="#1d4ed8"
           hint="An exact image of what will go to eBay — photos, title, price, description + footer, item specifics and compatible vehicles. No surprises when you list.">
           <button onClick={togglePreview} disabled={previewLoading}
             style={{ ...ebayBtn('secondary'), padding:'8px 18px', fontSize:13, borderColor:'#1d4ed8', color:'#1d4ed8', opacity:previewLoading?0.6:1 }}>
@@ -783,6 +801,8 @@ function PartForm({ part, cars, storeId, onSave, onSaveAndAdd, onCancel, aiSetti
         )}
         <Field label="Notes"><input style={S.input} value={form.notes||''} onChange={e => set('notes', e.target.value)} /></Field>
       </Section>
+
+      </div>
 
       {/* eBay-style sticky action bar */}
       {/* On a phone this bar has to sit ABOVE the app's fixed bottom tab bar,
