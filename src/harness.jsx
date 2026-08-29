@@ -12,6 +12,12 @@ import Analytics from './components/Analytics'
 import Settings from './components/Settings'
 import Vehicles from './components/Vehicles'
 import BulkEdit from './components/BulkEdit'
+import SystemAdmin from './components/SystemAdmin'
+import HistoricalCosts from './components/HistoricalCosts'
+import SpellingCleanup from './components/SpellingCleanup'
+import ContainerManager from './components/ContainerManager'
+import SkuReconcile from './components/SkuReconcile'
+import EbayHistoryUpload from './components/EbayHistoryUpload'
 import PartForm from './components/PartForm'
 import Help from './components/Help'
 import { C, S } from './lib/constants'
@@ -88,6 +94,14 @@ const SCREENS = {
   bymodel: () => <Vehicles parts={parts} cars={cars} sales={sales} costing={costing} level="models" />,
   bycar: () => <Vehicles parts={parts} cars={cars} sales={sales} costing={costing} level="cars" />,
   bulkedit: () => <BulkEdit parts={parts} cars={cars} storeId="store-1" onClose={() => {}} onSaved={() => {}} />,
+  // The ops console and the panels that only open from inside another screen.
+  // They had never been rendered anywhere a measurement could reach them.
+  ops:        () => <SystemAdmin client={sb} onSignOut={() => {}} />,
+  histcosts:  () => <HistoricalCosts storeId="store-1" />,
+  spelling:   () => <SpellingCleanup storeId="store-1" parts={parts} cars={cars} onApplied={() => {}} onClose={() => {}} />,
+  containers: () => <ContainerManager storeId="store-1" warehouse={{ enabled: true, containers: true }} />,
+  skureconcile: () => <SkuReconcile storeId="store-1" parts={parts} onApplied={() => {}} />,
+  ebayhistory: () => <EbayHistoryUpload storeId="store-1" canUpload />,
   help: () => <Help storeId="store-1" />,
   settings: () => <Settings profile={{ id: 'u1', email: 'demo@partvault.app' }} storeId="store-1" parts={parts}
     onSignOut={() => {}} refreshStores={() => {}} onSettingsSaved={() => {}} onChanged={() => {}} sync={{}} />,

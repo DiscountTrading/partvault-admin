@@ -60,7 +60,13 @@ const SCREENS = [
   { id: 'bymodel',   unit: 'row',   sel: 'table tbody tr',                    label: 'Analytics — By model' },
   { id: 'bycar',     unit: 'row',   sel: 'table tbody tr',                    label: 'Analytics — By car' },
   { id: 'bulkedit',  unit: 'row',   sel: 'table tbody tr',                    label: 'Bulk edit' },
-  { id: 'help',      unit: 'block', sel: 'h2, h3, p, li',                     label: 'Help' },
+  { id: 'help',        unit: 'block',   sel: 'h2, h3, p, li',           label: 'Help' },
+  { id: 'ops',         unit: 'control', sel: 'input, select, button, table tbody tr', label: 'Ops console' },
+  { id: 'histcosts',   unit: 'row',     sel: 'input, select, table tbody tr', label: 'Historical costs' },
+  { id: 'spelling',    unit: 'row',     sel: 'table tbody tr, button',  label: 'Tidy spellings' },
+  { id: 'containers',  unit: 'row',     sel: 'table tbody tr, input',   label: 'Containers' },
+  { id: 'skureconcile',unit: 'row',     sel: 'table tbody tr, button',  label: 'SKU reconcile' },
+  { id: 'ebayhistory', unit: 'control', sel: 'input, select, button',   label: 'eBay history upload' },
 ]
 
 // ── The page-side measurement ───────────────────────────────────────────────
@@ -301,6 +307,13 @@ for (const vp of VIEWPORTS) {
   console.log('  screen                       screens tall  px/unit  cols   chrome first   seen w/o    width used')
   console.log('                                                              (before content)  scrolling')
   for (const r of rows) {
+    // A screen whose unit selector matched nothing is NOT a screen that measured
+    // well — it is one that was not measured. Printing zeros for it reads as
+    // "fine", which is exactly how the Dashboard sat unmeasured in this report.
+    if (!r.unitCount) {
+      console.log(`  ${r.label.padEnd(28)}\x1b[33m  not measured — its unit selector matched nothing (needs data stubs)\x1b[0m`)
+      continue
+    }
     const flag = r.screensTall > 1.5 ? ' \x1b[31m<<\x1b[0m' : ''
     const chrome = `${r.chromeBeforeContent}px (${r.chromePctOfViewport}%)`
     const seen = `${r.unitsInFirstScreen}/${r.unitCount}`

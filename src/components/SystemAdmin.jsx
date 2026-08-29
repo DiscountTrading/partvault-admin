@@ -255,7 +255,11 @@ export default function SystemAdmin({ client, onSignOut }) {
         <div style={{ color: '#fff', fontWeight: 800, fontSize: 16 }}>🛠️ PartVault — Platform Ops</div>
         <button style={{ background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.2)', color: '#fff', borderRadius: 6, padding: '6px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 600 }} onClick={onSignOut}>Sign out</button>
       </div>
-      <div style={{ maxWidth: 1080, margin: '0 auto', padding: '24px 24px 40px' }}>
+      {/* Was maxWidth:1080, which used 67% of an 1872px screen. This console is
+          tables of stores and users — the content that gains most from width and
+          loses nothing to it. 1600 matches the rest of the app rather than being
+          a second, tighter cap nobody chose deliberately. */}
+      <div style={{ maxWidth: 1600, margin: '0 auto', padding: '24px 24px 40px' }}>
         <div style={{ display: 'flex', gap: 6, marginBottom: 20, borderBottom: `1px solid ${C.border}`, paddingBottom: 0 }}>
           {TABS.map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)}
