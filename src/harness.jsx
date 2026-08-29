@@ -11,6 +11,7 @@ import Sales from './components/Sales'
 import Analytics from './components/Analytics'
 import Settings from './components/Settings'
 import Vehicles from './components/Vehicles'
+import Compare from './components/Compare'
 import BulkEdit from './components/BulkEdit'
 import SystemAdmin from './components/SystemAdmin'
 import HistoricalCosts from './components/HistoricalCosts'
@@ -80,7 +81,9 @@ sb.from = (table) => {
   return b
 }
 
-const costing = { costsEnabled: true, acquisitionBase: 300, labourPerPart: 12, adminPerPart: 3 }
+// `enabled` is the key costsEnabled() reads — `costsEnabled` was ignored, so
+// this mock had the cost base on by accident rather than by saying so.
+const costing = { enabled: true, acquisitionBase: 300, labourPerPart: 12, adminPerPart: 3 }
 
 const SCREENS = {
   inventory: () => <Inventory parts={parts} cars={cars} storeId="store-1" costing={costing}
@@ -91,6 +94,7 @@ const SCREENS = {
   analytics: () => <Analytics storeId="store-1" parts={parts} cars={cars} sales={sales} costing={costing} onVehiclesChanged={() => {}} />,
   partform: () => <PartForm part={parts[0]} cars={cars} storeId="store-1" costing={costing} aiSettings={{}} footer="" allParts={parts}
     onSave={async () => {}} onSaveAndAdd={async () => {}} onCancel={() => {}} />,
+  compare: () => <Compare parts={parts} cars={cars} costing={costing} />,
   bymodel: () => <Vehicles parts={parts} cars={cars} sales={sales} costing={costing} level="models" />,
   bycar: () => <Vehicles parts={parts} cars={cars} sales={sales} costing={costing} level="cars" />,
   bulkedit: () => <BulkEdit parts={parts} cars={cars} storeId="store-1" onClose={() => {}} onSaved={() => {}} />,

@@ -4,6 +4,7 @@ import useIsMobile from '../hooks/useIsMobile'
 import Insights from './Insights'
 import Vehicles from './Vehicles'
 import SpellingCleanup from './SpellingCleanup'
+import Compare from './Compare'
 
 // ============================================================================
 // Analytics — one place to understand the stock, pivoted three ways. Formerly
@@ -19,6 +20,7 @@ const PIVOTS = [
   { id: 'part',  label: '🧩 By part',  sub: "What's making money, what's moving, and what's clogging the shelves." },
   { id: 'model', label: '🚗 By model', sub: 'Which makes and models actually make money — so you know what to buy next.' },
   { id: 'car',   label: '🔧 By car',   sub: 'Which donor cars actually make money — true ROI on each vehicle you bought.' },
+  { id: 'compare', label: '⚖️ Compare', sub: 'Hold categories, part types or cars against each other — what earns, and what sits.' },
 ]
 
 export default function Analytics({ storeId, initial, parts, cars, sales, costing, onVehiclesChanged, showCars = true }) {
@@ -77,9 +79,11 @@ export default function Analytics({ storeId, initial, parts, cars, sales, costin
 
       {tidyOpen
         ? <SpellingCleanup storeId={storeId} parts={parts} cars={cars} onApplied={onVehiclesChanged} onClose={() => setTidyOpen(false)} />
-        : (pivot === 'part'
+        : pivot === 'part'
           ? <Insights storeId={storeId} initial={initial} parts={parts} costing={costing} />
-          : <Vehicles parts={parts} cars={cars} sales={sales} costing={costing} level={pivot === 'car' ? 'cars' : 'models'} />)}
+          : pivot === 'compare'
+            ? <Compare parts={parts} cars={cars} costing={costing} />
+            : <Vehicles parts={parts} cars={cars} sales={sales} costing={costing} level={pivot === 'car' ? 'cars' : 'models'} />}
     </div>
   )
 }

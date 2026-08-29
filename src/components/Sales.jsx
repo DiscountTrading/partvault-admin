@@ -527,6 +527,79 @@ function StagePill({ label, done, locked, onClick, tip }) {
   )
 }
 
+// The facts about a sale that the row itself has no room for. The expanded row
+// used to hold nothing but the fulfilment buttons, so "how long did that sit on
+// the shelf?" — the question the whole Analytics screen is built around — could
+// not be answered from Sales at all.
+//
+// The day counts use the SAME formulas as the part_insights view, deliberately:
+//   on shelf  = sold − (acquired ?? created)      (the view's days_to_sell)
+//   on eBay   = sold − first listed
+// A second, subtly different "days on shelf" here would be worse than none.
+//
+// ⚠ The view calls a part's dates reliable when it has an acquisition date OR an
+// original listing date. With neither, both figures are counted from created_at
+// — the row it got when it was imported, not when the part was actually bought —
+// so the number is flagged rather than quietly presented as fact.
+// One label/value cell in the expanded sale. At module scope deliberately —
+// defined inside SaleFacts it would be a new component type on every render, so
+// React would unmount and remount all nine cells whenever the row re-rendered.
+function Fact({ label, value, title, warn }) {
+  return (
+    <div style={{ minWidth: 0 }} title={title}>
+      <div style={{ fontSize: 10.5, color: C.muted, fontWeight: 600, letterSpacing: '0.3px', textTransform: 'uppercase' }}>{label}</div>
+      <div style={{ fontSize: 13, color: warn ? C.yellow : C.text, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {value ?? <span style={{ color: C.border }}>—</span>}
+      </div>
+    </div>
+  )
+}
+
+function SaleFacts({ s, p, d }) {
+  const days = (from, to) => {
+    if (!from || !to) return null
+    const n = Math.floor((new Date(to) - new Date(from)) / 86400000)
+    return Number.isFinite(n) && n >= 0 ? n : null
+  }
+  const dateReliable = !!(p?.acquiredDate || p?.listedDate)
+  const shelfFrom = p?.acquiredDate || p?.createdAt
+  const onShelf = days(shelfFrom, s.soldAt)
+  const onEbay = days(p?.listedDate, s.soldAt)
+  const car = p && [p.make, p.model, p.year].filter(Boolean).join(' ')
+
+  if (!p) {
+    return (
+      <div style={{ fontSize: 12, color: C.muted, padding: '2px 2px 8px' }}>
+        No inventory record matched to this sale, so there is nothing to say about how long it was held or what it cost.
+        Match it to a part to see the shelf time.
+      </div>
+    )
+  }
+  return (
+    <div style={{
+      display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(112px, 1fr))', gap: '8px 18px',
+      padding: '2px 2px 10px', borderBottom: `1px solid ${C.border}`, marginBottom: 8,
+    }}>
+      <Fact label="On shelf" warn={!dateReliable}
+        value={onShelf == null ? null : `${!dateReliable ? '~' : ''}${onShelf}d`}
+        title={dateReliable
+          ? `Bought ${fmtDate(shelfFrom)} → sold ${fmtDate(s.soldAt)}`
+          : 'Estimated: this part has no acquisition date and no original eBay listing date, so this counts from when the record was created, not when the part was bought.'} />
+      <Fact label="On eBay" value={onEbay == null ? null : `${onEbay}d`}
+        title={p.listedDate ? `Listed ${fmtDate(p.listedDate)} → sold ${fmtDate(s.soldAt)}` : 'No listing date on record for this part.'} />
+      <Fact label="Acquired" value={p.acquiredDate ? fmtDate(p.acquiredDate) : null} />
+      <Fact label="First listed" value={p.listedDate ? fmtDate(p.listedDate) : null} />
+      <Fact label="Donor car" value={car || null} title={p.car_id ? 'Linked donor vehicle' : 'Fitment recorded on the part'} />
+      <Fact label="Category" value={p.subcategory || p.category || null} title={[p.category, p.subcategory].filter(Boolean).join(' → ')} />
+      <Fact label="Condition" value={p.condition || null} />
+      <Fact label="Part number" value={p.partNumber || null} />
+      <Fact label="Margin" value={d.cost != null && d.net != null && d.net !== 0
+        ? `${Math.round(((d.net - d.cost) / d.net) * 100)}%` : null}
+        title="Profit as a share of net sale — the same basis as the Profit column." />
+    </div>
+  )
+}
+
 // Per-sale fulfilment actions — revealed when a sales row is expanded. Walks the
 // order Collected → Packed → Posted → Delivered (toggles persisted in
 // sale_workflow, shared live with the mobile "Collect" pick-list), plus packing
@@ -1003,6 +1076,7 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
                 {isOpen && (
                   <tr style={{ borderBottom: `1px solid ${C.border}`, background: '#fafaf9' }}>
                     <td colSpan={11} style={{ padding: '0 12px 12px 42px' }}>
+                      <SaleFacts s={s} p={p} d={d} />
                       <SaleActions s={s} p={p} wf={wf} setStage={setStage} />
                     </td>
                   </tr>

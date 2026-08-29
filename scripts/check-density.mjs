@@ -60,6 +60,7 @@ const SCREENS = [
   { id: 'bymodel',   unit: 'row',   sel: 'table tbody tr',                    label: 'Analytics — By model' },
   { id: 'bycar',     unit: 'row',   sel: 'table tbody tr',                    label: 'Analytics — By car' },
   { id: 'bulkedit',  unit: 'row',   sel: 'table tbody tr',                    label: 'Bulk edit' },
+  { id: 'compare',     unit: 'card',    sel: 'div[style*="grid"] > div[style*="border-radius"]', label: 'Analytics — Compare' },
   { id: 'help',        unit: 'block',   sel: 'h2, h3, p, li',           label: 'Help' },
   { id: 'ops',         unit: 'control', sel: 'input, select, button, table tbody tr', label: 'Ops console' },
   { id: 'histcosts',   unit: 'row',     sel: 'input, select, table tbody tr', label: 'Historical costs' },
