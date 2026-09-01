@@ -3,6 +3,7 @@ import { C, S, fmt, APP_VERSION, DEFAULT_POSTAGE_TIERS, defaultPostageTiers, DEF
 import { printLabels, DEFAULT_LABELS } from '../lib/labels'
 import { sb, EDGE_FN, FN_URL } from '../lib/supabase'
 import { updateStoreSettings } from '../lib/storeSettings'
+import { fyConfig, FY_STARTS, financialYearOf, describeFy } from '../lib/financialYear'
 import { buildSkuPreview, SKU_TOKENS, DEFAULT_SKU_TEMPLATE, DEFAULT_SKU_PAD } from '../lib/sku'
 import { MARKETPLACES, MARKETPLACE_LIST } from '../lib/marketplaces'
 import useIsMobile from '../hooks/useIsMobile'
@@ -274,6 +275,22 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
     }
   }, [storeId])
   useEffect(() => { fetchNightly() }, [fetchNightly])
+  // ── Financial year ────────────────────────────────────────────────────────
+  // Defaults to the store's marketplace country (AU 1 Jul, UK 6 Apr, US/CA
+  // calendar) and is overridable, because an incorporated business can run a
+  // substituted accounting period and a Canadian one usually does.
+  const [fyStart, setFyStart] = useState('')     // '' = follow the country
+  const [fySaved, setFySaved] = useState(false)
+  const saveFyStart = async (v) => {
+    setFyStart(v)
+    try {
+      // '' clears the override so the country default applies again.
+      const patch = v ? { startMonth: +v.split('-')[0], startDay: +v.split('-')[1] } : null
+      await updateStoreSettings(sb, storeId, { financialYear: patch })
+      setFySaved(true); setTimeout(() => setFySaved(false), 2000)
+    } catch (e) { alert(e.message) }
+  }
+
   // Store timezone — drives the nightly sync schedule (local midnight) and the
   // default sales-match window. Captured from the browser on first load, editable.
   const browserTz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' } catch { return 'UTC' } })()
@@ -525,6 +542,8 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
         // nightly sync runs at THIS store's local midnight rather than a default.
         if (data.settings.timezone) setTimezone(data.settings.timezone)
         else saveTimezone(browserTz)
+        const fy = data.settings.financialYear
+        setFyStart(fy?.startMonth ? `${fy.startMonth}-${fy.startDay || 1}` : '')
         if (data.settings.syncIntervalHours) setSyncInterval(+data.settings.syncIntervalHours)
         // Per-area AI picks; seed missing areas from the legacy keys so the AI tab
         // reflects what the edge fns will actually do.
@@ -2006,6 +2025,36 @@ export default function Settings({ profile, storeId, onSignOut, refreshStores, o
                     return `Sync windows are anchored to midnight here${local ? ` · local time now ${local}` : ''}. Auto-detected from your browser — edit if it's wrong (e.g. on a VPN). Auto-sync frequency is set under eBay Sync.`
                   })()}
                 </div>
+
+              {/* Financial year — different in every country, so it is stated
+                  rather than assumed. Reporting periods key off this. */}
+              {(() => {
+                const country = MARKETPLACES[marketplace]?.country || 'AU'
+                const cfg = fyConfig(fyStart ? { financialYear: { startMonth: +fyStart.split('-')[0], startDay: +fyStart.split('-')[1] } } : {}, country)
+                const now = financialYearOf(Date.now(), cfg, timezone || 'UTC')
+                const d = (ms) => new Date(ms).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })
+                return (
+                  <div style={{ background: '#f9f8f5', border: `1px solid ${C.border}`, borderRadius: 10, padding: '10px 14px', marginBottom: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>📅 Financial year</span>
+                      <select value={fyStart} onChange={e => saveFyStart(e.target.value)}
+                        style={{ border: `1px solid ${C.border}`, borderRadius: 6, padding: '4px 8px', fontSize: 12, background: '#fff', maxWidth: '100%' }}>
+                        <option value="">{FY_STARTS[country]?.label || 'Follow my marketplace'}</option>
+                        <option value="7-1">Starts 1 July</option>
+                        <option value="4-1">Starts 1 April</option>
+                        <option value="4-6">Starts 6 April (UK personal)</option>
+                        <option value="1-1">Starts 1 January</option>
+                        <option value="10-1">Starts 1 October</option>
+                      </select>
+                      {fySaved && <span style={{ fontSize: 12, color: C.green }}>✓ saved</span>}
+                    </div>
+                    <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>
+                      {describeFy(cfg)} · this year is <strong>{now.label}</strong>, {d(now.fromMs)} to {d(now.toMs)}.
+                      {' '}Dates use the store timezone above, so a sale late on the last night lands in the right year.
+                    </div>
+                  </div>
+                )
+              })()}
               </div>
 
 

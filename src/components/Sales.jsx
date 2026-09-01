@@ -3,6 +3,7 @@ import { C, S, fmt, partEffectiveCost, estimateCostBasis, storageCostFor, storag
 import useMatchHeight from '../hooks/useMatchHeight'
 import useIsMobile from '../hooks/useIsMobile'
 import MobileSection from './MobileSection'
+import { fyConfig, fyOptions } from '../lib/financialYear'
 import { printLabels } from '../lib/labels'
 import { hasGridLoc, gridLocShort } from '../lib/warehouse'
 import { getActiveMarketplace } from '../lib/marketplaces'
@@ -641,7 +642,7 @@ function SaleActions({ s, p, wf, setStage }) {
 }
 
 
-export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, setStage = () => {} }) {
+export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, setStage = () => {}, storeSettings = {} }) {
   const isMobile = useIsMobile()
   // The graph|table split needs real width for BOTH columns; below ~900px (a
   // tablet, or a half-width laptop window) it stacks instead of squeezing.
@@ -667,6 +668,17 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
   // promoted panel, the days-to-sell breakdown AND the sales table. The chart
   // auto-buckets (day/week/month/year) to fit the chosen period.
   const [metric, setMetric] = useState('gross')
+  // The financial year is not the same year everywhere: AU 1 Jul, UK 6 Apr,
+  // US/CA calendar. Default follows the store's eBay marketplace — the country it
+  // trades and files in — and Settings can override it for a substituted period.
+  //
+  // Boundaries are computed in the STORE's timezone, not the browser's: 8am on
+  // 1 July in Brisbane is 10pm on 30 June UTC, and getting that wrong puts a
+  // sale in the previous year's return.
+  const fyTz = storeSettings?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+  const fyCfg = useMemo(() => fyConfig(storeSettings, getActiveMarketplace().country), [storeSettings])
+  const fyList = useMemo(() => fyOptions(now, fyCfg, fyTz), [now, fyCfg, fyTz])
+
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
 
@@ -697,6 +709,14 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
       const toMs = Math.max(fromMs, Math.min(toRaw, now))
       return { fromMs, toMs, eg: pickGrain(fromMs, toMs), custom: true }
     }
+    if (typeof period === 'string' && period.startsWith('fy-')) {
+      const fy = fyList.find(f => f.id === period)
+      if (fy) {
+        // Never past "now": a year in progress must not show an empty future.
+        const toMs = Math.min(fy.toMs, now)
+        return { fromMs: fy.fromMs, toMs, eg: pickGrain(fy.fromMs, toMs), custom: false, fy: fy.label }
+      }
+    }
     if (period === 0) { // All time — since the earliest sale
       let earliest = now
       for (const x of derivedAll) if (x.t < earliest) earliest = x.t
@@ -704,7 +724,7 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
     }
     const fromMs = startOfDayMs(now - (period - 1) * DAY)
     return { fromMs, toMs: now, eg: pickGrain(fromMs, now), custom: false }
-  }, [period, customFrom, customTo, now, derivedAll])
+  }, [period, customFrom, customTo, now, derivedAll, fyList])
 
   const chart = useMemo(() => {
     const eg = range.eg
@@ -906,6 +926,15 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {PERIODS.map(([d, lbl]) => <button key={d} onClick={() => setPeriod(d)} style={pillStyle(period === d)}>{lbl}</button>)}
+            {/* Named for the country the store sells in — FY2026 in Australia,
+                2025/26 in the UK, 2026 in the US — because a year labelled the
+                wrong way is a figure nobody trusts. */}
+            {fyList.map(f => (
+              <button key={f.id} onClick={() => setPeriod(f.id)} style={pillStyle(period === f.id)}
+                title={`${new Date(f.fromMs).toLocaleDateString('en-AU')} – ${new Date(f.toMs).toLocaleDateString('en-AU')}${fyCfg.custom ? ' · your custom financial year' : ''}`}>
+                {f.id === 'fy-this' ? f.label : `${f.label}`}
+              </button>
+            ))}
             <button onClick={() => {
               if (!customFrom) setCustomFrom(new Date(now - 29 * DAY).toISOString().slice(0, 10))
               if (!customTo) setCustomTo(new Date(now).toISOString().slice(0, 10))

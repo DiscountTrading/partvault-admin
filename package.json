@@ -17,7 +17,7 @@
     "check:density:selftest": "node scripts/check-density.mjs --self-test",
     "check:writes:selftest": "node scripts/check-writes.mjs --self-test",
     "check": "npm run lint && npm run check:edge && npm run check:drift && npm run check:writes && npm test",
-    "test": "node --experimental-strip-types tests/vehicles.test.mjs && node --experimental-strip-types tests/listing-helpers.test.mjs && node --experimental-strip-types tests/aspects.test.mjs && node --experimental-strip-types tests/marketplace.test.mjs && node tests/rollup.test.mjs && node tests/store-settings.test.mjs && node tests/category-map.test.mjs && node tests/passkeys.test.mjs"
+    "test": "node --experimental-strip-types tests/vehicles.test.mjs && node --experimental-strip-types tests/listing-helpers.test.mjs && node --experimental-strip-types tests/aspects.test.mjs && node --experimental-strip-types tests/marketplace.test.mjs && node tests/financial-year.test.mjs && node tests/rollup.test.mjs && node tests/store-settings.test.mjs && node tests/category-map.test.mjs && node tests/passkeys.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.103.0",

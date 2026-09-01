@@ -343,6 +343,9 @@ export default function App() {
   const [insightsInit, setInsightsInit] = useState(null) // drill-down filter from Dashboard
   const [cars, setCars] = useState([])
   const [marketplaceId, setMarketplaceId] = useState('EBAY_AU') // re-render trigger for currency
+  // The whole settings object, for the screens that need a field App does not
+  // already hold individually (the financial-year rule and the store timezone).
+  const [storeSettings, setStoreSettings] = useState({})
   const [plan, setPlan] = useState(() => planState(null)) // store's subscription plan (defaults open)
   const [ebayUsername, setEbayUsername] = useState(null) // for the nav "eBay store" link
   const [settingsInit, setSettingsInit] = useState(null) // banner deep-links open Settings on a specific tab
@@ -385,6 +388,7 @@ export default function App() {
     sb.from('stores').select('settings, plan').eq('id', storeId).single().then(({ data }) => {
       if (!mine()) return
       setPlan(planState(data?.plan))
+      setStoreSettings(data?.settings || {})
       setSourcing(sourcingMode(data?.settings))
       setEbayUsername(data?.settings?.ebayUsername || null)
       if (data?.settings?.aiDescription) setAiSettings(s => ({ ...s, ...data.settings.aiDescription }))
@@ -544,7 +548,7 @@ export default function App() {
       )}
       <main style={isMobile ? { padding: '14px 12px calc(80px + env(safe-area-inset-bottom))' } : S.main} key={marketplaceId}>{/* re-mounts content when the active store's currency changes */}
         {tab === 'dashboard' && <Dashboard parts={parts} sales={sales} costing={costingFull} inventory={inventory} listingStats={listingStats} storeId={storeId} onDrill={drillToInsights} onSeeSales={() => setTab('sales')} />}
-        {tab === 'sales' && <Sales sales={sales} parts={parts} costing={costingFull} wf={wf} setStage={setStage} />}
+        {tab === 'sales' && <Sales sales={sales} parts={parts} costing={costingFull} wf={wf} setStage={setStage} storeSettings={storeSettings} />}
         {tab === 'inventory' && (
           <Inventory
             parts={parts} cars={cars} storeId={storeId}
