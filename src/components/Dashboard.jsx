@@ -150,15 +150,20 @@ export default function Dashboard({ parts, sales = [], costing, inventory, listi
     <div ref={isMobile ? null : wrapRef} style={isMobile ? undefined : wrapStyle}>
     {/* Fit-to-one-screen scaling is a desktop nicety; on a phone we let it scroll. */}
     <div ref={isMobile ? null : contentRef} style={isMobile ? undefined : contentStyle}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10, paddingBottom:8, borderBottom:`1px solid ${C.border}` }}>
+      {/* On a phone the title, the history checkbox and the period pills could
+          not fit one row and could not shrink, so the header was 416px wide in a
+          390px page and dragged the WHOLE document out to 448 — every element on
+          the screen was then laid out and shrunk to that. Stacked on mobile, and
+          the pills scroll rather than push. */}
+      <div style={{ display:'flex', flexDirection:isMobile?'column':'row', alignItems:isMobile?'stretch':'center', justifyContent:'space-between', gap:isMobile?8:0, minWidth:0, marginBottom:10, paddingBottom:8, borderBottom:`1px solid ${C.border}` }}>
         <h2 style={{ ...S.h1, margin:0 }}>📊 Dashboard</h2>
-        <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap', minWidth:0 }}>
           <label style={{ display:'inline-flex', alignItems:'center', gap:6, fontSize:12, color:C.muted, cursor:'pointer' }} title="Imported historical sales use estimated (snapshot) costs.">
             <input type="checkbox" checked={includeHistory} onChange={e=>setIncludeHistory(e.target.checked)} />
             Include imported history
           </label>
-          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-            <span style={{ fontSize:12, color:C.muted }}>Sales period:</span>
+          <div className="pv-scroll" style={{ display:'flex', alignItems:'center', gap:8, minWidth:0, overflowX:'auto' }}>
+            <span style={{ fontSize:12, color:C.muted, whiteSpace:'nowrap' }}>Sales period:</span>
             <div style={{ display:'inline-flex', border:`1px solid ${C.border}`, borderRadius:8, overflow:'hidden' }}>
               {PERIODS.map(([d,lbl])=>(
                 <button key={d} type="button" onClick={()=>setPeriodDays(d)}
@@ -263,7 +268,13 @@ export default function Dashboard({ parts, sales = [], costing, inventory, listi
       <div style={{ display:'grid', gridTemplateColumns:isMobile?'1fr':'1fr 1fr', gap:isMobile?10:14, alignItems:'start' }}>
         <div style={{ ...S.card, padding:14 }}>
           <h2 style={{ ...S.h2, marginBottom:8 }}>P&L Summary <span style={{ fontWeight:400, fontSize:12, color:C.muted }}>· {periodLabel}{cogsEstimated?' · cost incl. estimates':''}</span></h2>
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:12, rowGap:10 }}>
+          {/* Two columns on a phone, and minWidth:0 on the cells. At three
+              columns this grid could not shrink below its content — a grid
+              item's automatic minimum size IS its content — so it was 416px
+              wide on a 390px screen and dragged the WHOLE PAGE out to 448,
+              shrinking every other screen element to fit. Same trap as the
+              Sales grid; see feedback_grid_min_width_trap. */}
+          <div style={{ display:'grid', gridTemplateColumns:isMobile?'repeat(2,1fr)':'repeat(3,1fr)', gap:12, rowGap:10 }}>
             {[
               ['Gross sales',fmt(grossSales),C.text],
               ['Refunds',refundTotal>0?('−'+fmt(refundTotal)):fmt(0),refundTotal>0?C.red:C.muted],
@@ -273,8 +284,8 @@ export default function Dashboard({ parts, sales = [], costing, inventory, listi
               ['Profit',fmt(profit),profit>=0?C.green:C.red],
               ['Margin',pct(margin),margin>30?C.green:C.yellow],
             ].map(([l,v,col])=>(
-              <div key={l}>
-                <div style={{ ...S.statLbl, marginBottom:2 }}>{l}</div>
+              <div key={l} style={{ minWidth:0 }}>
+                <div style={{ ...S.statLbl, marginBottom:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{l}</div>
                 <div style={{ fontSize:18, fontWeight:700, color:col }}>{v}</div>
               </div>
             ))}

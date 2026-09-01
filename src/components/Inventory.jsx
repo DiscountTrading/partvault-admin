@@ -7,6 +7,7 @@ import ListingPreview from './ListingPreview'
 import EbayActions from './EbayActions'
 import useFillHeight from '../hooks/useFillHeight'
 import useIsMobile from '../hooks/useIsMobile'
+import MobileSection from './MobileSection'
 
 import { EbayLink, StatusPill, EditableTd, BYPART_COLS, BYPART_MINW, partHasPhoto, AddCarModal, EBAY_BLUE, PartCard } from './inventoryShared'
 import PartForm from './PartForm'
@@ -338,7 +339,12 @@ export default function Inventory({ parts, cars, onAdd, onEdit, onDelete, onDele
 
       return isMobile ? (
         <div style={{ display:'flex', flexDirection:'column', gap:10, marginBottom:12 }}>
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8 }}>{chips}</div>
+          {/* Stock value / cost / profit are the money view, not what you open
+              Inventory for on a phone. Collapsed, with the headline value kept
+              in the heading so shutting it loses no number. */}
+          <MobileSection id="inv-totals" on title="Stock" summary={`$${totals.list.toFixed(0)}`}>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8 }}>{chips}</div>
+          </MobileSection>
           <input style={{ ...inputSm, width:'100%' }} placeholder="🔍 Search everything..." value={search} onChange={e => { setSearch(e.target.value); setPage(0) }} />
           <div style={{ display:'flex', gap:8, alignItems:'center' }}>
             {filterBtn}{clearBtn}{matching}

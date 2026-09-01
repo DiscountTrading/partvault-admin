@@ -22,6 +22,7 @@ import EbayHistoryUpload from './components/EbayHistoryUpload'
 import PartForm from './components/PartForm'
 import Help from './components/Help'
 import { C, S } from './lib/constants'
+import { MOBILE_MAX } from './hooks/useIsMobile'
 import { sb } from './lib/supabase'
 
 const MAKES = [['Toyota','Corolla','2008'],['Ford','Ranger','2016'],['Holden','Commodore','2011']]
@@ -118,11 +119,16 @@ createRoot(document.getElementById('root')).render(
   <StrictMode>
     <div style={{ background: C.bg, color: C.text, minHeight: '100vh', paddingBottom: 90 }}>
       <div style={{ fontSize: 11, color: C.muted, padding: '10px 12px 0' }}>harness · {screen} · {window.innerWidth}px</div>
-      {/* The app wraps every screen in S.main, which carries a maxWidth of 1600.
-          The harness used its own padding and no cap, so it measured screens on a
-          wider canvas than they ever get in the app — density numbers taken here
-          came out flattering on any monitor wider than 1600px. Use the real one. */}
-      <div style={S.main}>{render()}</div>
+      {/* Mirror App.jsx exactly — BOTH branches. It applied S.main unconditionally,
+          which was right for desktop (maxWidth 1600, previously missing) and wrong
+          for mobile: the app pads a phone screen 12px, S.main pads it 32px. That
+          40px squeezed the content enough to manufacture a horizontal overflow on
+          Dashboard that does not exist in the real app, and I spent a while
+          chasing it. Twice now the harness has lied by not being the app's own
+          container. If App.jsx's <main> style changes, change it here too. */}
+      <div style={window.matchMedia(`(max-width: ${MOBILE_MAX}px)`).matches
+        ? { padding: '14px 12px calc(80px + env(safe-area-inset-bottom))' }
+        : S.main}>{render()}</div>
     </div>
   </StrictMode>
 )

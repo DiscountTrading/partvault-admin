@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useRef, useLayoutEffect, Fragment } from 
 import { C, S, fmt, partEffectiveCost, estimateCostBasis, storageCostFor, storageConfigured, FEE_COST_KEYS } from '../lib/constants'
 import useMatchHeight from '../hooks/useMatchHeight'
 import useIsMobile from '../hooks/useIsMobile'
+import MobileSection from './MobileSection'
 import { printLabels } from '../lib/labels'
 import { hasGridLoc, gridLocShort } from '../lib/warehouse'
 import { getActiveMarketplace } from '../lib/marketplaces'
@@ -889,11 +890,17 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
   return (
     <div>
       <h2 style={{ ...S.h1, marginBottom: 4 }}>Recent Sales</h2>
-      <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>Every eBay sale, newest first — what each item made after fees. Item &amp; SKU come from your inventory record (matched by eBay item number); sales with no inventory match are tagged <strong>eBay only</strong>.</div>
+      {/* Desktop help text. On a phone it was four lines and a third of a
+          screen before the first sale, so it is desktop-only. */}
+      {!isMobile && <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>Every eBay sale, newest first — what each item made after fees. Item &amp; SKU come from your inventory record (matched by eBay item number); sales with no inventory match are tagged <strong>eBay only</strong>.</div>}
 
       <div style={{ display: 'grid', gridTemplateColumns: isNarrow ? '1fr' : 'minmax(300px, 440px) 1fr', gap: 16, alignItems: 'start' }}>
       {/* LEFT — performance graph, promoted listings, and the period totals */}
       <div ref={leftRef}>
+      {/* Performance overview — trend + comparison against the previous period.
+          On a phone this is 500px of chart above the list, so it collapses; the
+          period total rides in the heading so shutting it loses no number. */}
+      <MobileSection id="sales-perf" on={isMobile} title="Performance" summary={fmt(totals.gross)}>
       {/* Performance overview — trend + comparison against the previous period (compact). Always at the top. */}
       <div style={{ background: '#fff', border: `1px solid ${C.border}`, borderRadius: 12, padding: '14px 16px', marginBottom: 16 }}>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
@@ -938,9 +945,18 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
           <BarChart bars={chart.bars} money={chart.money} />
         </div>
       </div>
+      </MobileSection>
 
+      {/* Promoted vs organic is analysis, not what you open Sales for. */}
+      <MobileSection id="sales-promo" on={isMobile} title="Promoted vs organic"
+        summary={promo?.orders ? `${Math.round((promo.promoted / promo.orders) * 100)}% promoted` : null}>
       <PromotedPanel promo={promo} periodLabel={range.custom ? `${fmtDate(range.fromMs)} – ${fmtDate(range.toMs)}` : periodTitle} />
+      </MobileSection>
 
+      {/* Six tiles wrap to three rows on a phone. Sold and profit ride in the
+          heading, because those are the two anyone actually scans for. */}
+      <MobileSection id="sales-totals" on={isMobile} title="Totals"
+        summary={`${rows.length} sold · ${fmt(totals.net - totals.cogs)}`}>
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 4 }}>
         <Stat label="Sold" value={rows.length} />
         <Stat label="Gross sales" value={fmt(totals.gross)} color={C.accent} />
@@ -949,6 +965,7 @@ export default function Sales({ sales = [], parts = [], costing = {}, wf = {}, s
         <Stat label="Net sales" value={fmt(totals.net)} color={C.green} />
         <Stat label="Profit" value={fmt(totals.net - totals.cogs)} sub={`${totals.matched}/${rows.length} cost-linked`} color={(totals.net - totals.cogs) >= 0 ? C.green : C.red} />
       </div>
+      </MobileSection>
       </div>{/* /LEFT */}
 
       {/* RIGHT — the full sales table; matches the graphs column's height so both

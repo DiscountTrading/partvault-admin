@@ -1,4 +1,4 @@
-export const APP_VERSION = '3.37.0'
+export const APP_VERSION = '3.37.1'
 
 import { getActiveMarketplace } from './marketplaces.js'
 
@@ -102,7 +102,12 @@ export const S = {
   // use columns. A card is a single object; a column (or a print page) breaking
   // one in half mid-control reads as a rendering fault. Settings proved it: the
   // Plan card ended one column and its buttons started the next.
-  card:{ background:C.card, border:`1px solid ${C.border}`, borderRadius:12, padding:24, boxShadow:'0 1px 3px rgba(0,0,0,0.06)', breakInside:'avoid', WebkitColumnBreakInside:'avoid' },
+  // minWidth:0 belongs here for the same reason breakInside does. A card is
+  // almost always a flex or grid ITEM, and a grid item's automatic minimum size
+  // is its CONTENT — so a card whose contents want 416px forces its column to
+  // 416px and drags the whole page sideways, however narrow the screen. That is
+  // exactly what Dashboard did on a 390px phone. See feedback_grid_min_width_trap.
+  card:{ background:C.card, border:`1px solid ${C.border}`, borderRadius:12, padding:24, boxShadow:'0 1px 3px rgba(0,0,0,0.06)', breakInside:'avoid', WebkitColumnBreakInside:'avoid', minWidth:0 },
   label:{ fontSize:12, color:C.muted, fontWeight:600, marginBottom:6, display:'block', letterSpacing:'0.2px' },
   input:{ width:'100%', background:'#fff', border:`1.5px solid ${C.border}`, borderRadius:8, padding:'10px 14px', color:C.text, fontSize:14, boxSizing:'border-box', outline:'none' },
   select:{ width:'100%', background:'#fff', border:`1.5px solid ${C.border}`, borderRadius:8, padding:'10px 14px', color:C.text, fontSize:14, boxSizing:'border-box' },
