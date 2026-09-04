@@ -12,6 +12,7 @@ import {
   AU_CATEGORY_FALLBACK, storeMarketplace, requireMarketplace, categoryMapFor, categoryLookupFor,
 } from './ebay/marketplace.ts'
 import { resolveGeminiModel, toGeminiParts, callGemini } from './ai/gemini.ts'
+import { settleDecision, perUnitPrice, availableQuantity } from './ebay/quantity.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -41,7 +42,7 @@ const PROXY                   = 'https://partvault-proxy.leap00.workers.dev'
 const APP_ID                  = Deno.env.get('EBAY_APP_ID')  || 'Discount-PartVaul-PRD-36c135696-64f7f7bf'
 const CERT_ID                 = Deno.env.get('EBAY_CERT_ID') || ''
 const RUNAME                  = Deno.env.get('EBAY_RUNAME')  || 'Discount_Tradin-Discount-PartVa-jhtznvhgx'
-const EDGE_FN_VERSION         = '3.36.94'
+const EDGE_FN_VERSION         = '3.39.0'
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  HARD BLOCK — EDITING LIVE eBay LISTINGS IS DISABLED AT THE CODE LEVEL.
@@ -94,6 +95,58 @@ const AI_FULL_LIMITS: Record<string, number> = { trial: 100, basic: 50, pro: 100
 const CLAUDE_MODEL_IDS: Record<string, string> = {
   haiku: 'claude-haiku-4-5-20251001', sonnet: 'claude-sonnet-5', opus: 'claude-opus-4-8',
 }
+// ── Multi-quantity settle ───────────────────────────────────────────────────
+// Every path that marks a part sold goes through here. A single-unit line gets
+// the caller's exact legacy write (bit-for-bit what has shipped for years, and
+// what every current Discount Trading part uses). A multi-unit line is settled
+// by DERIVING units sold — Σ ebay_sales for the part, eBay's own lifetime
+// QuantitySold when the caller has it, the row's current value; max of the
+// three — so re-running any sync window is a no-op. The line only closes when
+// the last unit goes. Returns whether it closed, so the caller can decide what
+// happens to the LISTING row (which must stay live while units remain).
+async function settlePartSale(sb: any, partId: string, opts: {
+  legacy: Record<string, unknown>   // the whole-line sold write: status:'sold' + price/date/…
+  unitsInSale?: number              // units in the sale being processed (per-unit price divisor)
+  ebayQuantitySold?: number         // eBay's lifetime QuantitySold for the listing, when known
+  endedOnEbay?: boolean             // the listing is over — unsold units return to stock
+}): Promise<{ closed: boolean }> {
+  const { data: part, error: readErr } = await sb.from('parts')
+    .select('id, quantity, quantity_sold').eq('id', partId).maybeSingle()
+  const qty = Math.floor(Number(part?.quantity) || 1)
+  if (readErr || !part || qty <= 1) {
+    // Single-unit line — or we could not read the row, in which case failing
+    // into the legacy whole-line write is exactly the old behaviour and never
+    // worse than it.
+    const { error } = await sb.from('parts').update(opts.legacy).eq('id', partId)
+    if (error) console.warn(`settlePartSale legacy write failed for ${partId}: ${error.message}`)
+    return { closed: true }
+  }
+  const { data: saleRows, error: sumErr } = await sb.from('ebay_sales')
+    .select('quantity, cancelled').eq('part_id', partId)
+  const derivedUnits = sumErr ? 0 : (saleRows ?? [])
+    .filter((r: any) => !r.cancelled)
+    .reduce((a: number, r: any) => a + (Math.floor(Number(r.quantity)) || 1), 0)
+  const d = settleDecision({
+    quantity: qty, quantitySold: part.quantity_sold, derivedUnits,
+    ebayQuantitySold: opts.ebayQuantitySold, endedOnEbay: opts.endedOnEbay,
+  })
+  // Carry the sale facts (latest date, shipping, order id…) but let the
+  // decision own status, and store sold_price PER UNIT — line totals live in
+  // ebay_sales, and unit price is the figure that stays comparable as the
+  // line sells down.
+  const patch: Record<string, unknown> = { ...opts.legacy, quantity_sold: d.soldUnits }
+  delete patch.status
+  if (patch.sold_price != null) {
+    const pu = perUnitPrice(Number(patch.sold_price), opts.unitsInSale ?? 1)
+    if (pu != null) patch.sold_price = pu
+    else delete patch.sold_price
+  }
+  if (d.status) patch.status = d.status
+  const { error } = await sb.from('parts').update(patch).eq('id', partId)
+  if (error) console.warn(`settlePartSale settle write failed for ${partId}: ${error.message}`)
+  return { closed: d.closed }
+}
+
 async function meterAIOp(sb: any, storeId: string | undefined, w: number): Promise<{ allowed: boolean; commit: () => void }> {
   const open = { allowed: true, commit: () => {} }
   if (!sb || !storeId) return open
@@ -466,8 +519,8 @@ async function handleRequest(req: Request): Promise<Response> {
     return result
   }
 
-  const parseTransactions = (xml: string): Array<{ itemId: string; title: string; salePrice: number; shipping: number; soldAt: string | null }> => {
-    const results: Array<{ itemId: string; title: string; salePrice: number; shipping: number; soldAt: string | null }> = []
+  const parseTransactions = (xml: string): Array<{ itemId: string; title: string; salePrice: number; shipping: number; soldAt: string | null; quantity: number }> => {
+    const results: Array<{ itemId: string; title: string; salePrice: number; shipping: number; soldAt: string | null; quantity: number }> = []
     for (const txMatch of xml.matchAll(/<Transaction>([\s\S]*?)<\/Transaction>/g)) {
       const txXml = txMatch[1]
       const itemSection = txXml.match(/<Item>([\s\S]*?)<\/Item>/)?.[1] ?? ''
@@ -481,7 +534,8 @@ async function handleRequest(req: Request): Promise<Response> {
       const amountPaid   = parseFloat(getTag(txXml, 'AmountPaid'))
       const shipping = !isNaN(explicitShip) ? explicitShip : (!isNaN(amountPaid) ? Math.max(0, amountPaid - salePrice) : 0)
       const soldAt    = getTag(txXml, 'PaidTime') || getTag(txXml, 'CreatedDate') || null
-      results.push({ itemId, title, salePrice, shipping, soldAt })
+      const quantity  = parseInt(getTag(txXml, 'QuantityPurchased'), 10) || 1
+      results.push({ itemId, title, salePrice, shipping, soldAt, quantity })
     }
     return results
   }
@@ -1230,20 +1284,28 @@ async function handleRequest(req: Request): Promise<Response> {
             if (!tx.salePrice || tx.salePrice <= 0) { notFound++; continue }
             if (listing.status === 'sold') { alreadySold++; continue }
 
-            await sb.from('listings').update({
-              status:               'sold',
-              sold_price:           tx.salePrice || null,
-              sold_at:              tx.soldAt || null,
-              reconcile_flagged:    false,
-              reconcile_flagged_at: null,
-            }).eq('id', listing.id)
+            // Settle the part first: a multi-unit line only closes when its
+            // last unit goes, and the LISTING must stay live until then.
+            const settled = await settlePartSale(sb, listing.part_id, {
+              legacy: {
+                status: 'sold',
+                ...(tx.salePrice ? { sold_price: tx.salePrice } : {}),
+                ...(tx.soldAt    ? { sold_date:  tx.soldAt }    : {}),
+                ...(tx.shipping  ? { shipping_charged: tx.shipping } : {}),
+              },
+              unitsInSale: tx.quantity,
+            })
 
-            await sb.from('parts').update({
-              status: 'sold',
-              ...(tx.salePrice ? { sold_price: tx.salePrice } : {}),
-              ...(tx.soldAt    ? { sold_date:  tx.soldAt }    : {}),
-              ...(tx.shipping  ? { shipping_charged: tx.shipping } : {}),
-            }).eq('id', listing.part_id)
+            if (settled.closed) {
+              const { error: lErr } = await sb.from('listings').update({
+                status:               'sold',
+                sold_price:           tx.salePrice || null,
+                sold_at:              tx.soldAt || null,
+                reconcile_flagged:    false,
+                reconcile_flagged_at: null,
+              }).eq('id', listing.id)
+              if (lErr) errors.push(`${tx.itemId}: ${lErr.message}`)
+            }
 
             updated++
           } catch (e: any) {
@@ -1667,10 +1729,16 @@ async function handleRequest(req: Request): Promise<Response> {
               if (upErr) throw upErr
               upserted++
 
-              // Keep inventory honest: mark a matched part sold (revenue still comes
+              // Keep inventory honest: settle a matched part (revenue still comes
               // from ebay_sales, so a collision here only affects inventory display).
+              // The upsert above already recorded THIS sale, so a multi-unit line
+              // derives it straight into its count; a single-unit part gets the
+              // exact legacy whole-line write.
               if (partId && !isCancelled) {
-                await sb.from('parts').update({ status: 'sold', sold_price: price, sold_date: soldDate, shipping_charged: shipPer, ebay_order_id: orderId }).eq('id', partId)
+                await settlePartSale(sb, partId, {
+                  legacy: { status: 'sold', sold_price: price, sold_date: soldDate, shipping_charged: shipPer, ebay_order_id: orderId },
+                  unitsInSale: qty,
+                })
                 linked++
               }
             } catch (e: any) {
@@ -2471,8 +2539,19 @@ async function handleRequest(req: Request): Promise<Response> {
           if (sellingState === 'EndedWithSales' || sellingState === 'Sold') {
             const salePrice = parseFloat(getTag(xml, 'ConvertedCurrentPrice') || getTag(xml, 'CurrentPrice')) || null
             const soldDate  = getTag(xml, 'PaidTime') || getTag(xml, 'EndTime') || null
-            await sb.from('listings').update({ status: 'sold', sold_price: salePrice, sold_at: soldDate, reconcile_flagged: false, reconcile_flagged_at: null }).eq('id', l.id)
-            if (l.part_id) await sb.from('parts').update({ status: 'sold', ...(salePrice ? { sold_price: salePrice } : {}), ...(soldDate ? { sold_date: soldDate } : {}) }).eq('id', l.part_id)
+            // eBay's lifetime QuantitySold settles a multi-unit line exactly.
+            // The listing is over on eBay either way, so a line with units left
+            // returns to stock and its LISTING is recorded 'ended', not 'sold'.
+            const ebayQtySold = parseInt(getTag(xml, 'QuantitySold'), 10) || 0
+            let closed = true
+            if (l.part_id) {
+              ({ closed } = await settlePartSale(sb, l.part_id, {
+                legacy: { status: 'sold', ...(salePrice ? { sold_price: salePrice } : {}), ...(soldDate ? { sold_date: soldDate } : {}) },
+                ebayQuantitySold: ebayQtySold, endedOnEbay: true,
+              }))
+            }
+            const { error: lErr } = await sb.from('listings').update({ status: closed ? 'sold' : 'ended', sold_price: salePrice, sold_at: soldDate, reconcile_flagged: false, reconcile_flagged_at: null }).eq('id', l.id)
+            if (lErr) console.warn(`reconcile auto-sold listing update failed for ${l.id}: ${lErr.message}`)
             autoSold++; resolvedIds.add(l.id)
           } else if (!notFound && (listingStatus === 'Active' || sellingState === 'Active')) {
             await sb.from('listings').update({ reconcile_flagged: false, reconcile_flagged_at: null }).eq('id', l.id)
@@ -2599,23 +2678,25 @@ async function handleRequest(req: Request): Promise<Response> {
           }
 
           const listingUpdate: any = { reconcile_flagged: false, reconcile_flagged_at: null }
-          const partUpdate: any    = {}
 
           if (r.resolution === 'sold') {
-            listingUpdate.status     = 'sold'
+            // Settle the part first — a multi-unit line only closes when its
+            // last unit goes. A stale listing is over on eBay either way, so a
+            // line with units left returns to stock and its LISTING is
+            // recorded 'ended', not 'sold'.
+            const legacy: Record<string, unknown> = { status: 'sold' }
+            if (r.salePrice !== undefined) legacy.sold_price = r.salePrice
+            if (r.soldDate)               legacy.sold_date  = r.soldDate
+            const settled = await settlePartSale(sb, r.partId, { legacy, endedOnEbay: true })
+            listingUpdate.status     = settled.closed ? 'sold' : 'ended'
             listingUpdate.sold_price = r.salePrice ?? null
             listingUpdate.sold_at    = r.soldDate ?? null
-            partUpdate.status        = 'sold'
-            if (r.salePrice !== undefined) partUpdate.sold_price = r.salePrice
-            if (r.soldDate)               partUpdate.sold_date  = r.soldDate
           } else if (r.resolution === 'ended') {
             listingUpdate.status = 'ended'
           }
 
-          await sb.from('listings').update(listingUpdate).eq('id', r.listingId)
-          if (Object.keys(partUpdate).length) {
-            await sb.from('parts').update(partUpdate).eq('id', r.partId)
-          }
+          const { error: lErr } = await sb.from('listings').update(listingUpdate).eq('id', r.listingId)
+          if (lErr) throw lErr
           updated++
         } catch (e: any) {
           errors[r.listingId] = e.message
@@ -3077,7 +3158,9 @@ async function handleRequest(req: Request): Promise<Response> {
                   ...(imageUrls.length ? { imageUrls } : {}),
                 },
                 condition,
-                availability: { shipToLocationAvailability: { quantity: 1 } },
+                // A multi-unit stock line tells eBay how many are really on the
+                // shelf; eBay then decrements the listing itself as units sell.
+                availability: { shipToLocationAvailability: { quantity: availableQuantity(part) } },
               }),
             }
           )
@@ -3100,7 +3183,9 @@ async function handleRequest(req: Request): Promise<Response> {
               categoryId,
               merchantLocationKey,
               listingPolicies: { fulfillmentPolicyId, paymentPolicyId, returnPolicyId },
-              quantityLimitPerBuyer: 1,
+              // One-per-buyer only makes sense for a unique used part; a
+              // multi-unit line legitimately sells pairs and sets.
+              ...(availableQuantity(part) > 1 ? {} : { quantityLimitPerBuyer: 1 }),
             }),
           })
           const offerData = await offerRes.json()
@@ -3839,7 +3924,9 @@ async function handleRequest(req: Request): Promise<Response> {
               product: { title: part.title, description: fullDescription, aspects, ...(imageUrls.length ? { imageUrls } : {}) },
               condition,
               ...(condDesc && condition !== 'NEW' ? { conditionDescription: condDesc } : {}),
-              availability: { shipToLocationAvailability: { quantity: 1 } },
+              // A multi-unit stock line tells eBay how many are really on the
+              // shelf; eBay then decrements the listing itself as units sell.
+              availability: { shipToLocationAvailability: { quantity: availableQuantity(part) } },
               packageWeightAndSize: {
                 weight: { value: weightG, unit: 'GRAM' },
                 dimensions: { length: dimL, width: dimW, height: dimH, unit: 'CENTIMETER' },
@@ -3920,7 +4007,9 @@ async function handleRequest(req: Request): Promise<Response> {
             pricingSummary: { price: { value: String(part.list_price), currency: mkt.currency } },
             categoryId, merchantLocationKey,
             listingPolicies: { fulfillmentPolicyId, paymentPolicyId, returnPolicyId, ...(allowOffers ? { bestOfferTerms: { bestOfferEnabled: true } } : {}) },
-            quantityLimitPerBuyer: 1,
+            // One-per-buyer only makes sense for a unique used part; a
+            // multi-unit line legitimately sells pairs and sets.
+            ...(availableQuantity(part) > 1 ? {} : { quantityLimitPerBuyer: 1 }),
           }
           let offerId: string | undefined
           const offerRes = await fetch('https://api.ebay.com/sell/inventory/v1/offer', { method: 'POST', headers: ebayHeaders, body: JSON.stringify(offerBody) })

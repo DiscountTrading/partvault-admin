@@ -35,6 +35,21 @@ const median = (xs) => {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2
 }
 
+// A part row is a stock LINE: `quantity` units acquired (1 for a dismantled
+// part — each is unique), `quantitySold` units gone. These resolve a line into
+// UNIT counts so the metrics below measure sales, not rows — a 50-unit buy-in
+// line that sold out is 50 sales, not 1. For quantity-1 parts every value is
+// identical to the old row-based numbers, which is what keeps this change
+// invisible to a dismantler.
+const lineQty = (p) => Math.max(1, Math.floor(+p.quantity) || 1)
+const unitsSoldOf = (p) => {
+  const sold = Math.max(0, Math.floor(+p.quantitySold) || 0)
+  // A closed line is at least one sale even where quantitySold was never
+  // maintained (every part sold before multi-quantity existed).
+  if (p.status === 'sold') return Math.max(1, sold)
+  return Math.min(sold, lineQty(p))
+}
+
 /**
  * @param {Array}    parts    parts as the app holds them (camelCase)
  * @param {Function} keyFn    part -> group key, or null/'' to exclude the part
@@ -57,29 +72,36 @@ export function groupMetrics(parts, keyFn, costing, labelFn) {
   }
 
   return [...groups.entries()].map(([key, gp]) => {
-    const sold = gp.filter((p) => p.status === 'sold')
-    const unsold = gp.filter((p) => p.status === 'in_stock' || p.status === 'listed')
+    const closed = gp.filter((p) => p.status === 'sold')
+    const open = gp.filter((p) => p.status === 'in_stock' || p.status === 'listed')
     const costOf = (p) => +partEffectiveCost(p, costing).value || 0
 
-    const revenue = sold.reduce((a, p) => a + (+p.soldPrice || 0), 0)
-    const cost = sold.reduce((a, p) => a + costOf(p), 0)
+    // Units, not rows. On a multi-quantity line soldPrice is the PER-UNIT
+    // price (the sync stores it that way) and the recorded costs cover the
+    // whole line — so revenue multiplies out by units, a closed line carries
+    // its full cost, and a line still selling down carries the sold share.
+    const soldUnits = gp.reduce((a, p) => a + unitsSoldOf(p), 0)
+    const totalUnits = gp.reduce((a, p) => a + lineQty(p), 0)
+    const revenue = gp.reduce((a, p) => a + unitsSoldOf(p) * (+p.soldPrice || 0), 0)
+    const cost = closed.reduce((a, p) => a + costOf(p), 0)
+      + open.reduce((a, p) => a + costOf(p) * (unitsSoldOf(p) / lineQty(p)), 0)
     const netProfit = revenue - cost
-    const dts = sold.map((p) => daysBetween(p.acquiredDate || p.createdAt, p.soldDate)).filter((v) => v != null)
+    const dts = closed.map((p) => daysBetween(p.acquiredDate || p.createdAt, p.soldDate)).filter((v) => v != null)
 
     return {
       key,
       label: labelFn ? labelFn(key, gp) : key,
       parts: gp.length,
-      sold: sold.length,
-      unsold: unsold.length,
-      // Of the parts in this group, how many have actually sold.
-      sellThrough: gp.length ? (sold.length / gp.length) * 100 : null,
+      sold: soldUnits,
+      unsold: open.reduce((a, p) => a + (lineQty(p) - unitsSoldOf(p)), 0),
+      // Of the units in this group, how many have actually sold.
+      sellThrough: totalUnits ? (soldUnits / totalUnits) * 100 : null,
       revenue,
       cost,
       netProfit,
-      // Per-part profit is what makes categories comparable when one has 400
+      // Per-unit profit is what makes categories comparable when one has 400
       // parts and another has 6 — total profit alone just ranks them by size.
-      profitPerSold: sold.length ? netProfit / sold.length : null,
+      profitPerSold: soldUnits ? netProfit / soldUnits : null,
       margin: revenue > 0 ? (netProfit / revenue) * 100 : null,
       // Median as well as mean: one part that sat for three years drags an
       // average badly, and "how long does this kind of part usually take" is
@@ -89,8 +111,9 @@ export function groupMetrics(parts, keyFn, costing, labelFn) {
       // Only counts parts we could date at all, so the caller can say when a
       // figure rests on three of forty parts.
       datedSold: dts.length,
-      // Money still sitting on the shelf at its asking price.
-      untapped: unsold.reduce((a, p) => a + (+p.listPrice || +p.list_price || 0), 0),
+      // Money still sitting on the shelf at its asking price — remaining
+      // units of a part-sold line included.
+      untapped: open.reduce((a, p) => a + (lineQty(p) - unitsSoldOf(p)) * (+p.listPrice || +p.list_price || 0), 0),
     }
   }).sort((a, b) => b.netProfit - a.netProfit)
 }

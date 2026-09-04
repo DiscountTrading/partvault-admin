@@ -139,6 +139,49 @@ function deep_empty() {
   eq('undefined parts is survivable', groupMetrics(undefined, byCategory, COSTING).length, 0)
 }
 
+console.log('\ngroupMetrics — multi-quantity stock lines are UNITS, not rows\n')
+{
+  // A buy-in line: 10 units bought for $200 the lot, listed at $30/unit,
+  // 4 sold so far at $30/unit. The line is still open (status listed).
+  const rows = groupMetrics([
+    part({ status: 'listed', quantity: 10, quantitySold: 4, soldPrice: 30, listPrice: 30, costs: { acquisition: 200 } }),
+  ], byCategory, COSTING)
+  const r = rows[0]
+  eq('a part-sold line counts its sold units as sales', r.sold, 4)
+  eq('revenue is units × per-unit price', r.revenue, 120)
+  // Cost carries the SOLD share of the lot — $200 × 4/10 — so margin doesn't
+  // read as a loss while the rest of the line is still on the shelf.
+  near('cost is the sold share of the lot', r.cost, 80)
+  near('profit per unit, not per row', r.profitPerSold, 10)
+  eq('the remaining 6 units are the unsold shelf', r.unsold, 6)
+  eq('untapped is asking price × remaining units', r.untapped, 180)
+  near('sell-through is units sold over units held', r.sellThrough, 40)
+}
+{
+  // The same line sold out: the row closes (status sold) and carries the
+  // whole lot's cost against all ten units' revenue.
+  const rows = groupMetrics([
+    part({ status: 'sold', quantity: 10, quantitySold: 10, soldPrice: 30, costs: { acquisition: 200 } }),
+  ], byCategory, COSTING)
+  const r = rows[0]
+  eq('a closed 10-unit line is 10 sales', r.sold, 10)
+  eq('with 10 units of revenue', r.revenue, 300)
+  near('and the whole lot cost once', r.cost, 200)
+  eq('nothing left on the shelf', r.unsold, 0)
+  near('sell-through is complete', r.sellThrough, 100)
+}
+{
+  // The legacy shape: parts sold before multi-quantity existed have
+  // quantitySold 0 — a closed line is still at least one sale.
+  const rows = groupMetrics([
+    part({ status: 'sold', soldPrice: 100, costs: { acquisition: 40 } }),        // quantity undefined
+    part({ status: 'sold', quantity: 1, quantitySold: 0, soldPrice: 50, costs: { acquisition: 10 } }),
+  ], byCategory, COSTING)
+  const r = rows[0]
+  eq('quantity-1 parts count exactly as before', r.sold, 2)
+  eq('same revenue as the row-based maths', r.revenue, 150)
+}
+
 console.log('\nCOMPARE_DIMENSIONS — every one resolves against a real part\n')
 {
   const p = { category: 'Lighting & Bulbs', subcategory: 'Headlight Assemblies', make: 'Ford', model: 'Falcon', condition: 'Used – Good', car_id: 'c1' }

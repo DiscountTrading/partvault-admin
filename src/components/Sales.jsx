@@ -152,6 +152,16 @@ function deriveSale(s, partById, costing) {
     add('Admin', b.admin)
     add('Postage', manualPost > 0 ? manualPost : b.postage)
     if (useStorage) add('Storage', storageCostFor(p, costing).value)
+    // A multi-quantity stock line's costs cover the WHOLE line (50 units bought
+    // for $500), and this sale is only `s.quantity` of those units — so it
+    // carries its share, or selling unit 1 of 50 reads as a huge loss. The
+    // breakdown lines scale identically so they still sum to Cost.
+    const lq = Math.max(1, Math.floor(+p.quantity) || 1)
+    if (lq > 1) {
+      const share = Math.min(Math.max(1, Math.floor(+s.quantity) || 1), lq) / lq
+      cost = cost * share
+      for (const k of Object.keys(bd)) bd[k] = bd[k] * share
+    }
     breakdown = bd
   } else if (hc) {
     breakdown = { Purchase: +hc.purchase || 0, Admin: +hc.admin || 0, Labour: +hc.labour || 0, Storage: +hc.storage || 0,
